@@ -4,9 +4,11 @@
 
 ```
 recruFlow/
-├── app/            # Python application package (placeholder — P0US6 adds app/main.py)
+├── app/            # Python application package (P0US4 adds a /health stub; P0US6 adds the rest)
+│   └── main.py     # FastAPI app object, GET /health only
 ├── frontend/       # React + Vite + TypeScript frontend (P0US2)
 │   ├── src/        # App source (main.tsx, App.tsx, index.css, vite-env.d.ts)
+│   ├── nginx.conf  # SPA server block for the production Docker image (P0US4)
 │   ├── package.json
 │   ├── pnpm-lock.yaml
 │   ├── tsconfig.json       # references-only root config
@@ -21,7 +23,11 @@ recruFlow/
 ├── Makefile
 ├── .pre-commit-config.yaml
 ├── .env.example
-└── .gitignore
+├── .gitignore
+├── Dockerfile            # multi-stage: builder (uv sync) -> runtime (uvicorn + sjctl)
+├── Dockerfile.frontend   # multi-stage: dev (Vite dev server) -> build -> production (nginx)
+├── .dockerignore
+└── docker-compose.yml    # api, frontend, db, ollama — each with a health check
 ```
 
 ### Dependency groups (`pyproject.toml`)
@@ -36,8 +42,11 @@ recruFlow/
 
 ### `app/` package
 
-Currently a placeholder exposing only `__version__`. P0US6 (FastAPI skeleton) adds
-`app/main.py` and the rest of the application code inside this package.
+Exposes `__version__` (P0US1) plus, as of P0US4, `app/main.py`: a minimal FastAPI app with a
+single `GET /health` route returning `{"status": "ok"}`. This exists only so the `api` Compose
+service has a real HTTP endpoint to health-check — it does not load settings, open a DB session,
+or wire OpenAPI docs. P0US6 (FastAPI skeleton) replaces this stub with full Pydantic Settings
+loading, the DB session dependency, and the rest of the application's routers.
 
 ### `frontend/` project
 
@@ -72,10 +81,14 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
   `format`, and `typecheck` each fan out to the frontend toolchain.
 - `clean` — removes `__pycache__`, `.mypy_cache`, `.ruff_cache`, `.pytest_cache`, `dist`,
   `build`.
+- `dev` — `docker compose up --build`; brings up all four Compose services with hot reload for
+  `api` and `frontend` (P0US4).
+- `sjctl-version` — `docker compose exec api sjctl version`; prints the `sjctl` binary version
+  installed inside the `api` container (P0US4).
 
-Targets depending on infrastructure introduced by later stories (`dev`, `migrate`, `seed`,
-`generate-types`, `sjctl-version`) are deliberately out of scope here and will be added by
-P0US4, P0US5, P0US7, and P0US9 respectively.
+Targets depending on infrastructure introduced by later stories (`migrate`, `seed`,
+`generate-types`) are deliberately out of scope here and will be added by P0US5, P0US7, and
+P0US9 respectively.
 
 - `install` now also runs `uv run pre-commit install` after the dependency/frontend install
   steps, registering the git hooks defined in `.pre-commit-config.yaml`.
@@ -96,3 +109,37 @@ real drift before the `uv-lock-check` hook ever runs. `--frozen` runs against th
 as committed, so `uv-lock-check` is the sole source of truth on lock/pyproject sync. Hooks
 are ordered so auto-fixers run before non-fixable checks, per the "auto fix before check"
 requirement.
+
+## Docker Compose services (P0US4)
+
+`docker-compose.yml` defines four services, brought up together by `make dev`. Service names,
+ports, and credentials match `.env.example` exactly.
+
+| Service | Image / build target | Port | Healthcheck |
+| --- | --- | --- | --- |
+| `api` | `Dockerfile` target `runtime` | 8000 | `curl -f http://localhost:8000/health` |
+| `frontend` | `Dockerfile.frontend` target `dev` | 5173 | `wget --spider http://localhost:5173` |
+| `db` | `postgres:16-alpine` | 5432 | `pg_isready -U recruflow -d recruflow` |
+| `ollama` | `ollama/ollama:latest` | 11434 | `ollama list` |
+
+Notes:
+
+- `api` and `frontend` bind-mount their source directories (`./app`, `./frontend`) so
+  `uvicorn --reload` and the Vite dev server pick up local edits without a container rebuild.
+  `frontend` also declares an anonymous volume on `/app/node_modules` so the host bind mount
+  doesn't shadow the dependencies installed inside the image.
+- `api` depends on `db` with `condition: service_healthy`, so it won't start accepting
+  connections until Postgres is actually ready.
+- `db` and `ollama` persist state in named volumes (`pgdata`, `ollama_data`) so data survives
+  `docker compose down` (but not `docker compose down -v`).
+- The `Dockerfile` multi-stage build installs `sjctl` (the SOLID.Jobs CLI) into the `runtime`
+  stage via its official install script
+  (`scripts/install-sjctl.sh` from `solid-company/solid-jobs-skills`), with cosign signature
+  verification skipped (`SJCTL_SKIP_COSIGN=1`, since `cosign` isn't installed in this image) —
+  the script still verifies the release asset's sha256 checksum. `make sjctl-version` runs
+  `sjctl version` inside the running `api` container.
+- `Dockerfile.frontend` has three stages: `dev` (Vite dev server, used by `docker-compose.yml`),
+  `build` (`pnpm build`, produces `frontend/dist`), and `production` (nginx serving the built
+  static assets via `frontend/nginx.conf`, an SPA fallback for client-side routing added in
+  later phases). Only `dev` is wired into Compose today; `production` is built but not yet
+  deployed anywhere.

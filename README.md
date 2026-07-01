@@ -28,6 +28,32 @@ make typecheck
 make test
 ```
 
+## Running locally
+
+The full stack runs via Docker Compose:
+
+```bash
+make dev            # docker compose up --build
+```
+
+This starts four services, each with a health check:
+
+| Service | Port | Notes |
+| --- | --- | --- |
+| `api` | 8000 | FastAPI + uvicorn, `--reload` enabled (bind-mounts `app/`) |
+| `frontend` | 5173 | Vite dev server, `--host 0.0.0.0` (bind-mounts `frontend/`) |
+| `db` | 5432 | PostgreSQL 16 |
+| `ollama` | 11434 | Local LLM runtime |
+
+Both `api` and `frontend` hot-reload on source changes since their directories are bind-mounted
+into the containers. Check status with `docker compose ps`.
+
+To confirm the `sjctl` binary installed inside the `api` container:
+
+```bash
+make sjctl-version   # docker compose exec api sjctl version
+```
+
 ## Frontend
 
 The frontend is a React + Vite + TypeScript project under `frontend/`, managed with
