@@ -45,6 +45,37 @@ pnpm format:check   # Prettier — check mode, no writes
 TypeScript strict mode is enabled (`tsconfig.app.json` / `tsconfig.node.json`), and styling is
 done exclusively with Tailwind CSS utility classes.
 
+## Pre-commit hooks
+
+Hooks install automatically as part of `make install` (which now also runs
+`uv run pre-commit install`). To install them manually:
+
+```bash
+uv run pre-commit install
+```
+
+Run all hooks against the full repository on demand:
+
+```bash
+uv run pre-commit run --all-files
+```
+
+Hooks enforced, in the order they run:
+
+| Hook | What it checks |
+| --- | --- |
+| `trailing-whitespace` | Strips trailing whitespace from changed files |
+| `ruff check --fix` | Python lint (auto-fixes what it can) |
+| `ruff format` | Python formatting |
+| `eslint --fix` | Frontend lint (auto-fixes what it can) |
+| `mypy` | Python static types, strict mode |
+| `uv lock --check` | Fails if `uv.lock` is out of sync with `pyproject.toml` |
+| `pnpm install --frozen-lockfile` | Fails if `pnpm-lock.yaml` is out of sync with `package.json` |
+
+Auto-fixing hooks may modify files during a commit attempt. When that happens the commit is
+aborted and the fixed files are left unstaged — review the changes, `git add` them, and commit
+again.
+
 ## Environment variables
 
 Copy `.env.example` to `.env` and fill in the blanks. Every environment variable the project

@@ -3,6 +3,7 @@
 install:
 	uv sync --all-groups
 	cd frontend && pnpm install
+	uv run pre-commit install
 
 format:
 	uv run ruff format .

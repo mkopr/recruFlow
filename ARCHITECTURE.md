@@ -19,6 +19,7 @@ recruFlow/
 ├── pyproject.toml
 ├── uv.lock
 ├── Makefile
+├── .pre-commit-config.yaml
 ├── .env.example
 └── .gitignore
 ```
@@ -75,3 +76,23 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
 Targets depending on infrastructure introduced by later stories (`dev`, `migrate`, `seed`,
 `generate-types`, `sjctl-version`) are deliberately out of scope here and will be added by
 P0US4, P0US5, P0US7, and P0US9 respectively.
+
+- `install` now also runs `uv run pre-commit install` after the dependency/frontend install
+  steps, registering the git hooks defined in `.pre-commit-config.yaml`.
+
+### Pre-commit hooks (`.pre-commit-config.yaml`)
+
+Hook definitions live in `.pre-commit-config.yaml`. Every hook except `trailing-whitespace`
+(from the upstream `pre-commit/pre-commit-hooks` repo) is a `local` hook with
+`language: system`, calling the same commands `make lint` / `make format` / `make typecheck`
+already use (`uv run --frozen ruff check --fix`, `uv run --frozen ruff format`,
+`pnpm exec eslint . --fix`, `uv run --frozen mypy .`) plus two lockfile-sync checks
+(`uv lock --check`, `pnpm install --frozen-lockfile`). Using the project's own
+uv/pnpm-managed toolchain instead of hosted mirrors (e.g. `astral-sh/ruff-pre-commit`,
+`mirrors-mypy`) means pre-commit and `make ci` can never disagree about tool versions.
+`--frozen` is required on every `uv run` hook: by default `uv run` auto-syncs the environment
+before running, which silently rewrites `uv.lock` to match `pyproject.toml` — that would mask
+real drift before the `uv-lock-check` hook ever runs. `--frozen` runs against the lock file
+as committed, so `uv-lock-check` is the sole source of truth on lock/pyproject sync. Hooks
+are ordered so auto-fixers run before non-fixable checks, per the "auto fix before check"
+requirement.
