@@ -2,16 +2,20 @@
 
 install:
 	uv sync --all-groups
+	cd frontend && pnpm install
 
 format:
 	uv run ruff format .
+	cd frontend && pnpm format
 
 lint:
 	uv run ruff check .
 	uv run mypy .
+	cd frontend && pnpm lint
 
 typecheck:
 	uv run mypy .
+	cd frontend && pnpm run typecheck
 
 test:
 	uv run pytest

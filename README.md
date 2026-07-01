@@ -28,6 +28,23 @@ make typecheck
 make test
 ```
 
+## Frontend
+
+The frontend is a React + Vite + TypeScript project under `frontend/`, managed with
+[pnpm](https://pnpm.io/).
+
+```bash
+cd frontend
+pnpm install        # install dependencies (writes/reads pnpm-lock.yaml)
+pnpm dev            # start the Vite dev server at http://localhost:5173
+pnpm lint           # ESLint
+pnpm format         # Prettier — write mode
+pnpm format:check   # Prettier — check mode, no writes
+```
+
+TypeScript strict mode is enabled (`tsconfig.app.json` / `tsconfig.node.json`), and styling is
+done exclusively with Tailwind CSS utility classes.
+
 ## Environment variables
 
 Copy `.env.example` to `.env` and fill in the blanks. Every environment variable the project

@@ -17,6 +17,7 @@ node_modules/
 frontend/dist/
 frontend/.vite/
 pnpm-debug.log*
+*.tsbuildinfo
 
 # Docker
 .env
