@@ -47,6 +47,7 @@ warn_unused_ignores = true
 warn_redundant_casts = true
 show_error_codes = true
 files = ["app", "tests"]
+plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

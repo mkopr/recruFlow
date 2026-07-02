@@ -4,8 +4,13 @@
 
 ```
 recruFlow/
-├── app/            # Python application package (P0US4 adds a /health stub; P0US6 adds the rest)
-│   ├── main.py     # FastAPI app object, GET /health only
+├── app/            # Python application package (P0US4 added a /health stub; P0US6 adds the rest)
+│   ├── main.py     # FastAPI app object: loads Settings, wires routers (P0US6)
+│   ├── config.py   # Settings(BaseSettings) + get_settings(), env-driven (.env) (P0US6)
+│   ├── api/        # HTTP layer: DI dependencies and routers (P0US6)
+│   │   ├── deps.py         # get_db() session dependency, SessionDep annotation
+│   │   └── routes/
+│   │       └── health.py   # GET /health, GET /health/db
 │   └── db/         # SQLAlchemy models, async engine/session, Alembic-shared base (P0US5)
 │       ├── base.py     # Declarative base, shared by models.py and alembic/env.py
 │       ├── models.py   # v1 schema: Source, Offer, Profile, CVVersion, MatchScore, Application
@@ -50,11 +55,59 @@ recruFlow/
 
 ### `app/` package
 
-Exposes `__version__` (P0US1) plus, as of P0US4, `app/main.py`: a minimal FastAPI app with a
-single `GET /health` route returning `{"status": "ok"}`. This exists only so the `api` Compose
-service has a real HTTP endpoint to health-check — it does not load settings, open a DB session,
-or wire OpenAPI docs. P0US6 (FastAPI skeleton) replaces this stub with full Pydantic Settings
-loading, the DB session dependency, and the rest of the application's routers.
+Exposes `__version__` (P0US1). As of P0US6, `app/main.py` is the real application entrypoint:
+
+```python
+settings = get_settings()
+app = FastAPI(title="recruFlow API", version=__version__)
+app.state.settings = settings
+app.include_router(health_router)
+```
+
+`app/main.py` calls `get_settings()` once at import time — a missing/invalid `.env` (e.g. no
+`DATABASE_URL`) fails the process at startup rather than on the first request, matching
+`app/db/session.py`'s "fail loudly" precedent. `settings` is stashed on `app.state.settings` so
+future routers can read it via `request.app.state.settings` without importing the module-level
+singleton directly. `/docs` (Swagger UI) and `/openapi.json` require no extra configuration —
+they are FastAPI defaults, enabled automatically once the `FastAPI()` app object exists.
+
+### `app/config.py` (P0US6)
+
+`Settings(BaseSettings)` (Pydantic v2, `pydantic-settings`) — one field per backend-relevant key
+in `.env.example` (`database_url`, `ollama_base_url`, `ollama_model`, `smtp_*`, `sjctl_campaign`,
+`app_env`, `log_level`, `api_host`, `api_port`). `model_config = SettingsConfigDict(env_file=".env",
+extra="ignore")`: `extra="ignore"` because `.env` also carries frontend-only (`VITE_API_BASE_URL`)
+and P5-only (`SWARM_*`, `SEND_QUEUE_*`, `FORM_FILL_*`) keys this model doesn't represent yet — those
+fields get added by the story that first needs them. `database_url`, `ollama_base_url`, and
+`ollama_model` have no default, so `Settings()` raises `pydantic.ValidationError` if they're unset,
+mirroring `get_database_url()`'s fail-loud behaviour. `get_settings()` is `functools.lru_cache`d so
+`.env` is parsed once per process, not once per request.
+
+`pyproject.toml`'s `[tool.mypy]` enables `plugins = ["pydantic.mypy"]` — without it, strict mypy
+cannot see Pydantic's dynamically generated `__init__` and flags every field-less `Settings()` call
+as a missing-argument error, even though those fields are populated from the environment at
+runtime, not from constructor arguments.
+
+### `app/api/` package (P0US6)
+
+- `deps.py` — `get_db() -> AsyncGenerator[AsyncSession, None]`, an async-generator FastAPI
+  dependency built directly on `app.db.session.get_sessionmaker()` (no independent connection
+  string derivation — `DATABASE_URL` stays the single source of truth). The `async_sessionmaker`
+  itself is built once per process via an `lru_cache`d `_get_sessionmaker()`, so a fresh engine
+  isn't constructed per request. `SessionDep = Annotated[AsyncSession, Depends(get_db)]` is the
+  reusable DI annotation every endpoint needing a DB session should depend on (e.g.
+  `async def handler(session: SessionDep) -> ...`) — the modern FastAPI idiom, required here
+  because strict mypy with no FastAPI plugin doesn't type-check the older
+  `session: AsyncSession = Depends(get_db)` default-value style cleanly.
+- `routes/health.py` — `GET /health` (unchanged contract: `{"status": "ok"}`, no dependencies) and
+  `GET /health/db` (depends on `SessionDep`, runs `SELECT 1` through the injected session). On a
+  DB failure `GET /health/db` returns `503 Service Unavailable` with
+  `{"detail": "database unavailable"}` rather than an unhandled 500 — 503 signals "a downstream
+  dependency is unreachable", distinct from an application bug. The except clause catches both
+  `sqlalchemy.exc.SQLAlchemyError` (query-time failures on an already-open connection, which
+  SQLAlchemy wraps) and `OSError` (e.g. `ConnectionRefusedError`) — connection-establishment
+  failures on the *first* use of a session are not wrapped by SQLAlchemy and propagate as the raw
+  driver/socket exception, so both cases must be caught explicitly.
 
 ### `app/db/` package (P0US5)
 

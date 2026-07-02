@@ -1,8 +1,12 @@
 from fastapi import FastAPI
 
-app = FastAPI(title="recruFlow API")
+from app import __version__
+from app.api.routes.health import router as health_router
+from app.config import get_settings
 
+settings = get_settings()
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+app = FastAPI(title="recruFlow API", version=__version__)
+app.state.settings = settings
+
+app.include_router(health_router)
