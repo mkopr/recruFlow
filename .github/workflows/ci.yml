@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  DATABASE_URL: postgresql+asyncpg://recruflow:recruflow@localhost:5432/recruflow
+  OLLAMA_BASE_URL: http://localhost:11434
+  OLLAMA_MODEL: llama3.3:70b
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: recruflow
+          POSTGRES_PASSWORD: recruflow
+          POSTGRES_DB: recruflow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U recruflow -d recruflow"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.23"
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install Python dependencies
+        run: uv sync --all-groups --frozen
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install Node dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Set up environment
+        run: cp .env.example .env
+
+      - name: Run CI checks (auto-fix, then verify)
+        run: make ci

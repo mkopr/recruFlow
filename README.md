@@ -131,6 +131,18 @@ Auto-fixing hooks may modify files during a commit attempt. When that happens th
 aborted and the fixed files are left unstaged — review the changes, `git add` them, and commit
 again.
 
+## Continuous Integration
+
+GitHub Actions runs `make ci` on every pull request and every push to `main` (workflow file:
+[.github/workflows/ci.yml](.github/workflows/ci.yml)). It installs Python dependencies via `uv`
+and Node dependencies via `pnpm`, then auto-fixes formatting first (`ruff format`, Prettier) and
+checks `ruff`, `mypy`, `pytest`, ESLint, and TypeScript types (`tsc -b`) — the build fails on the
+first check that still fails after auto-fix. Run logs are visible under the repository's
+**Actions** tab on GitHub.
+
+> No GitHub remote is configured for this repository yet, so no CI status badge is shown here.
+> Add one (`[![CI](.../ci.yml/badge.svg)](.../ci.yml)`) once the repo has a GitHub remote.
+
 ## Environment variables
 
 Copy `.env.example` to `.env` and fill in the blanks. Every environment variable the project

@@ -53,6 +53,13 @@ recruFlow/
 - `dev` — local developer tooling: `ruff`, `mypy`, `pre-commit`.
 - `test` — test-only dependencies: `pytest`, `pytest-asyncio`, `httpx`, `pytest-cov`.
 
+`[tool.ruff.lint]`'s `select` list adds `C90` (P0US8), enabling ruff's `mccabe`
+cyclomatic-complexity checker, with `[tool.ruff.lint.mccabe] max-complexity = 10` — 10 is
+SonarQube's own default cyclomatic-complexity threshold, and the closest available proxy for
+"SonarQube standard" without adding a new dependency (ruff has no cognitive-complexity metric).
+`frontend/eslint.config.js` sets the matching `complexity: ['error', 10]` rule so both stacks
+enforce the same threshold.
+
 ### `app/` package
 
 Exposes `__version__` (P0US1). As of P0US6, `app/main.py` is the real application entrypoint:
@@ -253,3 +260,49 @@ Notes:
   static assets via `frontend/nginx.conf`, an SPA fallback for client-side routing added in
   later phases). Only `dev` is wired into Compose today; `production` is built but not yet
   deployed anywhere.
+
+## CI (GitHub Actions) (P0US8)
+
+`.github/workflows/ci.yml` defines a single workflow with a single job, triggered on every
+`pull_request` and every `push` to `main`. Rather than re-implementing `ruff check`, `mypy`,
+`pytest`, `eslint`, and TypeScript type-checking as separate `run:` steps, the job's final step
+is `make ci` — the same target developers already run locally (`format lint typecheck test`, in
+that order, `format`'s auto-fixers running before the non-fixable `lint`/`typecheck` gates). This
+guarantees local `make ci` and the GitHub Actions run can never drift apart, the same rationale
+`.pre-commit-config.yaml` uses for calling Make-equivalent commands directly (see "Pre-commit
+hooks" above) instead of hosted-mirror actions.
+
+Supporting setup, in order:
+
+- **Postgres service container**: `services.postgres` uses `postgres:16-alpine` with
+  `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` all `recruflow`, port `5432`, and a
+  `pg_isready -U recruflow -d recruflow` health check — an exact mirror of `docker-compose.yml`'s
+  `db` service, so there is only one definition of "a correctly configured recruFlow Postgres"
+  across local dev and CI. GitHub Actions service containers publish to `localhost` on the
+  runner (not a Compose network hostname), so the job-level `DATABASE_URL` points at
+  `localhost:5432` — this happens to be the exact same default `tests/integration/conftest.py`
+  falls back to when `DATABASE_URL` is unset.
+- **Dependency install**: `astral-sh/setup-uv@v6` (pinned to `0.11.23`, the version in local use)
+  + `uv sync --all-groups --frozen` (`--frozen` fails loudly on lockfile drift instead of
+  rewriting `uv.lock`, the same rationale pre-commit's `uv-lock-check` hook relies on), then
+  `pnpm/action-setup@v4` + `actions/setup-node@v4` + `pnpm install --frozen-lockfile` in
+  `frontend/` (mirrors the `pnpm-lock-check` pre-commit hook exactly).
+- **Settings env vars**: `app/main.py` calls `get_settings()` at import time, and `Settings` has
+  no defaults for `database_url`, `ollama_base_url`, or `ollama_model` (see "`app/config.py`"
+  above) — any process importing `app.main` without these set raises `pydantic.ValidationError`
+  before a single test runs. The workflow copies `.env.example` to `.env` (`cp .env.example
+  .env`) so every other Settings field has a valid placeholder, then sets `DATABASE_URL`,
+  `OLLAMA_BASE_URL`, and `OLLAMA_MODEL` at the job level — `pydantic-settings` gives explicit
+  environment variables precedence over the same key in `.env`, so the job-level `DATABASE_URL`
+  (pointing at `localhost`) overrides `.env.example`'s Compose-network value (`db:5432`) without
+  editing the copied file.
+- **`tsc --noEmit` vs. `tsc -b`**: the story's acceptance criteria literally says "runs ... `tsc
+  --noEmit`", but as documented above under "Makefile targets", plain `tsc --noEmit` silently
+  no-ops against this project's references-only root `tsconfig.json` (the P0US7 discovery). The
+  workflow does not invoke `tsc --noEmit` directly — it gets type-checking for free through
+  `make ci` → `typecheck` → `pnpm run typecheck` (`tsc -b`), which is the only command that
+  actually traverses `frontend/tsconfig.json`'s `references` and catches real TypeScript errors.
+  Implementing the AC literally would make the "CI fails on type error" scenario silently pass.
+- **README badge**: deferred — this repository has no GitHub remote configured yet (`git remote
+  -v` returns nothing), so there is no `owner/repo` to build a badge URL from. README documents
+  the CI workflow's behavior and notes the badge is pending a remote.
