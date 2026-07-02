@@ -28,7 +28,7 @@ The `recruFlow/` directory is the application root (currently bootstrapping). Al
 
 ```bash
 make install          # uv sync --all-groups + pnpm install + pre-commit install
-make dev              # docker compose up (all services, hot-reload)
+make up               # docker compose up (all services, hot-reload)
 make lint             # ruff check + mypy + pnpm lint
 make format           # ruff format + ruff check --fix + pnpm format
 make test             # uv run pytest + pnpm test
@@ -96,7 +96,7 @@ User stories live in `user stories/000 high level guide.md`. When implementing a
 1. Use `user stories/plan_prompt_compact.txt` to generate a full implementation prompt for the target story — it instructs reading all dependencies, ARCHITECTURE.md, CONVENTIONS.md, and existing tests before writing code.
 2. Mirror patterns from prior stories in the same phase.
 3. Commit convention: `US<NN> <short message>` for stories, matching the story's file ID under `user stories/P<phase>/` (e.g. `US01 python repo scaffold`); `BUG<number> <short message>` for bugs. Single-line subject only — no body, no bullet points, no trailers (e.g. no `Co-Authored-By`).
-4. After implementation, run `make ci` (must be zero failures), then test end-to-end on the real stack with `make dev`.
+4. After implementation, run `make ci` (must be zero failures), then test end-to-end on the real stack with `make up`.
 5. Update ARCHITECTURE.md (or equivalent) to reflect new endpoint contracts or design decisions.
 
 ## Code Quality Rules

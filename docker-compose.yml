@@ -4,9 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: runtime
-    env_file:
-      - path: .env
-        required: false
+    env_file: .env
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:

@@ -33,7 +33,7 @@ make test
 The full stack runs via Docker Compose:
 
 ```bash
-make dev            # docker compose up --build
+make up             # docker compose up --build
 ```
 
 This starts four services, each with a health check:

@@ -81,7 +81,7 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
   `format`, and `typecheck` each fan out to the frontend toolchain.
 - `clean` — removes `__pycache__`, `.mypy_cache`, `.ruff_cache`, `.pytest_cache`, `dist`,
   `build`.
-- `dev` — `docker compose up --build`; brings up all four Compose services with hot reload for
+- `up` — `docker compose up --build`; brings up all four Compose services with hot reload for
   `api` and `frontend` (P0US4).
 - `sjctl-version` — `docker compose exec api sjctl version`; prints the `sjctl` binary version
   installed inside the `api` container (P0US4).
@@ -112,7 +112,7 @@ requirement.
 
 ## Docker Compose services (P0US4)
 
-`docker-compose.yml` defines four services, brought up together by `make dev`. Service names,
+`docker-compose.yml` defines four services, brought up together by `make up`. Service names,
 ports, and credentials match `.env.example` exactly.
 
 | Service | Image / build target | Port | Healthcheck |

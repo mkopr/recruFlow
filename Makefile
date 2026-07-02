@@ -1,11 +1,11 @@
-.PHONY: install lint format test test-unit test-integration typecheck ci clean dev sjctl-version
+.PHONY: install lint format test test-unit test-integration typecheck ci clean up sjctl-version
 
 install:
 	uv sync --all-groups
 	cd frontend && pnpm install
 	uv run pre-commit install
 
-dev:
+up:
 	docker compose up --build
 
 sjctl-version:
