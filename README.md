@@ -196,3 +196,38 @@ file(s) from the source repos, or use each repo's own installer for an interacti
 npx skills@latest add mattpocock/skills
 npx skills@latest add solid-company/solid-jobs-skills
 ```
+
+## SOLID.Jobs connector
+
+`app/connectors/solid_jobs.py` ingests offers from SOLID.Jobs via the `sjctl` subprocess into the
+canonical `offers` table. It does not create, schedule, or expose itself over HTTP — that's left to
+later stories (a scheduler and an ingestion API endpoint). Call it directly with an already-resolved
+`Source` row:
+
+```python
+from app.connectors.solid_jobs import run_solid_jobs_ingestion
+
+result = await run_solid_jobs_ingestion(session, source, campaign=settings.sjctl_campaign)
+# IngestionResult(ok=True, fetched=3, created=2)
+await session.commit()
+```
+
+`campaign` always comes from `Settings.sjctl_campaign` (`SJCTL_CAMPAIGN` env var, default
+`recruflow`) and is passed as `--campaign` on every `sjctl` invocation.
+
+By default (`force_refresh=False`) the connector runs `sjctl sync`, which only reports offers not
+already seen by sjctl's own saved watches — no filters, cache-respecting. Pass `force_refresh=True`
+to instead run `sjctl search` with filters read from the Source row's `config_json`, bypassing the
+cache:
+
+| `config_json` key | sjctl flag | Notes |
+| --- | --- | --- |
+| `division` | `-d` | Defaults to `IT` if absent |
+| `cities` (list) | `--city` (repeated) | |
+| `min_salary` | `--min-salary` | |
+| `experience_levels` (list) | `--experience` (repeated) | |
+| `terms` (list) | `--term` (repeated) | Free-text/technology filter, e.g. `["python"]` |
+
+If the `sjctl` binary is missing, exits non-zero, or returns malformed JSON, the connector logs the
+failure and returns `IngestionResult(ok=False, fetched=0, created=0)` rather than raising — it never
+crashes the calling ingestion process.

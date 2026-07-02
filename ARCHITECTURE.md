@@ -217,6 +217,68 @@ strategy needed to know the real constraints existed.
     record (already logged inside `normalize_and_validate` — never logged twice), otherwise
     `persist_offer`'s `(row, created)` tuple.
 
+### SOLID.Jobs connector (P1US2)
+
+- **`app/connectors/solid_jobs.py`** — the first of three sibling connectors
+  (P1US2–US4: SOLID.Jobs, JustJoin.it, NoFluffJobs), and the only one needing no scraping
+  investigation since sjctl already handles fetch/cache/rate-limiting. Exposes
+  `run_solid_jobs_ingestion(session, source, *, campaign, force_refresh=False) -> IngestionResult`
+  as the single public entrypoint later stories (P1US6 scheduler, P1US7 ingestion API endpoint)
+  will call — it does not commit the session (same convention as `persist_offer`) and does not
+  create or seed a `Source` row itself.
+- **`sync` vs `search` subcommand selection drives cache behavior** (see
+  `docs/adr/0001-solid-jobs-sync-vs-search-cache-strategy.md`): sjctl has no single "bypass cache"
+  flag, so `force_refresh=False` (default) runs `sjctl sync` — which only reports offers not
+  already seen by sjctl's own saved watches, take no config-derived filters, and is what
+  satisfies "respects the local cache unless explicitly requested" — while `force_refresh=True`
+  runs `sjctl search` with filters read from the Source row's `config_json`, always hitting the
+  live API. These are not two variations of the same query: `sync` is scoped to whatever watches
+  were separately configured via `sjctl watch add`; `search` is scoped to `config_json` and does
+  not consult watches at all.
+- **`config_json` schema for a SOLID.Jobs Source row** (de facto until a later story formalises
+  it further): `division` (str, defaults to `"IT"`) → `-d`; `cities` (list[str]) → repeated
+  `--city`; `min_salary` (int) → `--min-salary`; `experience_levels` (list[str]) → repeated
+  `--experience`; `terms` (list[str]) → repeated `--term`, the technology/free-text filter (e.g.
+  `["python"]`). `build_search_args` does no validation of these — a malformed config value fails
+  loudly via `str()` coercion rather than being silently dropped, since `config_json` is
+  already-validated-at-write-time internal configuration, not user input.
+- **`--campaign` is a real, global sjctl flag** (confirmed against a live `sjctl v0.3.0` install,
+  not just the vendored skill docs), appended to every invocation from `Settings.sjctl_campaign`.
+- **The sjctl JSON contract was verified against a live binary, not trusted from the skill
+  docs** (see `docs/adr/0002-sjctl-contract-verified-against-live-binary.md`) — the vendored
+  `jobs-search`/`jobs-digest` `SKILL.md` prose names fields (`companyName`, flat `salaryFrom`,
+  `city`, `remote`, `publishedAt`) that do not match what sjctl v0.3.0 actually emits. Real shape,
+  as mapped by `map_sjctl_offer`:
+  - `search --json` wraps offers under `"jobs"` (not `"offers"`); an offer has `company` (not
+    `companyName`), an array `locations` (not a single `city`), a boolean `isRemote` plus a
+    separate `isHybrid` with no equivalent in `Offer`, a nested `salary: {from, to, currency,
+    employmentType}` (not flat `salaryFrom`/`salaryTo`/`salaryCurrency`), and `validFrom` (not
+    `publishedAt`).
+  - `sync --json` wraps each new offer as `{"watch": "<name>", "offer": {...}}` — a structural
+    difference the skill docs don't mention at all — and reports `"new": null` (not `[]`) when
+    there are no new offers, which `_extract_offers` treats as zero results, not a malformed
+    response.
+  - `_extract_offers(payload, list_key, *, item_key=None)` handles both shapes: `item_key=None`
+    for `search` (bare offer dicts under `"jobs"`), `item_key="offer"` for `sync` (unwraps the
+    `{watch, offer}` envelope under `"new"`) — so `map_sjctl_offer` only ever sees a bare offer
+    dict regardless of which subcommand produced it.
+  - `locations` (list) → `Offer.location` (single string): joined with `", "`. `isHybrid` is
+    dropped from the normalised field — `Offer.remote` is `isRemote` only, not `isRemote OR
+    isHybrid`, since folding hybrid into "remote" would misrepresent hybrid roles (raw `isHybrid`
+    is still preserved in `raw_payload`). `contract_type` maps from `salary.employmentType`
+    (`"UoP"`/`"B2B"`) rather than the top-level `contractTime` (`"full_time"`/`"part_time"`), since
+    "contract type" in this domain means employment form, not work-time schedule (see the
+    `Remote` and `Contract Type` glossary entries in `CLAUDE.md`). `description` is stored as the
+    raw HTML sjctl returns, unstripped — HTML-to-text is deferred to whichever later phase
+    actually needs plain text (CV tailoring).
+- **`_run_sjctl`** is the sole subprocess boundary and the only place that can fail without
+  crashing the caller: catches `OSError` (covers a missing binary and permission failures, wider
+  than just `FileNotFoundError`) and `subprocess.TimeoutExpired` around the `subprocess.run` call
+  itself, then separately checks `returncode != 0` and `json.JSONDecodeError` on the parsed
+  stdout — every one of these paths logs at `ERROR` and returns `None` rather than raising.
+  `run_solid_jobs_ingestion` turns a `None` from either `_run_sjctl` or `_extract_offers` into
+  `IngestionResult(ok=False, fetched=0, created=0)`.
+
 ### `frontend/` project
 
 React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.

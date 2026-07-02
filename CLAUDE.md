@@ -88,6 +88,8 @@ Use these terms consistently in code, schemas, and PR descriptions:
 | **Digest** | Scheduled job surfacing new high-grade Offers since last run |
 | **Send Queue** | Rate-limited, retry-aware worker dispatching Applications one at a time |
 | **Campaign ID** | `recruflow` — passed as `campaign` parameter in all direct SOLID.Jobs API calls |
+| **Remote** | An Offer requiring zero on-site presence. Hybrid arrangements are not Remote — they are tracked in a source's raw payload but not surfaced as a distinct normalised field in v1 |
+| **Contract Type** | The legal/administrative form of an Offer's employment (e.g. UoP, B2B) — distinct from work-time schedule (full-time/part-time), which is not modelled |
 
 ## Implementing User Stories
 
