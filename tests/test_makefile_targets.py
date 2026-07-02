@@ -13,3 +13,9 @@ def test_makefile_defines_seed_target() -> None:
     content = MAKEFILE.read_text()
     assert "seed:" in content
     assert "python -m app.db.seed" in content
+
+
+def test_makefile_defines_generate_types_target() -> None:
+    content = MAKEFILE.read_text()
+    assert "generate-types:" in content
+    assert "pnpm run generate-types" in content

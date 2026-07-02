@@ -1,4 +1,4 @@
-.PHONY: install lint format test test-unit test-integration typecheck ci clean up sjctl-version migrate seed
+.PHONY: install lint format test test-unit test-integration typecheck ci clean up sjctl-version migrate seed generate-types
 
 install:
 	uv sync --all-groups
@@ -16,6 +16,9 @@ migrate:
 
 seed:
 	docker compose exec api python -m app.db.seed
+
+generate-types:
+	cd frontend && pnpm run generate-types
 
 format:
 	uv run ruff format .

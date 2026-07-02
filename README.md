@@ -85,6 +85,21 @@ pnpm format:check   # Prettier — check mode, no writes
 TypeScript strict mode is enabled (`tsconfig.app.json` / `tsconfig.node.json`), and styling is
 done exclusively with Tailwind CSS utility classes.
 
+### Generating API types
+
+`frontend/src/api/schema.d.ts` holds TypeScript types generated from the backend's OpenAPI
+schema, and `frontend/src/api/client.ts` exports a shared `openapi-fetch` client (`apiClient`)
+typed against them. Regenerate the types with the API running:
+
+```bash
+make up              # in another terminal, if the API isn't already running
+make generate-types  # fetches http://localhost:8000/openapi.json -> frontend/src/api/schema.d.ts
+```
+
+`schema.d.ts` is committed to the repo, so **re-run `make generate-types` after any API contract
+change** (new endpoint, changed request/response shape) and commit the result — otherwise the
+frontend's types silently drift from the real backend contract.
+
 ## Pre-commit hooks
 
 Hooks install automatically as part of `make install` (which now also runs
