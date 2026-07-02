@@ -168,3 +168,31 @@ requires is documented here, grouped by concern.
 | `SEND_QUEUE_INTER_SEND_DELAY_SECONDS` | Delay between consecutive sends in the Send Queue. |
 | `SEND_QUEUE_DAILY_CAP` | Hard daily cap on the number of Applications sent. |
 | `FORM_FILL_DAILY_CAP` | Hard daily cap on automated form-fill submissions. |
+
+## Claude Code skills
+
+Skills live under `recruFlow/.claude/skills/` and are invoked as `/<skill-name>` in Claude Code.
+Run Claude Code with `recruFlow/` as the working directory so they're picked up.
+
+| Skill | Purpose | Source |
+| --- | --- | --- |
+| `/grill-with-docs` | Relentless interview to sharpen a plan or design; produces ADRs and a glossary as it goes. Internally runs `/grilling` + `/domain-modeling`. | [mattpocock/skills](https://github.com/mattpocock/skills) |
+| `/grilling` | The interview mechanic used by `/grill-with-docs`. | [mattpocock/skills](https://github.com/mattpocock/skills) |
+| `/domain-modeling` | Builds and maintains the `CONTEXT.md` glossary and `docs/adr/` decisions used by `/grill-with-docs`. | [mattpocock/skills](https://github.com/mattpocock/skills) |
+| `/jobs-search` | Search SOLID.Jobs offers from a natural-language request. | [solid-company/solid-jobs-skills](https://github.com/solid-company/solid-jobs-skills) |
+| `/jobs-evaluate` | Score a cached offer against the candidate profile (A–F grade). | [solid-company/solid-jobs-skills](https://github.com/solid-company/solid-jobs-skills) |
+| `/jobs-digest` | Run saved searches (watches) and summarize new offers since the last check. | [solid-company/solid-jobs-skills](https://github.com/solid-company/solid-jobs-skills) |
+| `/jobs-track` | Manage the application pipeline (saved → applied → interview → offer/rejected). | [solid-company/solid-jobs-skills](https://github.com/solid-company/solid-jobs-skills) |
+| `/jobs-create-profile` | Turn a plain-language description or CV into a stored candidate profile. | [solid-company/solid-jobs-skills](https://github.com/solid-company/solid-jobs-skills) |
+
+The `jobs-*` skills wrap the `sjctl` CLI (see `SJCTL_CAMPAIGN` above) and resolve it from `PATH`,
+then `~/.solid-jobs-skills/bin/sjctl`, then a repo-local binary. If `sjctl` or a watch isn't
+configured yet, the skill reports that clearly instead of failing silently.
+
+These are vendored copies of upstream `SKILL.md` files. To update them, re-copy the relevant
+file(s) from the source repos, or use each repo's own installer for an interactive picker:
+
+```bash
+npx skills@latest add mattpocock/skills
+npx skills@latest add solid-company/solid-jobs-skills
+```
