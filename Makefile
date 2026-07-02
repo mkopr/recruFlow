@@ -1,4 +1,4 @@
-.PHONY: install lint format test test-unit test-integration typecheck ci clean up sjctl-version
+.PHONY: install lint format test test-unit test-integration typecheck ci clean up sjctl-version migrate seed
 
 install:
 	uv sync --all-groups
@@ -10,6 +10,12 @@ up:
 
 sjctl-version:
 	docker compose exec api sjctl version
+
+migrate:
+	docker compose exec api alembic upgrade head
+
+seed:
+	docker compose exec api python -m app.db.seed
 
 format:
 	uv run ruff format .

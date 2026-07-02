@@ -5,7 +5,15 @@
 ```
 recruFlow/
 ├── app/            # Python application package (P0US4 adds a /health stub; P0US6 adds the rest)
-│   └── main.py     # FastAPI app object, GET /health only
+│   ├── main.py     # FastAPI app object, GET /health only
+│   └── db/         # SQLAlchemy models, async engine/session, Alembic-shared base (P0US5)
+│       ├── base.py     # Declarative base, shared by models.py and alembic/env.py
+│       ├── models.py   # v1 schema: Source, Offer, Profile, CVVersion, MatchScore, Application
+│       ├── session.py  # get_engine()/get_sessionmaker(), env-driven (DATABASE_URL)
+│       └── seed.py     # idempotent fixture loader (make seed)
+├── alembic/        # Migration environment (async template) (P0US5)
+│   └── versions/   # Migration scripts; v1 schema migration creates all six tables
+├── alembic.ini     # Alembic config; sqlalchemy.url left unset, injected by env.py at runtime
 ├── frontend/       # React + Vite + TypeScript frontend (P0US2)
 │   ├── src/        # App source (main.tsx, App.tsx, index.css, vite-env.d.ts)
 │   ├── nginx.conf  # SPA server block for the production Docker image (P0US4)
@@ -48,6 +56,44 @@ service has a real HTTP endpoint to health-check — it does not load settings, 
 or wire OpenAPI docs. P0US6 (FastAPI skeleton) replaces this stub with full Pydantic Settings
 loading, the DB session dependency, and the rest of the application's routers.
 
+### `app/db/` package (P0US5)
+
+- `base.py` — a single `Base(DeclarativeBase)` that every ORM model and Alembic's
+  `target_metadata` share, so migrations autogenerate off the same metadata the app queries
+  against.
+- `models.py` — the six v1 tables (see "Database schema" below).
+- `session.py` — `get_database_url() -> str` (reads `DATABASE_URL`, raises `RuntimeError` if
+  unset — fails loudly rather than silently defaulting to the wrong database),
+  `get_engine() -> AsyncEngine`, `get_sessionmaker(engine: AsyncEngine | None = None) ->
+  async_sessionmaker[AsyncSession]`. No FastAPI dependency lives here — P0US6 builds its `get_db`
+  dependency directly on top of `get_sessionmaker()`, so this module is the single reusable
+  entrypoint for both Alembic and the application.
+- `seed.py` — `run_seed(session: AsyncSession) -> None`, used by `make seed`. Uses Postgres
+  `INSERT ... ON CONFLICT DO NOTHING` keyed on each table's natural unique column (`sources.name`,
+  `offers.dedup_hash`, `profiles.name`) so it is safe to re-run.
+
+## Database schema (P0US5)
+
+Alembic (async template) is wired to `app/db/base.py`'s `Base.metadata` via `alembic/env.py`,
+which reads `DATABASE_URL` from the environment at runtime rather than from `alembic.ini` (kept
+blank) — matching `.env.example`, one source of truth for the connection string. The v1 migration
+creates all six tables spanning every phase's domain nouns up front, so no later phase needs a
+repeated foundational migration:
+
+| Table | Purpose | Key columns / constraints |
+| --- | --- | --- |
+| `sources` | A job board connector (SOLID.Jobs, JustJoin.it, NoFluffJobs) | `name` unique; `config_json` (JSONB) per-source config |
+| `offers` | A normalised job posting with exactly one Source | `dedup_hash` unique + indexed (dedup on canonical URL, P1US1 fallback to title+company+location); `raw_payload` (JSONB, ELT raw payload always populated at ingest) |
+| `profiles` | Candidate's structured facts: skills, experience, preferences | `name` unique; `is_active` (only one row active at a time, enforced by application logic, not a DB constraint); `data` (JSONB) |
+| `cv_versions` | Tailored CV + cover letter drafted for one Offer/Profile pair | FKs to `offers`/`profiles`; `status` string (no DB enum, so later statuses need no migration) |
+| `match_scores` | Structured evaluation of one Offer against a Profile (grade A–F + dimensions) | FKs to `offers`/`profiles`; `engine` distinguishes LangChain vs. `sjctl` scoring |
+| `applications` | Record of intent/action to apply | FKs to `offers`/`profiles`/`cv_versions`; `status` one of `drafted`/`reviewed`/`sent`/`failed`/`interview`/`offer`/`rejected` (unconstrained string, not a DB enum) |
+
+`make migrate` runs `docker compose exec api alembic upgrade head` (mirrors the `sjctl-version`
+pattern — `DATABASE_URL`'s `db` hostname only resolves inside the Compose network, not from the
+host). `make seed` runs `docker compose exec api python -m app.db.seed`, loading three sample
+offers and one active stub profile; both targets are idempotent.
+
 ### `frontend/` project
 
 React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
@@ -85,10 +131,11 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
   `api` and `frontend` (P0US4).
 - `sjctl-version` — `docker compose exec api sjctl version`; prints the `sjctl` binary version
   installed inside the `api` container (P0US4).
+- `migrate` — `docker compose exec api alembic upgrade head` (P0US5).
+- `seed` — `docker compose exec api python -m app.db.seed` (P0US5).
 
-Targets depending on infrastructure introduced by later stories (`migrate`, `seed`,
-`generate-types`) are deliberately out of scope here and will be added by P0US5, P0US7, and
-P0US9 respectively.
+`generate-types`, depending on infrastructure introduced by a later story, is deliberately out of
+scope here and will be added by P0US7.
 
 - `install` now also runs `uv run pre-commit install` after the dependency/frontend install
   steps, registering the git hooks defined in `.pre-commit-config.yaml`.

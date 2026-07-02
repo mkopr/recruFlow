@@ -54,6 +54,20 @@ To confirm the `sjctl` binary installed inside the `api` container:
 make sjctl-version   # docker compose exec api sjctl version
 ```
 
+## Database
+
+With `make up` running (the `api` container must exist for `docker compose exec` to work):
+
+```bash
+make migrate   # docker compose exec api alembic upgrade head
+make seed      # docker compose exec api python -m app.db.seed
+```
+
+`make migrate` applies all Alembic migrations, creating the six v1 tables (`sources`, `offers`,
+`profiles`, `cv_versions`, `match_scores`, `applications`) — see [ARCHITECTURE.md](ARCHITECTURE.md)
+for the full schema. `make seed` loads a handful of sample offers and a stub profile; both
+commands are safe to re-run.
+
 ## Frontend
 
 The frontend is a React + Vite + TypeScript project under `frontend/`, managed with

@@ -33,6 +33,8 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 COPY app ./app
+COPY alembic.ini ./
+COPY alembic ./alembic
 
 EXPOSE 8000
 

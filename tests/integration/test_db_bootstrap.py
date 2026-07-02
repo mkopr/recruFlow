@@ -1,0 +1,100 @@
+import asyncio
+
+import pytest
+from alembic import command
+from app.db.models import Offer, Profile
+from app.db.seed import SEED_PROFILE_NAME, _seed_offers, run_seed
+from app.db.session import get_engine
+from sqlalchemy import inspect, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from tests.integration.conftest import alembic_config
+
+V1_TABLES = {
+    "sources",
+    "offers",
+    "profiles",
+    "cv_versions",
+    "match_scores",
+    "applications",
+}
+
+
+async def _get_table_names() -> list[str]:
+    engine = get_engine()
+    async with engine.connect() as conn:
+        names: list[str] = await conn.run_sync(lambda c: inspect(c).get_table_names())
+    await engine.dispose()
+    return names
+
+
+@pytest.mark.integration
+def test_migration_upgrade_head_creates_all_v1_tables() -> None:
+    command.upgrade(alembic_config(), "head")
+
+    table_names = asyncio.run(_get_table_names())
+
+    assert V1_TABLES.issubset(set(table_names))
+
+
+@pytest.mark.integration
+def test_migration_upgrade_head_is_idempotent() -> None:
+    config = alembic_config()
+    command.upgrade(config, "head")
+    before = asyncio.run(_get_table_names())
+
+    command.upgrade(config, "head")
+    after = asyncio.run(_get_table_names())
+
+    assert set(before) == set(after)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_seed_loads_sample_offers_and_stub_profile(db_session: AsyncSession) -> None:
+    await run_seed(db_session)
+    await db_session.commit()
+
+    offers = (await db_session.execute(select(Offer))).scalars().all()
+    profile = (
+        (await db_session.execute(select(Profile).where(Profile.name == SEED_PROFILE_NAME)))
+        .scalars()
+        .one()
+    )
+
+    assert len(offers) >= 3
+    assert profile.is_active is True
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_seed_is_idempotent_on_rerun(db_session: AsyncSession) -> None:
+    await run_seed(db_session)
+    await db_session.commit()
+    offer_count_1 = len((await db_session.execute(select(Offer))).scalars().all())
+    profile_count_1 = len((await db_session.execute(select(Profile))).scalars().all())
+
+    await run_seed(db_session)
+    await db_session.commit()
+    offer_count_2 = len((await db_session.execute(select(Offer))).scalars().all())
+    profile_count_2 = len((await db_session.execute(select(Profile))).scalars().all())
+
+    assert offer_count_1 == offer_count_2
+    assert profile_count_1 == profile_count_2
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_seed_offer_dedup_hash_conflict_is_a_noop_not_an_error(
+    db_session: AsyncSession,
+) -> None:
+    await run_seed(db_session)
+    await db_session.commit()
+    source_id = (await db_session.execute(select(Offer.source_id).limit(1))).scalar_one()
+    count_1 = len((await db_session.execute(select(Offer))).scalars().all())
+
+    await _seed_offers(db_session, source_id)
+    await db_session.commit()
+    count_2 = len((await db_session.execute(select(Offer))).scalars().all())
+
+    assert count_1 == count_2
