@@ -1,13 +1,14 @@
 import asyncio
-import hashlib
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Offer, Profile, Source
+from app.db.models import Profile, Source
 from app.db.session import get_sessionmaker
+from app.ingestion.persist import persist_offer
+from app.schemas.offer import Offer as OfferSchema
 
 SEED_SOURCE_NAME = "seed"
 SEED_PROFILE_NAME = "stub-profile"
@@ -39,10 +40,6 @@ SEED_OFFERS: list[dict[str, Any]] = [
 ]
 
 
-def _dedup_hash(canonical_url: str) -> str:
-    return hashlib.sha256(canonical_url.encode("utf-8")).hexdigest()
-
-
 async def run_seed(session: AsyncSession) -> None:
     source_id = await _seed_source(session)
     await _seed_offers(session, source_id)
@@ -62,18 +59,9 @@ async def _seed_source(session: AsyncSession) -> int:
 
 
 async def _seed_offers(session: AsyncSession, source_id: int) -> None:
-    for offer in SEED_OFFERS:
-        stmt = (
-            pg_insert(Offer)
-            .values(
-                source_id=source_id,
-                dedup_hash=_dedup_hash(offer["canonical_url"]),
-                raw_payload={},
-                **offer,
-            )
-            .on_conflict_do_nothing(index_elements=[Offer.dedup_hash])
-        )
-        await session.execute(stmt)
+    for offer_data in SEED_OFFERS:
+        offer = OfferSchema(source_id=source_id, **offer_data)
+        await persist_offer(session, offer, raw_payload={})
 
 
 async def _seed_profile(session: AsyncSession) -> None:

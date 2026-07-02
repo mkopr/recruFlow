@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any
 
 import pytest
 from alembic import command
@@ -35,6 +36,24 @@ def test_migration_upgrade_head_creates_all_v1_tables() -> None:
     table_names = asyncio.run(_get_table_names())
 
     assert V1_TABLES.issubset(set(table_names))
+
+
+@pytest.mark.integration
+def test_migration_adds_description_and_nullable_canonical_url() -> None:
+    command.upgrade(alembic_config(), "head")
+
+    async def _get_offers_columns() -> dict[str, Any]:
+        engine = get_engine()
+        async with engine.connect() as conn:
+            columns: Any = await conn.run_sync(lambda c: inspect(c).get_columns("offers"))
+        await engine.dispose()
+        return {column["name"]: column for column in columns}
+
+    columns = asyncio.run(_get_offers_columns())
+
+    assert "description" in columns
+    assert columns["description"]["nullable"] is True
+    assert columns["canonical_url"]["nullable"] is True
 
 
 @pytest.mark.integration

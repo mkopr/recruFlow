@@ -130,7 +130,10 @@ runtime, not from constructor arguments.
   entrypoint for both Alembic and the application.
 - `seed.py` — `run_seed(session: AsyncSession) -> None`, used by `make seed`. Uses Postgres
   `INSERT ... ON CONFLICT DO NOTHING` keyed on each table's natural unique column (`sources.name`,
-  `offers.dedup_hash`, `profiles.name`) so it is safe to re-run.
+  `offers.dedup_hash`, `profiles.name`) so it is safe to re-run. `_seed_offers` (P1US1) builds a
+  canonical `app.schemas.offer.Offer` per seed entry and calls `app.ingestion.persist.persist_offer`
+  rather than hand-rolling its own dedup/insert statement — the seed path exercises the same
+  ingestion code every connector will use, instead of a second, divergence-prone implementation.
 
 ## Database schema (P0US5)
 
@@ -143,7 +146,7 @@ repeated foundational migration:
 | Table | Purpose | Key columns / constraints |
 | --- | --- | --- |
 | `sources` | A job board connector (SOLID.Jobs, JustJoin.it, NoFluffJobs) | `name` unique; `config_json` (JSONB) per-source config |
-| `offers` | A normalised job posting with exactly one Source | `dedup_hash` unique + indexed (dedup on canonical URL, P1US1 fallback to title+company+location); `raw_payload` (JSONB, ELT raw payload always populated at ingest) |
+| `offers` | A normalised job posting with exactly one Source | `dedup_hash` unique + indexed (dedup on canonical URL, P1US1 fallback to title+company+location); `canonical_url` nullable (P1US1 — not every source guarantees a stable URL); `description` nullable `Text` (P1US1); `raw_payload` (JSONB, ELT raw payload always populated at ingest) |
 | `profiles` | Candidate's structured facts: skills, experience, preferences | `name` unique; `is_active` (only one row active at a time, enforced by application logic, not a DB constraint); `data` (JSONB) |
 | `cv_versions` | Tailored CV + cover letter drafted for one Offer/Profile pair | FKs to `offers`/`profiles`; `status` string (no DB enum, so later statuses need no migration) |
 | `match_scores` | Structured evaluation of one Offer against a Profile (grade A–F + dimensions) | FKs to `offers`/`profiles`; `engine` distinguishes LangChain vs. `sjctl` scoring |
@@ -153,6 +156,66 @@ repeated foundational migration:
 pattern — `DATABASE_URL`'s `db` hostname only resolves inside the Compose network, not from the
 host). `make seed` runs `docker compose exec api python -m app.db.seed`, loading three sample
 offers and one active stub profile; both targets are idempotent.
+
+A second migration (`aa3fa339111b`, chained after `df5297add8cb`) makes `offers.canonical_url`
+nullable and adds `offers.description` (nullable `Text`). Both changes were deferred from the
+P0US5 migration deliberately — P0US5 only had to create "all v1 tables", not pin the exact
+`offers` shape — and are resolved by P1US1 (see below) once the canonical `Offer` schema and dedup
+strategy needed to know the real constraints existed.
+
+### Offer schema and dedup strategy (P1US1)
+
+- **`app/schemas/offer.py`** — `Offer(BaseModel)`, the canonical, source-agnostic shape every
+  connector (P1US2–US4: SOLID.Jobs, JustJoin.it, NoFluffJobs) maps its source-specific payload
+  into before persistence. Fields mirror every `offers` column except `id`, `dedup_hash`,
+  `raw_payload`, `created_at`, `updated_at` — those are ingestion-pipeline concerns, not
+  connector-mapping concerns: the persistence layer computes `dedup_hash`, attaches
+  `raw_payload` (the source's original response) separately from the normalised fields, and lets
+  the database assign `id`/timestamps. `model_config` sets `str_strip_whitespace=True` (so a
+  blank required field can't hide behind leading/trailing whitespace) and `from_attributes=True`
+  (a harmless default enabling future construction from an ORM row — it does not by itself make
+  `Offer` a usable API response model, since it lacks `id`/timestamps; a later story's read
+  schema would still need to add those). A `field_validator` normalises an empty/whitespace
+  `canonical_url` to `None` (so "available" genuinely means non-empty); a `model_validator`
+  rejects `salary_min > salary_max`.
+- **ELT pattern, as implemented**: the raw payload a connector fetched from its source is passed
+  into `persist_offer`/`ingest_offer` as a separate argument alongside the already-validated
+  `Offer`, and both are written to the same `offers` row in the same `INSERT` — there is no
+  separate raw-payload table. The raw payload is captured before normalisation; normalisation
+  (mapping to `Offer`, computing `dedup_hash`) happens as a distinct step afterwards, but both
+  forms persist together.
+- **`app/ingestion/dedup.py`** — the two-tier dedup strategy. `normalize_canonical_url` lowercases
+  scheme and host, strips the query string and fragment (tracking parameters must never affect
+  dedup identity), and strips a trailing slash from the path — path *case* is preserved, since job
+  slugs can be case-sensitive. A normalized URL is "comparable" when it has a non-empty path
+  (`_is_comparable`): a bare domain like `https://example.com` doesn't identify a specific
+  posting, so it can't anchor dedup. `compute_dedup_hash(offer: Offer) -> str` hashes the
+  normalized canonical URL (SHA-256, hex) when one is present and comparable; otherwise it falls
+  back to a hash of `title|company|location` (lowercased, whitespace-stripped) — this fallback is
+  a known, accepted tradeoff: two genuinely distinct postings sharing all three fields will
+  collide, but no source guarantees a stable per-posting URL.
+- **`app/ingestion/persist.py`** — the entrypoints every future connector story calls:
+  - `normalize_and_validate(raw: dict[str, Any]) -> Offer | None` — the validation boundary. A
+    dict a connector already mapped from its source-specific format either becomes a valid
+    `Offer`, or fails `pydantic.ValidationError` and is logged at `WARNING` (an anticipated,
+    handled condition) and rejected via a `None` return — never raised — so a batch ingestion run
+    can keep processing the rest of a page after one bad record.
+  - `persist_offer(session, offer, raw_payload) -> tuple[OfferModel, bool]` — computes
+    `dedup_hash`, then `INSERT ... ON CONFLICT (dedup_hash) DO NOTHING ... RETURNING id`
+    (the same idempotent-upsert idiom `seed.py` already used pre-P1US1), followed by a re-`SELECT`
+    by `dedup_hash` since `RETURNING` doesn't surface the pre-existing row's `id` on conflict. The
+    returned `bool` is `True` only when a row was actually inserted, so a caller batching many
+    offers (P1US5's scheduler) can report new-vs-seen counts. Deliberately out of scope: a
+    re-ingested offer's fields are never refreshed (`DO NOTHING`, not `DO UPDATE`) — the first
+    snapshot ingested is kept forever until a later story adds field-refresh-on-reingest; this
+    matches the acceptance criteria's literal "does not create a duplicate row" and avoids the
+    extra insert/update-detection complexity (`RETURNING (xmax = 0)`) `DO UPDATE` would need.
+    Does not commit — the caller controls the transaction boundary, since a scheduled run may
+    need to batch many offers in one transaction.
+  - `ingest_offer(session, mapped_fields, raw_payload) -> tuple[OfferModel, bool] | None` — the
+    single public per-offer entrypoint combining the two: `None` if validation rejected the
+    record (already logged inside `normalize_and_validate` — never logged twice), otherwise
+    `persist_offer`'s `(row, created)` tuple.
 
 ### `frontend/` project
 

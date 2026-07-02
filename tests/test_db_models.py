@@ -23,3 +23,13 @@ def test_profiles_name_is_unique() -> None:
     column = Base.metadata.tables["profiles"].columns["name"]
     assert column.unique is True
     assert column.nullable is False
+
+
+def test_offers_canonical_url_is_nullable() -> None:
+    column = Base.metadata.tables["offers"].columns["canonical_url"]
+    assert column.nullable is True
+
+
+def test_offers_description_column_exists_and_is_nullable() -> None:
+    assert "description" in Base.metadata.tables["offers"].columns
+    assert Base.metadata.tables["offers"].columns["description"].nullable is True

@@ -33,7 +33,7 @@ class Offer(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     source_id: Mapped[int] = mapped_column(Integer, ForeignKey("sources.id"), nullable=False)
     external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    canonical_url: Mapped[str] = mapped_column(Text, nullable=False)
+    canonical_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     dedup_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     company: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -46,6 +46,7 @@ class Offer(Base):
         String(3), nullable=True, server_default="PLN"
     )
     contract_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     raw_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
