@@ -5,11 +5,13 @@ from typing import Any
 
 import httpx
 import pytest
+from app.connectors import nofluffjobs
 from app.connectors.nofluffjobs import (
     _extract_offer_list,
     _fetch_nofluffjobs_json,
     map_nofluffjobs_offer,
 )
+from app.ingestion.normalize import NOFLUFFJOBS
 
 
 class _FakeResponse:
@@ -184,7 +186,7 @@ def test_map_nofluffjobs_offer_maps_all_known_fields() -> None:
         "company": "Reply Polska",
         "location": "Katowice",
         "remote": False,
-        "seniority": "Senior",
+        "seniority": "senior",
         "salary_min": 13000,
         "salary_max": 22000,
         "salary_currency": "PLN",
@@ -212,10 +214,10 @@ def test_map_nofluffjobs_offer_handles_missing_optional_fields() -> None:
     assert result["remote"] is False
 
 
-def test_map_nofluffjobs_offer_preserves_source_remote_label_without_inventing_vocabulary() -> None:
+def test_map_nofluffjobs_offer_maps_remote_via_shared_normalizer() -> None:
     # NoFluffJobs's own location.fullyRemote is already a literal boolean matching the
-    # `Remote` glossary definition exactly -- no cross-source vocabulary unification
-    # happens here (that is US14's job).
+    # `Remote` glossary definition exactly -- routed through the shared
+    # app.ingestion.normalize.normalize_remote function unchanged.
     remote_raw = {"title": "x", "name": "y", "location": {"fullyRemote": True}}
     hybrid_raw = {"title": "x", "name": "y", "location": {"fullyRemote": False}}
 
@@ -245,7 +247,7 @@ def test_map_nofluffjobs_offer_joins_multiple_seniority_levels() -> None:
 
     result = map_nofluffjobs_offer(1, raw)
 
-    assert result["seniority"] == "Mid, Senior"
+    assert result["seniority"] == "mid, senior"
 
 
 def test_map_nofluffjobs_offer_uses_location_duplicate_slug_as_external_id_not_reference() -> None:
@@ -266,3 +268,37 @@ def test_map_nofluffjobs_offer_uses_location_duplicate_slug_as_external_id_not_r
     assert result["canonical_url"] == (
         "https://nofluffjobs.com/job/senior-delivery-manager-spyrosoft-wroclaw"
     )
+
+
+def test_map_nofluffjobs_offer_calls_shared_normalize_functions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, tuple[Any, ...]] = {}
+
+    def _record(name: str) -> Any:
+        def _stub(*args: Any, **kwargs: Any) -> Any:
+            calls[name] = args
+            if name == "normalize_salary":
+                return (None, None, "PLN")
+            if name == "normalize_seniority":
+                return None
+            return False
+
+        return _stub
+
+    monkeypatch.setattr(nofluffjobs, "normalize_remote", _record("normalize_remote"))
+    monkeypatch.setattr(nofluffjobs, "normalize_seniority", _record("normalize_seniority"))
+    monkeypatch.setattr(nofluffjobs, "normalize_salary", _record("normalize_salary"))
+
+    raw = {
+        "title": "Backend Engineer",
+        "name": "Acme",
+        "location": {"fullyRemote": True},
+        "seniority": ["Senior"],
+        "salary": {"from": 18000, "to": 24000, "currency": "PLN"},
+    }
+    map_nofluffjobs_offer(1, raw)
+
+    assert calls["normalize_remote"][0] == NOFLUFFJOBS
+    assert calls["normalize_seniority"][0] == NOFLUFFJOBS
+    assert calls["normalize_salary"][0] == NOFLUFFJOBS

@@ -4,11 +4,13 @@ from typing import Any
 
 import httpx
 import pytest
+from app.connectors import justjoinit
 from app.connectors.justjoinit import (
     _extract_offer_list,
     _fetch_justjoinit_json,
     map_justjoinit_offer,
 )
+from app.ingestion.normalize import JUSTJOINIT
 
 
 class _FakeResponse:
@@ -122,7 +124,9 @@ def test_extract_offer_list_returns_none_for_unexpected_shape() -> None:
     assert result is None
 
 
-def test_map_justjoinit_offer_maps_all_known_fields() -> None:
+def test_map_justjoinit_offer_maps_all_known_fields(caplog: pytest.LogCaptureFixture) -> None:
+    _enable_logger()
+    logging.getLogger("app.ingestion.normalize").disabled = False
     raw = {
         "guid": "d751ca8f-672c-4991-b382-77419b435764",
         "slug": "danone-sap-fi-product-owner-i2p-invoice-management--warszawa-pm",
@@ -157,7 +161,8 @@ def test_map_justjoinit_offer_maps_all_known_fields() -> None:
         "publishedAt": "2026-07-03T09:00:11.757Z",
     }
 
-    result = map_justjoinit_offer(1, raw)
+    with caplog.at_level(logging.WARNING, logger="app.ingestion.normalize"):
+        result = map_justjoinit_offer(1, raw)
 
     assert result == {
         "source_id": 1,
@@ -170,7 +175,7 @@ def test_map_justjoinit_offer_maps_all_known_fields() -> None:
         "company": "DANONE",
         "location": "Warszawa",
         "remote": False,
-        "seniority": "manager",
+        "seniority": "lead",
         "salary_min": 20000,
         "salary_max": 25000,
         "salary_currency": "PLN",
@@ -178,6 +183,11 @@ def test_map_justjoinit_offer_maps_all_known_fields() -> None:
         "posted_at": "2026-07-03T09:00:11.757Z",
         "description": None,
     }
+    assert any(
+        "net" in r.getMessage() or "gross" in r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING
+    )
 
 
 def test_map_justjoinit_offer_handles_missing_optional_fields() -> None:
@@ -198,10 +208,9 @@ def test_map_justjoinit_offer_handles_missing_optional_fields() -> None:
     assert result["remote"] is False
 
 
-def test_map_justjoinit_offer_preserves_source_remote_label_without_inventing_vocabulary() -> None:
-    # JustJoin.it's own workplaceType enum is {"remote", "hybrid", "office"} -- we translate
-    # only "remote" -> True directly from that label; no cross-source vocabulary unification
-    # happens here (that is US14's job).
+def test_map_justjoinit_offer_maps_remote_via_shared_normalizer() -> None:
+    # JustJoin.it's own workplaceType enum is {"remote", "hybrid", "office"} -- mapped to a
+    # boolean via the shared app.ingestion.normalize.normalize_remote function.
     remote_raw = {"title": "x", "companyName": "y", "workplaceType": "remote"}
     hybrid_raw = {"title": "x", "companyName": "y", "workplaceType": "hybrid"}
     office_raw = {"title": "x", "companyName": "y", "workplaceType": "office"}
@@ -241,3 +250,37 @@ def test_map_justjoinit_offer_uses_first_employment_type_as_primary() -> None:
     assert result["salary_min"] == 100
     assert result["salary_max"] == 200
     assert result["contract_type"] == "b2b"
+
+
+def test_map_justjoinit_offer_calls_shared_normalize_functions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, tuple[Any, ...]] = {}
+
+    def _record(name: str) -> Any:
+        def _stub(*args: Any, **kwargs: Any) -> Any:
+            calls[name] = args
+            if name == "normalize_salary":
+                return (None, None, "PLN")
+            if name == "normalize_seniority":
+                return None
+            return False
+
+        return _stub
+
+    monkeypatch.setattr(justjoinit, "normalize_remote", _record("normalize_remote"))
+    monkeypatch.setattr(justjoinit, "normalize_seniority", _record("normalize_seniority"))
+    monkeypatch.setattr(justjoinit, "normalize_salary", _record("normalize_salary"))
+
+    raw = {
+        "title": "Backend Engineer",
+        "companyName": "Acme",
+        "workplaceType": "remote",
+        "experienceLevel": "senior",
+        "employmentTypes": [{"from": 18000, "to": 24000, "currency": "PLN"}],
+    }
+    map_justjoinit_offer(1, raw)
+
+    assert calls["normalize_remote"][0] == JUSTJOINIT
+    assert calls["normalize_seniority"][0] == JUSTJOINIT
+    assert calls["normalize_salary"][0] == JUSTJOINIT

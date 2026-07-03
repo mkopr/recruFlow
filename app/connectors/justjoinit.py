@@ -8,6 +8,13 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Source
+from app.ingestion.normalize import (
+    JUSTJOINIT,
+    normalize_remote,
+    normalize_salary,
+    normalize_seniority,
+    to_int,
+)
 from app.ingestion.persist import ingest_offer
 
 JUSTJOINIT_OFFERS_URL = "https://justjoin.it/api/candidate-api/offers"
@@ -104,10 +111,6 @@ def _first_employment_type(raw: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def _to_int(value: Any) -> int | None:
-    return int(value) if isinstance(value, int | float) else None
-
-
 def map_justjoinit_offer(source_id: int, raw: dict[str, Any]) -> dict[str, Any]:
     raw_locations = raw.get("locations")
     location = (
@@ -121,6 +124,15 @@ def map_justjoinit_offer(source_id: int, raw: dict[str, Any]) -> dict[str, Any]:
     primary = _first_employment_type(raw)
     slug = raw.get("slug")
 
+    raw_gross = primary.get("gross") if isinstance(primary.get("gross"), bool) else None
+    salary_min, salary_max, salary_currency = normalize_salary(
+        JUSTJOINIT,
+        to_int(primary.get("from")),
+        to_int(primary.get("to")),
+        primary.get("currency"),
+        raw_gross=raw_gross,
+    )
+
     return {
         "source_id": source_id,
         "external_id": raw.get("guid"),
@@ -128,11 +140,11 @@ def map_justjoinit_offer(source_id: int, raw: dict[str, Any]) -> dict[str, Any]:
         "title": raw.get("title") or "",
         "company": raw.get("companyName") or "",
         "location": location or None,
-        "remote": raw.get("workplaceType") == "remote",
-        "seniority": raw.get("experienceLevel") or None,
-        "salary_min": _to_int(primary.get("from")),
-        "salary_max": _to_int(primary.get("to")),
-        "salary_currency": primary.get("currency") or "PLN",
+        "remote": normalize_remote(JUSTJOINIT, raw.get("workplaceType")),
+        "seniority": normalize_seniority(JUSTJOINIT, raw.get("experienceLevel")),
+        "salary_min": salary_min,
+        "salary_max": salary_max,
+        "salary_currency": salary_currency,
         "contract_type": primary.get("type"),
         "posted_at": raw.get("publishedAt"),
         "description": None,

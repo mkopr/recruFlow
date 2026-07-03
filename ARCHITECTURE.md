@@ -334,9 +334,9 @@ strategy needed to know the real constraints existed.
   | `title` | `title` | |
   | `company` | `companyName` | |
   | `location` | `locations[].city` | Joined with `", "` (mirrors `map_sjctl_offer`'s location join); falls back to top-level `city` if `locations` is empty |
-  | `remote` | `workplaceType == "remote"` | JustJoin.it's own 3-value enum is `{"remote", "hybrid", "office"}` — passed through directly, not translated to a new vocabulary (US14's job); this happens to already satisfy the `Remote` glossary rule that hybrid is not remote |
-  | `seniority` | `experienceLevel` | Raw pass-through (e.g. `"manager"`), no vocabulary translation |
-  | `salary_min`/`salary_max`/`salary_currency`/`contract_type` | `employmentTypes[0].{from,to,currency,type}` | **Known limitation**: a JustJoin.it offer can list several employment-type entries (e.g. both `b2b` and `permanent`, each further repeated per display currency); only the first/primary entry is mapped, matching the same simplification `map_sjctl_offer` was allowed for SOLID.Jobs's own multi-field shape. Salary values arrive as floats and are coerced to `int` for the `Integer` DB column |
+  | `remote` | `workplaceType` | JustJoin.it's own 3-value enum is `{"remote", "hybrid", "office"}` — mapped to a canonical `bool` via `app.ingestion.normalize.normalize_remote` (P1US5); this happens to already satisfy the `Remote` glossary rule that hybrid is not remote |
+  | `seniority` | `experienceLevel` | Mapped to the shared canonical vocabulary via `app.ingestion.normalize.normalize_seniority` (P1US5) — see "Cross-connector schema consistency" below |
+  | `salary_min`/`salary_max`/`salary_currency`/`contract_type` | `employmentTypes[0].{from,to,currency,type,gross}` | **Known limitation**: a JustJoin.it offer can list several employment-type entries (e.g. both `b2b` and `permanent`, each further repeated per display currency); only the first/primary entry is mapped, matching the same simplification `map_sjctl_offer` was allowed for SOLID.Jobs's own multi-field shape. Salary values arrive as floats and are coerced to `int` for the `Integer` DB column; currency and the `gross` flag are passed through `normalize_salary` (P1US5), which logs (but does not fabricate a conversion for) non-`PLN` currencies and `gross: false` figures. `contract_type` remains a raw pass-through of `type` — permanently, not deferred — per the `Contract Type` glossary entry being explicitly out of scope for vocabulary unification |
   | `posted_at` | `publishedAt` | ISO datetime string, parsed by `Offer`'s pydantic validation |
   | `description` | *(not mapped — always `None`)* | **Known limitation**: the list endpoint's offer objects do not include the job description body; only the per-offer detail endpoint (`GET /api/candidate-api/offers/{slug}`) has it, and fetching that per offer would multiply request volume for every ingestion run. `description` is nullable on `Offer`, so this is schema-compliant; a later story could add a bounded per-offer detail fetch if the description text becomes necessary (e.g. for CV tailoring) |
 
@@ -387,11 +387,101 @@ strategy needed to know the real constraints existed.
   | `title` | `title` | |
   | `company` | `name` | Not `company` — NoFluffJobs's own field name for the employer is `name` |
   | `location` | `location.places[].city` | Joined with `", "` (mirrors `map_justjoinit_offer`'s location join) |
-  | `remote` | `location.fullyRemote` | Already a literal boolean matching the `Remote` glossary definition exactly (zero on-site presence) — no translation needed. The top-level `fullyRemote` field on the posting itself was observed to always be `False` across a ~2000-record sample and is not used |
-  | `seniority` | `seniority[]` | A list on the wire, observed always length 1 in live sampling; joined with `", "` defensively if ever multi-valued, mirroring the location join |
-  | `salary_min`/`salary_max`/`salary_currency`/`contract_type` | `salary.{from,to,currency,type}` | `salary.type` takes values `permanent`/`b2b`/`zlecenie` in the wild — passed through verbatim as `contract_type`, no vocabulary translation (US14's job). Salary values arrive as floats and are coerced to `int` |
+  | `remote` | `location.fullyRemote` | Already a literal boolean matching the `Remote` glossary definition exactly (zero on-site presence) — routed through `app.ingestion.normalize.normalize_remote` (P1US5) unchanged, since a `bool` input is passed straight through. The top-level `fullyRemote` field on the posting itself was observed to always be `False` across a ~2000-record sample and is not used |
+  | `seniority` | `seniority[]` | A list on the wire, observed always length 1 in live sampling; each item mapped to the shared canonical vocabulary via `app.ingestion.normalize.normalize_seniority` (P1US5), then joined with `", "` if ever multi-valued — see "Cross-connector schema consistency" below |
+  | `salary_min`/`salary_max`/`salary_currency`/`contract_type` | `salary.{from,to,currency,type}` | `salary.type` takes values `permanent`/`b2b`/`zlecenie` in the wild — passed through verbatim as `contract_type`, permanently no vocabulary translation (out of scope per the `Contract Type` glossary entry, not deferred). Salary values arrive as floats and are coerced to `int`; currency passed through `normalize_salary` (P1US5) |
   | `posted_at` | `posted` | A Unix **milliseconds** epoch integer (not an ISO string, unlike JustJoin.it's `publishedAt`) — divided by 1000 and converted with `datetime.fromtimestamp(..., tz=UTC)` |
   | `description` | *(not mapped — always `None`)* | **Known limitation**, same as JustJoin.it's: the listing payload has no full job-description field |
+
+### Cross-connector schema consistency (P1US5)
+
+- **Purpose**: P1US2–US4 built each connector in isolation; each one's own test file said so
+  explicitly ("no cross-source vocabulary unification happens here — that is US14's job"). This
+  story is the integration checkpoint — all three connectors were run and their output compared
+  field by field before the scheduler (P1US6) and ingestion API (P1US7) start depending on them
+  producing genuinely comparable `Offer` rows.
+- **`app/ingestion/normalize.py`** — new shared module, mirroring `app/ingestion/dedup.py`'s style
+  (small pure functions, a module logger, no I/O). Owns: seniority-vocabulary mapping,
+  remote-flag/string-vocabulary mapping, salary currency/gross-flag normalisation, and null-safe
+  numeric coercion (`to_int`, moved verbatim from the duplicated private `_to_int` previously in
+  both `justjoinit.py` and `nofluffjobs.py`). Connector-specific concerns — `canonical_url`
+  construction, location-string joining, `contract_type` passthrough, description handling, and
+  HTTP/subprocess transport — remain in each connector, unchanged.
+- **Source identity constants** (`SOLID_JOBS`, `JUSTJOINIT`, `NOFLUFFJOBS`) are separate from the
+  free-text `Source.name` DB column, which is arbitrary per deployment — the vocabulary tables key
+  off connector identity, passed explicitly by each connector's own module-level import, not off
+  DB content.
+- **Canonical seniority vocabulary**: `CANONICAL_SENIORITY_LEVELS = ("junior", "mid", "senior",
+  "lead", "expert")`. `junior`/`mid`/`senior` match the lowercase convention already used by
+  `tests/integration/conftest.py`'s seed data; `lead` and `expert` extend the set to cover
+  JustJoin.it's `c_level`/`manager`-style values without collapsing them into `senior`.
+  `normalize_seniority(source_name, raw_value)` accepts a bare string or a list (defensively, since
+  NoFluffJobs's wire field is a list), maps each item case-insensitively through the per-source
+  table below, de-duplicates, and joins the result with `", "` (mirroring the existing
+  multi-value location join convention). An unrecognised label is logged at `WARNING` and dropped
+  — never fabricated as a new placeholder value — and a fully-unmapped or missing input returns
+  `None`.
+
+  | Source | Raw label (as observed) | Canonical |
+  |---|---|---|
+  | SOLID.Jobs | `junior` | `junior` |
+  | SOLID.Jobs | `regular` | `mid` |
+  | SOLID.Jobs | `mid` | `mid` |
+  | SOLID.Jobs | `senior` | `senior` |
+  | SOLID.Jobs | `expert` | `expert` |
+  | JustJoin.it | `junior` | `junior` |
+  | JustJoin.it | `mid` | `mid` |
+  | JustJoin.it | `senior` | `senior` |
+  | JustJoin.it | `c_level` | `lead` |
+  | JustJoin.it | `manager` | `lead` |
+  | NoFluffJobs | `trainee` | `junior` |
+  | NoFluffJobs | `junior` | `junior` |
+  | NoFluffJobs | `mid` | `mid` |
+  | NoFluffJobs | `senior` | `senior` |
+  | NoFluffJobs | `expert` | `expert` |
+  | NoFluffJobs | `c-level` | `lead` |
+
+  **Concrete discrepancies fixed by this table**: SOLID.Jobs' own request-filter vocabulary uses
+  `"Regular"` (confirmed live via `sjctl search`), previously passed straight into `Offer.seniority`
+  unchanged — now mapped to canonical `"mid"`. JustJoin.it's `"manager"`/`"c_level"` (confirmed live
+  and via fixture), previously passed straight through, are now mapped to canonical `"lead"`.
+- **Remote-flag handling**: SOLID.Jobs' `isRemote` and NoFluffJobs' `location.fullyRemote` are
+  already literal booleans matching the `Remote` glossary definition exactly (zero on-site
+  presence) — `normalize_remote(source_name, raw_value)` passes a `bool` input straight through
+  with no lookup, so both connectors now call the shared function per the "one abstraction, not
+  three copies" requirement even though they need no translation. JustJoin.it's `workplaceType` is
+  a 3-value string enum (`{"remote", "hybrid", "office"}`) — mapped via a per-source
+  `_REMOTE_STRING_VOCAB` table (`remote → True`, `hybrid → False`, `office → False`). An
+  unrecognised string label is logged at `WARNING` and defaults to `False` (never fabricated as
+  `True`); a missing/non-string/non-bool value (the ordinary "field absent" case) returns `False`
+  without logging.
+- **Salary normalisation — PLN, monthly, gross is an investigation finding, not an assumption**:
+  none of the three sources was observed emitting an explicit salary period field, so "monthly" was
+  never a distinct value to normalise across — SOLID.Jobs' and NoFluffJobs' salary figures are
+  monthly by convention of the Polish job market, and NoFluffJobs' own listing endpoint is queried
+  with `salaryPeriod=month` explicitly (see the NoFluffJobs connector section above).
+  `normalize_salary(source_name, salary_min, salary_max, raw_currency, *, raw_gross=None)`
+  centralises the `currency = raw_currency or "PLN"` defaulting previously duplicated three times,
+  and never mutates or converts the salary figures themselves — converting currency or a net figure
+  without a real exchange-rate/tax source would fabricate a number, which the acceptance criteria
+  for this story explicitly forbids.
+  - **Known limitation — no FX conversion**: if `raw_currency` resolves to anything other than
+    `"PLN"`, a `WARNING` is logged naming the source, the observed currency, and the salary figures;
+    the figures are stored as-is in whatever currency the source reported. **Confirmed live, not
+    just theoretical**: a manual verification run against the real JustJoin.it endpoint (see
+    "Manual testing" below) observed a real, non-trivial number of live offers reporting `EUR` and
+    `CHF` as `employmentTypes[0].currency` (JustJoin.it's own `currencySource: "conversion"` field
+    on those entries confirms they are display conversions of an original non-PLN figure, not data
+    errors) — these are stored with their observed currency code and a logged warning, not silently
+    coerced to `"PLN"`.
+  - **Known limitation — no net-to-gross conversion**: JustJoin.it's `employmentTypes[].gross`
+    boolean was observed `False` on essentially every live entry sampled (see the manual
+    verification run) — the `gross` field name is confusingly not a reliable "is this gross"
+    signal in the live data, but its presence and `False` value are real. When `raw_gross is False`
+    (checked with `is`, not truthiness, so a source that doesn't report this flag at all —
+    SOLID.Jobs, NoFluffJobs — is never penalized for a field it doesn't have and `raw_gross=None`
+    stays silent), a `WARNING` is logged naming the source and figures; recruFlow performs no
+    net-to-gross conversion and stores the figures unchanged.
 
 ### `frontend/` project
 

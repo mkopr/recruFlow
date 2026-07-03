@@ -4,6 +4,7 @@ import subprocess
 from typing import Any
 
 import pytest
+from app.connectors import solid_jobs
 from app.connectors.solid_jobs import (
     _extract_offers,
     _run_sjctl,
@@ -11,6 +12,7 @@ from app.connectors.solid_jobs import (
     build_sync_args,
     map_sjctl_offer,
 )
+from app.ingestion.normalize import SOLID_JOBS
 
 
 class _FakeCompletedProcess:
@@ -225,7 +227,7 @@ def test_map_sjctl_offer_maps_all_known_fields() -> None:
         "company": "Acme",
         "location": "Warsaw, Krakow",
         "remote": True,
-        "seniority": "Senior",
+        "seniority": "senior",
         "salary_min": 18000,
         "salary_max": 24000,
         "salary_currency": "PLN",
@@ -259,3 +261,35 @@ def test_map_sjctl_offer_handles_missing_optional_fields() -> None:
     assert result["description"] is None
     assert result["salary_currency"] == "PLN"
     assert result["remote"] is False
+
+
+def test_map_sjctl_offer_calls_shared_normalize_functions(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: dict[str, tuple[Any, ...]] = {}
+
+    def _record(name: str) -> Any:
+        def _stub(*args: Any, **kwargs: Any) -> Any:
+            calls[name] = args
+            if name == "normalize_salary":
+                return (None, None, "PLN")
+            if name == "normalize_seniority":
+                return None
+            return False
+
+        return _stub
+
+    monkeypatch.setattr(solid_jobs, "normalize_remote", _record("normalize_remote"))
+    monkeypatch.setattr(solid_jobs, "normalize_seniority", _record("normalize_seniority"))
+    monkeypatch.setattr(solid_jobs, "normalize_salary", _record("normalize_salary"))
+
+    raw = {
+        "title": "Backend Engineer",
+        "company": "Acme",
+        "isRemote": True,
+        "experienceLevel": "Senior",
+        "salary": {"from": 18000, "to": 24000, "currency": "PLN"},
+    }
+    map_sjctl_offer(1, raw)
+
+    assert calls["normalize_remote"][0] == SOLID_JOBS
+    assert calls["normalize_seniority"][0] == SOLID_JOBS
+    assert calls["normalize_salary"][0] == SOLID_JOBS

@@ -8,6 +8,13 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Source
+from app.ingestion.normalize import (
+    NOFLUFFJOBS,
+    normalize_remote,
+    normalize_salary,
+    normalize_seniority,
+    to_int,
+)
 from app.ingestion.persist import ingest_offer
 
 NOFLUFFJOBS_OFFERS_URL = "https://nofluffjobs.com/api/joboffers/main"
@@ -59,10 +66,6 @@ def _extract_offer_list(payload: Any) -> list[dict[str, Any]] | None:
     return [item for item in postings if isinstance(item, dict)]
 
 
-def _to_int(value: Any) -> int | None:
-    return int(value) if isinstance(value, int | float) else None
-
-
 def _epoch_ms_to_datetime(value: Any) -> datetime | None:
     if not isinstance(value, int | float):
         return None
@@ -79,13 +82,6 @@ def _join_cities(location: dict[str, Any]) -> str | None:
     return ", ".join(cities) if cities else None
 
 
-def _join_seniority(raw: dict[str, Any]) -> str | None:
-    seniority = raw.get("seniority")
-    if not isinstance(seniority, list) or not seniority:
-        return None
-    return ", ".join(str(level) for level in seniority)
-
-
 def map_nofluffjobs_offer(source_id: int, raw: dict[str, Any]) -> dict[str, Any]:
     raw_location = raw.get("location")
     location: dict[str, Any] = raw_location if isinstance(raw_location, dict) else {}
@@ -95,6 +91,13 @@ def map_nofluffjobs_offer(source_id: int, raw: dict[str, Any]) -> dict[str, Any]
 
     url = raw.get("url")
 
+    salary_min, salary_max, salary_currency = normalize_salary(
+        NOFLUFFJOBS,
+        to_int(salary.get("from")),
+        to_int(salary.get("to")),
+        salary.get("currency"),
+    )
+
     return {
         "source_id": source_id,
         "external_id": raw.get("id"),
@@ -102,11 +105,11 @@ def map_nofluffjobs_offer(source_id: int, raw: dict[str, Any]) -> dict[str, Any]
         "title": raw.get("title") or "",
         "company": raw.get("name") or "",
         "location": _join_cities(location),
-        "remote": bool(location.get("fullyRemote", False)),
-        "seniority": _join_seniority(raw),
-        "salary_min": _to_int(salary.get("from")),
-        "salary_max": _to_int(salary.get("to")),
-        "salary_currency": salary.get("currency") or "PLN",
+        "remote": normalize_remote(NOFLUFFJOBS, location.get("fullyRemote", False)),
+        "seniority": normalize_seniority(NOFLUFFJOBS, raw.get("seniority")),
+        "salary_min": salary_min,
+        "salary_max": salary_max,
+        "salary_currency": salary_currency,
         "contract_type": salary.get("type") or None,
         "posted_at": _epoch_ms_to_datetime(raw.get("posted")),
         "description": None,

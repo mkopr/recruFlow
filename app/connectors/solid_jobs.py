@@ -7,6 +7,12 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Source
+from app.ingestion.normalize import (
+    SOLID_JOBS,
+    normalize_remote,
+    normalize_salary,
+    normalize_seniority,
+)
 from app.ingestion.persist import ingest_offer
 
 SJCTL_BINARY = "sjctl"
@@ -107,6 +113,10 @@ def map_sjctl_offer(source_id: int, raw: dict[str, Any]) -> dict[str, Any]:
         else None
     )
 
+    salary_min, salary_max, salary_currency = normalize_salary(
+        SOLID_JOBS, salary.get("from"), salary.get("to"), salary.get("currency")
+    )
+
     return {
         "source_id": source_id,
         "external_id": raw.get("jobOfferKey"),
@@ -114,11 +124,11 @@ def map_sjctl_offer(source_id: int, raw: dict[str, Any]) -> dict[str, Any]:
         "title": raw.get("title") or "",
         "company": raw.get("company") or "",
         "location": location,
-        "remote": bool(raw.get("isRemote", False)),
-        "seniority": raw.get("experienceLevel") or None,
-        "salary_min": salary.get("from"),
-        "salary_max": salary.get("to"),
-        "salary_currency": salary.get("currency") or "PLN",
+        "remote": normalize_remote(SOLID_JOBS, raw.get("isRemote", False)),
+        "seniority": normalize_seniority(SOLID_JOBS, raw.get("experienceLevel")),
+        "salary_min": salary_min,
+        "salary_max": salary_max,
+        "salary_currency": salary_currency,
         "contract_type": salary.get("employmentType"),
         "posted_at": raw.get("validFrom"),
         "description": raw.get("description"),
