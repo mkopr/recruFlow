@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -35,3 +36,29 @@ class Offer(BaseModel):
         ):
             raise ValueError("salary_min must not exceed salary_max")
         return self
+
+
+class OfferSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    source: str
+    external_id: str | None
+    canonical_url: str | None
+    title: str
+    company: str
+    location: str | None
+    remote: bool
+    seniority: str | None
+    salary_min: int | None
+    salary_max: int | None
+    salary_currency: str | None
+    contract_type: str | None
+    posted_at: datetime | None
+    created_at: datetime
+
+
+class OfferDetail(OfferSummary):
+    description: str | None
+    raw_payload: dict[str, Any]
+    updated_at: datetime

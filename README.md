@@ -404,3 +404,83 @@ curl http://localhost:8000/scheduler/status
 
 All `last_run_*` fields are `null`/`false` for a source that has never run yet. A source with
 `connector` unset (e.g. `seed.py`'s `"seed"` fixture row) is not scheduled and does not appear here.
+
+## Ingestion API
+
+`POST /ingest/{source}`, `GET /offers`, and `GET /offers/{offer_id}` let a job seeker force an
+out-of-band fetch and browse what's been ingested, outside the automatic schedule described above.
+
+### `POST /ingest/{source}`
+
+Triggers one source's ingestion immediately. `{source}` is a connector identity string
+(`solid_jobs`, `justjoinit`, or `nofluffjobs`), not `sources.name`. Unlike
+`POST /scheduler/run/{source}`, this does not write to the scheduler's `scheduler_runs` audit
+trail — `GET /scheduler/status` will not reflect a run triggered this way.
+
+```bash
+curl -X POST http://localhost:8000/ingest/justjoinit
+```
+
+```json
+{"source": "justjoinit", "ok": true, "fetched": 5, "created": 3, "error_message": null}
+```
+
+Returns `404` only when `{source}` isn't a recognised connector at all, or is a recognised
+connector with no provisioned `Source` row. A `200` with `"ok": false` means the run itself failed
+(an unexpected exception from the connector); the request still succeeded in the sense that a run
+was triggered and its outcome reported.
+
+### `GET /offers`
+
+Lists stored offers, newest ingestion first is not guaranteed — no ordering is applied. Supports
+filtering by query parameter, all combinable (AND semantics):
+
+| Param | Meaning |
+| --- | --- |
+| `source` | Connector identity (`justjoinit`, `solid_jobs`, `nofluffjobs`) — exact match |
+| `remote` | `true`/`false` |
+| `seniority` | Canonical level (`junior`/`mid`/`senior`/`lead`/`expert`) — substring match |
+| `min_salary` | Minimum salary (PLN, monthly gross); an offer's `salary_max` must meet or exceed it, falling back to `salary_min` when `salary_max` is unknown |
+| `grade` | Single-letter match grade (A–F); matches if any `MatchScore` row for the offer has it (table is empty until Phase 3 ships a scorer) |
+
+```bash
+curl "http://localhost:8000/offers?source=justjoinit&remote=true&min_salary=15000"
+```
+
+```json
+[
+  {
+    "id": 42,
+    "source": "justjoinit",
+    "external_id": "abc123",
+    "canonical_url": "https://justjoin.it/offers/abc123",
+    "title": "Senior Backend Engineer",
+    "company": "Acme",
+    "location": "Warsaw",
+    "remote": true,
+    "seniority": "senior, lead",
+    "salary_min": 18000,
+    "salary_max": 25000,
+    "salary_currency": "PLN",
+    "contract_type": "B2B",
+    "posted_at": "2026-06-20T09:00:00Z",
+    "created_at": "2026-06-21T08:00:00Z"
+  }
+]
+```
+
+An unrecognised `source` value returns `200` with an empty list, not an error — standard filtering
+behaviour, distinct from `POST /ingest/{source}`'s strict 404 on an unknown connector.
+
+### `GET /offers/{offer_id}`
+
+```bash
+curl http://localhost:8000/offers/42
+```
+
+Same fields as the list endpoint, plus `description`, `raw_payload` (the original ELT payload
+stored at ingest time), and `updated_at`. Returns `404` with a clear message for an unknown id:
+
+```json
+{"detail": "offer 999999999 not found"}
+```

@@ -168,7 +168,7 @@ repeated foundational migration:
 | `offers` | A normalised job posting with exactly one Source | `dedup_hash` unique + indexed (dedup on canonical URL, P1US1 fallback to title+company+location); `canonical_url` nullable (P1US1 — not every source guarantees a stable URL); `description` nullable `Text` (P1US1); `raw_payload` (JSONB, ELT raw payload always populated at ingest) |
 | `profiles` | Candidate's structured facts: skills, experience, preferences | `name` unique; `is_active` (only one row active at a time, enforced by application logic, not a DB constraint); `data` (JSONB) |
 | `cv_versions` | Tailored CV + cover letter drafted for one Offer/Profile pair | FKs to `offers`/`profiles`; `status` string (no DB enum, so later statuses need no migration) |
-| `match_scores` | Structured evaluation of one Offer against a Profile (grade A–F + dimensions) | FKs to `offers`/`profiles`; `engine` distinguishes LangChain vs. `sjctl` scoring |
+| `match_scores` | Structured evaluation of one Offer against a Profile (grade A–F + dimensions) | FKs to `offers`/`profiles`; `engine` distinguishes LangChain vs. `sjctl` scoring; `GET /offers?grade=` (P1US7) is its first read-side consumer, but the table remains write-side-empty until Phase 3 ships a scorer |
 | `applications` | Record of intent/action to apply | FKs to `offers`/`profiles`/`cv_versions`; `status` one of `drafted`/`reviewed`/`sent`/`failed`/`interview`/`offer`/`rejected` (unconstrained string, not a DB enum) |
 | `scheduler_runs` (P1US6) | One row per ingestion run, automatic or manual — the scheduler's audit trail | FK to `sources`; index on `(source_id, started_at)` for cheap "latest row per source" lookups; `status` one of `running`/`ok`/`error` (unconstrained string, same no-DB-enum convention as `applications.status`); `fetched_count`/`created_count` nullable `Integer` (null only while `status="running"`); `warning` `Boolean` (zero-result flag, see below); see "Scheduler" below |
 
@@ -652,6 +652,120 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   NULL`, calls `get_latest_run_by_source` once per source (an intentional N+1-per-source query
   pattern — acceptable given only three sources exist; not worth a window-function query), and
   defaults every `last_run_*` field to `None`/`False` when a source has never run.
+
+### Ingestion API endpoints (P1US7)
+
+- **Purpose**: all three connectors now run automatically on a schedule (P1US6) and produce
+  comparable, deduplicated, persisted `Offer` rows, but nothing yet lets a job seeker force an
+  out-of-band fetch through a dedicated ingestion-facing endpoint, or browse/inspect what has
+  actually been stored. This story adds `POST /ingest/{source}`, `GET /offers`, and
+  `GET /offers/{offer_id}` to close that gap. It is the direct dependency for P1US8 (offer list
+  page, frontend), which builds a table against `GET /offers` and wires a "Fetch now" button per
+  source to `POST /ingest/{source}`.
+
+- **`POST /ingest/{source}`** (`app/api/routes/ingestion.py` + `app/ingestion/service.py`) reuses
+  P1US6's dispatch seam directly — `resolve_source_by_connector` + `dispatch_ingestion`
+  (`app/scheduler/registry.py`) — rather than `app.scheduler.service.run_source`, and deliberately
+  does **not** write to `scheduler_runs`. This is a separate, lighter-weight, job-seeker-facing
+  trigger, distinct from the scheduler subsystem's own audited manual trigger at
+  `POST /scheduler/run/{source}`; see
+  `docs/adr/0006-manual-ingest-trigger-is-not-scheduler-audited.md` for the full rationale and its
+  consequence (`GET /scheduler/status` does not reflect `/ingest/{source}` runs, only automatic and
+  `/scheduler/run/{source}` ones). `app.ingestion.service.trigger_ingest` structurally mirrors
+  `run_source`/`run_source_sync`/`_run_source_async`: a throwaway `AsyncEngine`/sessionmaker via
+  `get_engine()`/`get_sessionmaker()` (never the request-scoped `SessionDep`), `asyncio.run(...)`
+  inside a plain (non-`async`) function, invoked via `asyncio.to_thread(...)` — the same
+  non-blocking execution model P1US6/ADR 0005 established, and for the identical reason: none of
+  the three connectors are internally non-blocking, so calling `dispatch_ingestion` directly from a
+  `SessionDep`-based route handler would block `/health` and every other route for the run's
+  duration. Verified mechanically by
+  `tests/integration/test_ingestion_routes.py::test_health_endpoint_responds_during_ingest_run`.
+  Response shape:
+
+  ```bash
+  curl -X POST http://localhost:8000/ingest/justjoinit
+  ```
+
+  ```json
+  {"source": "justjoinit", "ok": true, "fetched": 5, "created": 3, "error_message": null}
+  ```
+
+  Status codes mirror `/scheduler/run/{source}`'s convention: `200` even when `"ok": false` (an
+  unexpected exception escaped the connector — the request itself still succeeded in the sense that
+  a run was triggered and its outcome reported, matching the connectors' own "return `ok=False`,
+  don't raise" philosophy); `404` only when `{source}` isn't a recognised connector at all, or is a
+  recognised connector with no provisioned `Source` row — same `SchedulerLookupError` hierarchy,
+  same distinguishing detail messages, as `/scheduler/run/{source}`. There is no lock against two
+  concurrent triggers for the same source (identical to `/scheduler/run/{source}`'s existing
+  behaviour) — a double-tap of a future "Fetch now" button can start two overlapping runs; dedup
+  still prevents duplicate rows, so the cost is wasted work, not data corruption. Debouncing that is
+  a frontend concern for P1US8, not this endpoint's.
+
+- **`GET /offers`** and **`GET /offers/{offer_id}`** (`app/api/routes/offers.py`) use `SessionDep`
+  (plain read-only `SELECT`s, no blocking I/O underneath, unlike the ingest trigger) and join
+  `Offer` to `Source` explicitly via `select(...).join(...)` — no ORM `relationship()` is defined
+  anywhere in `app/db/models.py`, matching the codebase-wide convention. Two private, pure mapping
+  helpers, `_offer_summary`/`_offer_detail`, are unit-tested without a database
+  (`tests/test_offers_mapping.py`) since `OfferModel` instances can be constructed in memory.
+  `GET /offers` has no pagination in this story — acceptable at current single-machine data volumes;
+  add `limit`/`offset` if/when P1US8's table needs it, which is a backwards-compatible addition.
+
+  **`source`**: the response's `source` field is the connector identity string
+  (`Source.connector`), falling back to `Source.name` when `connector` is `NULL` (covers
+  non-scheduler-managed `Source` rows, e.g. `app/db/seed.py`'s `"seed"` fixture row) — a `source`
+  field is never null in a response. The `?source=` query filter, however, matches **only**
+  `Source.connector`, not `Source.name` — a deliberate asymmetry: a non-scheduler-managed source's
+  offers are visible in an unfiltered `GET /offers` (displaying its `name` as `source`) but cannot
+  be selected via `?source=`. This is accepted for v1 since only the three real connectors are ever
+  filtered on in practice.
+
+  **`seniority`**: substring match (`ILIKE '%value%'`) against the possibly comma-joined
+  `Offer.seniority` column (see `normalize_seniority`, P1US5) — `?seniority=senior` matches an offer
+  stored as `"senior, lead"`. Safe against false positives because none of the five canonical
+  levels (`junior`/`mid`/`senior`/`lead`/`expert`) is a substring of another.
+
+  **`min_salary`**: "meets or exceeds" semantics — matches when `salary_max >= min_salary`, or,
+  when `salary_max` is unknown, falls back to `salary_min >= min_salary`.
+
+  **`grade`**: an `EXISTS`-style subquery — `Offer.id IN (SELECT offer_id FROM match_scores WHERE
+  grade = :grade)` — against `match_scores`, a table that has no writer until Phase 3 ships (so this
+  filter matches nothing against real data today). Deliberately **not** scoped to the active
+  `Profile` (`Profile.is_active`) or to a specific `engine`: it matches if *any* recorded
+  `MatchScore` row for the offer has the given grade, regardless of which profile or engine produced
+  it. Revisit this scoping once Phase 3 defines how `MatchScore` rows actually relate to
+  profiles/engines over time (e.g. whether a profile edit re-scores or leaves stale grades behind).
+
+  ```bash
+  curl "http://localhost:8000/offers?source=justjoinit&remote=true&seniority=senior&min_salary=15000"
+  ```
+
+  ```json
+  [
+    {
+      "id": 42,
+      "source": "justjoinit",
+      "external_id": "abc123",
+      "canonical_url": "https://justjoin.it/offers/abc123",
+      "title": "Senior Backend Engineer",
+      "company": "Acme",
+      "location": "Warsaw",
+      "remote": true,
+      "seniority": "senior, lead",
+      "salary_min": 18000,
+      "salary_max": 25000,
+      "salary_currency": "PLN",
+      "contract_type": "B2B",
+      "posted_at": "2026-06-20T09:00:00Z",
+      "created_at": "2026-06-21T08:00:00Z"
+    }
+  ]
+  ```
+
+  `GET /offers/{offer_id}` returns the same fields plus `description`, `raw_payload` (the ELT raw
+  payload stored at ingest time, returned byte-for-byte), and `updated_at`; `404` with
+  `{"detail": "offer {offer_id} not found"}` for an unknown id. The path parameter is named
+  `offer_id`, not `id`, to avoid shadowing the `id` builtin — this does not change the route's
+  external shape.
 
 ### `frontend/` project
 
