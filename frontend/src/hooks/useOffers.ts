@@ -1,0 +1,72 @@
+import { useCallback, useEffect, useState } from 'react';
+
+import { fetchOffers, type OfferListFilters, type OfferSummary } from '../api/offers';
+
+export interface UseOffersResult {
+  offers: OfferSummary[];
+  loading: boolean;
+  error: string | null;
+  refetch: () => void;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : 'failed to load offers';
+}
+
+export function useOffers(filters: OfferListFilters): UseOffersResult {
+  const [offers, setOffers] = useState<OfferSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const { source, remote, seniority, minSalary } = filters;
+
+  // react-hooks/set-state-in-effect forbids an effect calling a hoisted
+  // (e.g. useCallback) function that sets state, so the automatic
+  // fetch-on-filter-change below is a self-contained inline effect body,
+  // duplicating refetch's logic rather than delegating to it.
+  useEffect(() => {
+    let ignore = false;
+
+    async function run() {
+      setLoading(true);
+      try {
+        const result = await fetchOffers({ source, remote, seniority, minSalary });
+        if (!ignore) {
+          setOffers(result);
+          setError(null);
+        }
+      } catch (err) {
+        if (!ignore) {
+          setError(errorMessage(err));
+        }
+      } finally {
+        if (!ignore) {
+          setLoading(false);
+        }
+      }
+    }
+
+    run();
+
+    return () => {
+      ignore = true;
+    };
+  }, [source, remote, seniority, minSalary]);
+
+  const refetch = useCallback(() => {
+    setLoading(true);
+    fetchOffers({ source, remote, seniority, minSalary })
+      .then((result) => {
+        setOffers(result);
+        setError(null);
+      })
+      .catch((err: unknown) => {
+        setError(errorMessage(err));
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [source, remote, seniority, minSalary]);
+
+  return { offers, loading, error, refetch };
+}

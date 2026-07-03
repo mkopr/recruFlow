@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    cors_allow_origin: str = "http://localhost:5173"
 
 
 @lru_cache

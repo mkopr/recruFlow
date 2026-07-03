@@ -767,6 +767,92 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   `offer_id`, not `id`, to avoid shadowing the `id` builtin — this does not change the route's
   external shape.
 
+### CORS (P1US8)
+
+`app/main.py` gained `CORSMiddleware` (`fastapi.middleware.cors`), added immediately after
+`app.state.settings = settings`. `Settings.cors_allow_origin` (`CORS_ALLOW_ORIGIN`, default
+`http://localhost:5173`) is the single allowed origin — no wildcard, no list-parsing. Without
+this, `frontend`'s Vite dev server (`http://localhost:5173`) cannot call the API
+(`http://localhost:8000`) from a real browser; `curl`/content-only checks never surface this,
+since CORS is enforced by the browser, not the server's business logic. `allow_credentials=False`
+(no cookies/auth exist yet) and `allow_methods`/`allow_headers` are both wildcarded — only the
+origin is restricted. Developers must browse the frontend via `http://localhost:5173`, not
+`http://127.0.0.1:5173` — the two are different origins from a CORS perspective even though
+`docker-compose.yml`'s own healthcheck targets `127.0.0.1` internally; this is a deliberate
+simplicity tradeoff (single exact-match origin) rather than an allow-list.
+
+### Offer list page (P1US8)
+
+- **Purpose**: closes Phase 1 end-to-end — ingest -> normalise -> store -> browse -> manually
+  refresh, all reachable from a browser. Consumes `GET /offers` and `POST /ingest/{source}`
+  (P1US7) with no backend changes to either route.
+- **`frontend/src/api/offers.ts`**: the sole module calling `/offers`/`/ingest/{source}` through
+  the shared `apiClient` (`client.ts`, P0US7). Re-exports `OfferSummary`/`IngestResponse` as type
+  aliases off `components['schemas']` rather than redeclaring shapes by hand, so a schema
+  regeneration (`make generate-types`) surfaces any drift as a TypeScript error here first.
+  `fetchOffers`/`triggerIngest` both collapse `openapi-fetch`'s `{data, error}` result into a
+  throw-on-error `Promise<T>`, so every caller uses one `try`/`catch` rather than checking `error`
+  at each call site.
+- **`frontend/src/hooks/useOffers.ts`**: owns `offers`/`loading`/`error` state and re-fetches when
+  `source`/`remote`/`seniority`/`minSalary` change. Structured around
+  `react-hooks/set-state-in-effect` (part of `eslint-plugin-react-hooks`'s `recommended` config,
+  already wired up since P0US7) — this rule statically rejects an effect calling any hoisted (e.g.
+  `useCallback`) function that eventually calls a state setter, even past an `await`, so the
+  automatic fetch-on-filter-change effect defines and invokes its own async function *inline*,
+  duplicating (rather than delegating to) `refetch`'s fetch-and-setState logic. `refetch` itself
+  is safe as a `useCallback` because it's only ever invoked from an event handler
+  (`FetchNowButton`'s click), never from within an effect.
+- **`frontend/src/components/OfferFilters.tsx`**: controlled filter bar
+  (source/remote/seniority/min-salary), no local state duplication — every control's `onChange`
+  produces a new `OfferListFilters` object from the parent-owned value. `remote` is modelled as a
+  three-value `'' | 'true' | 'false'` DOM select, translated to `boolean | undefined`. Min-salary
+  is clamped to `>= 0` client-side (`Math.max(0, Number(raw))`).
+- **`frontend/src/components/FetchNowButton.tsx`**: one independent instance per known connector
+  identity (`solid_jobs`/`justjoinit`/`nofluffjobs`, `frontend/src/constants.ts`). Owns its own
+  loading/error/summary state so three buttons never block each other; guards against a
+  double-click by returning early while already loading. On success, shows the `IngestResponse`
+  counts inline (`"Fetched 12, 4 new"`) rather than silently refreshing the table — `fetched`/
+  `created` were already computed by the API and otherwise discarded, and a `0`-new-offers outcome
+  is otherwise invisible in the table.
+- **`frontend/src/components/OfferTable.tsx`**: `GET /offers` (P1US7) has no `ORDER BY` — this
+  component sorts client-side by `posted_at` descending (nulls last) before rendering, rather than
+  the backend gaining an `ORDER BY` (kept as "reuse without modification" per this story's scope).
+  Salary formatting distinguishes a floor from a ceiling rather than collapsing both to the same
+  string: `"20,000+ PLN"` (min only), `"up to 25,000 PLN"` (max only), `"15,000-25,000 PLN"`
+  (both), `"-"` (neither); a `null` `salary_currency` on an offer with a known salary defaults to
+  display `"PLN"` (matching the DB column's own `server_default`, see "Database schema" above),
+  never left blank. Empty state (`offers.length === 0 && !loading`) renders a message instead of
+  an empty `<table>`; a bounded-height (`max-h-[70vh]`), `overflow-y-auto` wrapper keeps a large
+  result set scrollable rather than requiring pagination, since `GET /offers` has none.
+- **`frontend/src/pages/OfferListPage.tsx`**: the page shell — holds `filters` state, renders the
+  three `FetchNowButton`s, `OfferFilters`, an inline error banner when `useOffers().error` is set,
+  and `OfferTable`.
+- **Routing**: `react-router-dom` was added even though this story ships only one route
+  (`App.tsx`'s `<BrowserRouter><Routes><Route path="/" element={<OfferListPage />} /></Routes></BrowserRouter>`)
+  — CLAUDE.md's own phase roadmap already documents further pages landing in Phase 2+ (profile,
+  matching, etc.), so this is not speculative infrastructure for a hypothetical need; it avoids a
+  routing-migration story later for near-zero cost today.
+- **Theme (`frontend/src/index.css`)**: `:root` custom properties (`--color-bg`,
+  `--color-surface`, `--color-text`, `--color-accent`, `--color-border`, ...) plus three
+  `@layer components` classes (`.card`, `.btn`/`.btn-primary`, `.input`) that every new component
+  composes instead of one-off Tailwind color utilities — the "single consistent color scheme, no
+  page-local styles" acceptance criterion. `App.tsx`'s outer wrapper now reads
+  `bg-[var(--color-bg)] text-[var(--color-text)]` instead of the previous hardcoded
+  `bg-slate-900 text-white`.
+- **Frontend testing (vitest, new in this story)** — see
+  `docs/adr/0007-vitest-introduced-but-not-wired-into-make-ci.md`: this is the first frontend
+  story with real interactive behaviour (filters, async fetch, loading states) rather than static
+  content, so `vitest` + `@testing-library/react` + `@testing-library/user-event` + `jsdom` were
+  added, superseding the `tests/test_frontend_api_client.py`-style Python content-assertion
+  approach for this story's components. `frontend/src/test/setup.ts` explicitly wires
+  `@testing-library/jest-dom/vitest` matchers and an `afterEach(cleanup)` — required because
+  `globals: true` is deliberately **not** set in `vite.config.ts`'s `test` block (tests import
+  `describe`/`it`/`expect` explicitly from `vitest` rather than relying on ambient globals), and
+  `@testing-library/react`'s automatic cleanup detection depends on a global `afterEach` existing.
+  `pnpm test` (`vitest run`) and `make test-frontend` exist but are **not** wired into
+  `make test`/`make ci`/the GitHub Actions workflow — a deliberate, temporary gap recorded in ADR
+  0007, not an oversight.
+
 ### `frontend/` project
 
 React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
@@ -803,7 +889,9 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
   has `files: []` and only `-b`/`--build` traverses `references`; fixed in P0US7 after discovering
   `pnpm run typecheck` was silently passing regardless of real type errors in `src/`).
 - `test` / `test-unit` / `test-integration` — `uv run pytest`, scoped by the `integration`
-  marker. Python-only; no frontend test runner is in scope yet.
+  marker. Python-only.
+- `test-frontend` (P1US8) — `cd frontend && pnpm test` (`vitest run`). Deliberately **not** part
+  of `ci`/`test` yet — see `docs/adr/0007-vitest-introduced-but-not-wired-into-make-ci.md`.
 - `ci` — runs `format lint typecheck test` in sequence; now covers both stacks since `lint`,
   `format`, and `typecheck` each fan out to the frontend toolchain.
 - `clean` — removes `__pycache__`, `.mypy_cache`, `.ruff_cache`, `.pytest_cache`, `dist`,

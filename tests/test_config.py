@@ -18,6 +18,7 @@ APP_ENV=sentinel-env
 LOG_LEVEL=DEBUG
 API_HOST=127.0.0.1
 API_PORT=9000
+CORS_ALLOW_ORIGIN=http://sentinel-frontend.test
 """
 
 MINIMAL_ENV = """\
@@ -41,6 +42,7 @@ ENV_KEYS = [
     "LOG_LEVEL",
     "API_HOST",
     "API_PORT",
+    "CORS_ALLOW_ORIGIN",
 ]
 
 
@@ -79,6 +81,7 @@ def test_settings_loads_fields_from_env_file(
     assert settings.log_level == "DEBUG"
     assert settings.api_host == "127.0.0.1"
     assert settings.api_port == 9000
+    assert settings.cors_allow_origin == "http://sentinel-frontend.test"
 
 
 def test_settings_applies_defaults_when_optional_fields_absent(
@@ -95,6 +98,7 @@ def test_settings_applies_defaults_when_optional_fields_absent(
     assert settings.api_host == "0.0.0.0"
     assert settings.api_port == 8000
     assert settings.sjctl_campaign == "recruflow"
+    assert settings.cors_allow_origin == "http://localhost:5173"
 
 
 def test_settings_raises_when_required_field_missing(

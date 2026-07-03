@@ -1,1 +1,65 @@
 @import 'tailwindcss';
+
+:root {
+  --color-bg: #0f1115;
+  --color-surface: #171a21;
+  --color-surface-hover: #1d2129;
+  --color-border: #262b35;
+  --color-text: #e6e8eb;
+  --color-text-muted: #9aa1ac;
+  --color-accent: #34d399;
+  --color-accent-hover: #2bbd8a;
+  --color-danger: #f87171;
+
+  --radius-md: 0.5rem;
+  --spacing-page: 2rem;
+}
+
+@layer components {
+  .card {
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: var(--radius-md);
+    padding: 0.5rem 1rem;
+    font-weight: 500;
+    transition:
+      background-color 150ms ease,
+      opacity 150ms ease;
+  }
+
+  .btn-primary {
+    background-color: var(--color-accent);
+    color: #05261c;
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background-color: var(--color-accent-hover);
+  }
+
+  .btn-primary:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .input {
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 0.5rem 0.75rem;
+    color: var(--color-text);
+    transition: border-color 150ms ease;
+  }
+
+  .input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+  }
+}

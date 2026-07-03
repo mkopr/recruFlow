@@ -80,10 +80,16 @@ pnpm dev            # start the Vite dev server at http://localhost:5173
 pnpm lint           # ESLint
 pnpm format         # Prettier — write mode
 pnpm format:check   # Prettier — check mode, no writes
+pnpm test           # vitest run — component tests
 ```
 
 TypeScript strict mode is enabled (`tsconfig.app.json` / `tsconfig.node.json`), and styling is
-done exclusively with Tailwind CSS utility classes.
+done exclusively with Tailwind CSS utility classes plus the shared theme tokens/component classes
+in `src/index.css`.
+
+`pnpm test` is also runnable as `make test-frontend` from the repo root. It is **not** part of
+`make test`/`make ci`/the GitHub Actions workflow yet — see
+[docs/adr/0007-vitest-introduced-but-not-wired-into-make-ci.md](docs/adr/0007-vitest-introduced-but-not-wired-into-make-ci.md).
 
 ### Generating API types
 
@@ -164,6 +170,7 @@ requires is documented here, grouped by concern.
 | `API_HOST` | Host the FastAPI server binds to. |
 | `API_PORT` | Port the FastAPI server binds to. |
 | `VITE_API_BASE_URL` | Base URL the frontend uses to reach the API. |
+| `CORS_ALLOW_ORIGIN` | Origin the API's CORS middleware allows (must match the URL you browse the frontend at, e.g. `http://localhost:5173` — not `http://127.0.0.1:5173`). |
 | `SWARM_GRADE_THRESHOLD` | Minimum Match Score grade a Swarm will send. |
 | `SEND_QUEUE_INTER_SEND_DELAY_SECONDS` | Delay between consecutive sends in the Send Queue. |
 | `SEND_QUEUE_DAILY_CAP` | Hard daily cap on the number of Applications sent. |
@@ -484,3 +491,21 @@ stored at ingest time), and `updated_at`. Returns `404` with a clear message for
 ```json
 {"detail": "offer 999999999 not found"}
 ```
+
+## Offer list page
+
+With `make up` running, open `http://localhost:5173` to browse ingested offers without calling
+the API directly.
+
+- **Filters** — source, remote, seniority, and minimum salary. Each control updates `GET /offers`
+  with the corresponding query parameter as soon as it changes; combining filters is AND
+  semantics (same as the API itself). Leaving a filter at its default (`All sources`/`Any`/blank)
+  omits that query parameter entirely.
+- **Fetch now** — one button per known source (SOLID.Jobs, JustJoin.it, NoFluffJobs), each calling
+  `POST /ingest/{source}` independently. A button shows `Fetching...` (disabled) while its request
+  is in flight, then a short `"Fetched N, M new"` summary, and refreshes the table on success. The
+  three buttons never block each other.
+- **Empty state** — if no offers match the current filters (or none have been ingested yet), the
+  table is replaced with a short message instead of rendering an empty grid.
+- Offers are sorted newest-first by posted date on the client, since `GET /offers` itself applies
+  no ordering.

@@ -1,4 +1,4 @@
-.PHONY: install lint format test test-unit test-integration typecheck ci clean up sjctl-version migrate seed generate-types
+.PHONY: install lint format test test-unit test-integration test-frontend typecheck ci clean up sjctl-version migrate seed generate-types
 
 install:
 	uv sync --all-groups
@@ -41,6 +41,10 @@ test-unit:
 
 test-integration:
 	uv run pytest -m integration
+
+# Not part of `ci`/`test` yet — see docs/adr/0007-vitest-introduced-but-not-wired-into-make-ci.md
+test-frontend:
+	cd frontend && pnpm test
 
 ci: format lint typecheck test
 
