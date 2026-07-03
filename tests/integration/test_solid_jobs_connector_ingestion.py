@@ -201,7 +201,9 @@ async def test_run_solid_jobs_ingestion_returns_not_ok_when_sjctl_binary_missing
     result = await run_solid_jobs_ingestion(db_session, source, campaign="recruflow")
     await db_session.commit()
 
-    assert result == IngestionResult(ok=False, fetched=0, created=0)
+    assert result == IngestionResult(
+        ok=False, fetched=0, created=0, error_message="sjctl call failed"
+    )
     rows = (
         (await db_session.execute(select(OfferModel).where(OfferModel.source_id == source.id)))
         .scalars()

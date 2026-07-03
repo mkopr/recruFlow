@@ -64,6 +64,25 @@ describe('FetchNowButton', () => {
     expect(onIngested).not.toHaveBeenCalled();
   });
 
+  it('shows the error message and does not call onIngested when the ingest reports ok: false', async () => {
+    triggerIngestMock.mockResolvedValue({
+      source: 'justjoinit',
+      ok: false,
+      fetched: 0,
+      created: 0,
+      error_message: 'failed to fetch JustJoin.it offers',
+    });
+    const onIngested = vi.fn();
+
+    render(<FetchNowButton source="justjoinit" label="Fetch now" onIngested={onIngested} />);
+    await userEvent.click(screen.getByRole('button'));
+
+    await waitFor(() =>
+      expect(screen.getByText('failed to fetch JustJoin.it offers')).toBeInTheDocument(),
+    );
+    expect(onIngested).not.toHaveBeenCalled();
+  });
+
   it('ignores a second click while a fetch is already in progress', async () => {
     triggerIngestMock.mockReturnValue(new Promise(() => {}));
     const onIngested = vi.fn();

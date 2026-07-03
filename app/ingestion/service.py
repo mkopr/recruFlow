@@ -16,7 +16,7 @@ async def _trigger_ingest_async(source: str) -> IngestResponse:
             src = await resolve_source_by_connector(session, source)
 
             try:
-                result = await dispatch_ingestion(session, src)
+                result = await dispatch_ingestion(session, src, force_refresh=True)
             except Exception as exc:
                 await session.rollback()
                 logger.error("manual ingest for %r raised: %s", source, exc, exc_info=True)
@@ -30,7 +30,7 @@ async def _trigger_ingest_async(source: str) -> IngestResponse:
                 ok=result.ok,
                 fetched=result.fetched,
                 created=result.created,
-                error_message=None,
+                error_message=result.error_message,
             )
     finally:
         await engine.dispose()

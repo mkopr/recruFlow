@@ -27,6 +27,7 @@ class IngestionResult:
     ok: bool
     fetched: int
     created: int
+    error_message: str | None = None
 
 
 def _fetch_nofluffjobs_json(
@@ -137,12 +138,19 @@ async def run_nofluffjobs_ingestion(session: AsyncSession, source: Source) -> In
         url, params={"pageSize": page_size, "salaryCurrency": "PLN", "salaryPeriod": "month"}
     )
     if payload is None:
-        return IngestionResult(ok=False, fetched=0, created=0)
+        return IngestionResult(
+            ok=False, fetched=0, created=0, error_message="failed to fetch NoFluffJobs offers"
+        )
 
     offers = _extract_offer_list(payload)
     if offers is None:
         logger.error("NoFluffJobs returned unexpected JSON shape: url=%r", url)
-        return IngestionResult(ok=False, fetched=0, created=0)
+        return IngestionResult(
+            ok=False,
+            fetched=0,
+            created=0,
+            error_message="NoFluffJobs returned unexpected JSON shape",
+        )
 
     created_count = await _persist_offers(session, source.id, offers)
     return IngestionResult(ok=True, fetched=len(offers), created=created_count)

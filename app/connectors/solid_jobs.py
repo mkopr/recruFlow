@@ -25,6 +25,7 @@ class IngestionResult:
     ok: bool
     fetched: int
     created: int
+    error_message: str | None = None
 
 
 def build_search_args(config: dict[str, Any], *, campaign: str) -> list[str]:
@@ -148,12 +149,14 @@ async def run_solid_jobs_ingestion(
     payload = _run_sjctl(args)
     if payload is None:
         logger.warning("SOLID.Jobs ingestion aborted: sjctl call failed, see prior error")
-        return IngestionResult(ok=False, fetched=0, created=0)
+        return IngestionResult(ok=False, fetched=0, created=0, error_message="sjctl call failed")
 
     offers = _extract_offers(payload, list_key, item_key=item_key)
     if offers is None:
         logger.error("sjctl returned unexpected JSON shape: args=%r", args)
-        return IngestionResult(ok=False, fetched=0, created=0)
+        return IngestionResult(
+            ok=False, fetched=0, created=0, error_message="sjctl returned unexpected JSON shape"
+        )
 
     created_count = 0
     for raw in offers:

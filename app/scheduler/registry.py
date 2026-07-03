@@ -29,24 +29,48 @@ class DispatchResult:
     ok: bool
     fetched: int
     created: int
+    error_message: str | None = None
 
 
-DispatchFn = Callable[[AsyncSession, Source], Awaitable[DispatchResult]]
+DispatchFn = Callable[[AsyncSession, Source, bool], Awaitable[DispatchResult]]
 
 
-async def _dispatch_solid_jobs(session: AsyncSession, source: Source) -> DispatchResult:
-    result = await run_solid_jobs_ingestion(session, source, campaign=get_settings().sjctl_campaign)
-    return DispatchResult(ok=result.ok, fetched=result.fetched, created=result.created)
+async def _dispatch_solid_jobs(
+    session: AsyncSession, source: Source, force_refresh: bool
+) -> DispatchResult:
+    result = await run_solid_jobs_ingestion(
+        session, source, campaign=get_settings().sjctl_campaign, force_refresh=force_refresh
+    )
+    return DispatchResult(
+        ok=result.ok,
+        fetched=result.fetched,
+        created=result.created,
+        error_message=result.error_message,
+    )
 
 
-async def _dispatch_justjoinit(session: AsyncSession, source: Source) -> DispatchResult:
+async def _dispatch_justjoinit(
+    session: AsyncSession, source: Source, force_refresh: bool
+) -> DispatchResult:
     result = await run_justjoinit_ingestion(session, source)
-    return DispatchResult(ok=result.ok, fetched=result.fetched, created=result.created)
+    return DispatchResult(
+        ok=result.ok,
+        fetched=result.fetched,
+        created=result.created,
+        error_message=result.error_message,
+    )
 
 
-async def _dispatch_nofluffjobs(session: AsyncSession, source: Source) -> DispatchResult:
+async def _dispatch_nofluffjobs(
+    session: AsyncSession, source: Source, force_refresh: bool
+) -> DispatchResult:
     result = await run_nofluffjobs_ingestion(session, source)
-    return DispatchResult(ok=result.ok, fetched=result.fetched, created=result.created)
+    return DispatchResult(
+        ok=result.ok,
+        fetched=result.fetched,
+        created=result.created,
+        error_message=result.error_message,
+    )
 
 
 CONNECTOR_REGISTRY: dict[str, DispatchFn] = {
@@ -56,11 +80,13 @@ CONNECTOR_REGISTRY: dict[str, DispatchFn] = {
 }
 
 
-async def dispatch_ingestion(session: AsyncSession, source: Source) -> DispatchResult:
+async def dispatch_ingestion(
+    session: AsyncSession, source: Source, *, force_refresh: bool = False
+) -> DispatchResult:
     connector = source.connector
     assert connector is not None, "source.connector must be resolved before dispatch"
     dispatch_fn = CONNECTOR_REGISTRY[connector]
-    return await dispatch_fn(session, source)
+    return await dispatch_fn(session, source, force_refresh)
 
 
 async def resolve_source_by_connector(session: AsyncSession, connector: str) -> Source:

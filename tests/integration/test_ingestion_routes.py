@@ -50,7 +50,7 @@ async def test_ingest_persists_offers_end_to_end_visible_in_db(
     canonical_url = _unique_url("solid-jobs-offer")
 
     async def _fake(
-        session: AsyncSession, source: Source, *, campaign: str
+        session: AsyncSession, source: Source, *, campaign: str, force_refresh: bool = False
     ) -> SolidJobsIngestionResult:
         await ingest_offer(
             session,
@@ -80,6 +80,27 @@ async def test_ingest_persists_offers_end_to_end_visible_in_db(
             select(OfferModel).where(OfferModel.canonical_url == canonical_url)
         )
     assert row is not None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ingest_solid_jobs_passes_force_refresh_true(
+    scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, bool] = {}
+
+    async def _fake(
+        session: AsyncSession, source: Source, *, campaign: str, force_refresh: bool = False
+    ) -> SolidJobsIngestionResult:
+        captured["force_refresh"] = force_refresh
+        return SolidJobsIngestionResult(ok=True, fetched=0, created=0)
+
+    monkeypatch.setattr(registry, "run_solid_jobs_ingestion", _fake)
+
+    response = await scheduled_client.post("/ingest/solid_jobs")
+
+    assert response.status_code == 200
+    assert captured["force_refresh"] is True
 
 
 @pytest.mark.integration

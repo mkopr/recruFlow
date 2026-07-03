@@ -123,7 +123,9 @@ async def test_run_justjoinit_ingestion_returns_not_ok_on_transport_failure(
     result = await run_justjoinit_ingestion(db_session, source)
     await db_session.commit()
 
-    assert result == IngestionResult(ok=False, fetched=0, created=0)
+    assert result == IngestionResult(
+        ok=False, fetched=0, created=0, error_message="failed to fetch JustJoin.it offers"
+    )
     rows = (
         (await db_session.execute(select(OfferModel).where(OfferModel.source_id == source.id)))
         .scalars()

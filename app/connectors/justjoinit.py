@@ -27,6 +27,7 @@ class IngestionResult:
     ok: bool
     fetched: int
     created: int
+    error_message: str | None = None
 
 
 def _fetch_justjoinit_json(
@@ -178,7 +179,12 @@ async def run_justjoinit_ingestion(session: AsyncSession, source: Source) -> Ing
         page = _fetch_page(url, cursor=cursor, page_size=page_size)
         if page is None:
             if page_index == 0:
-                return IngestionResult(ok=False, fetched=0, created=0)
+                return IngestionResult(
+                    ok=False,
+                    fetched=0,
+                    created=0,
+                    error_message="failed to fetch JustJoin.it offers",
+                )
             logger.warning("JustJoin.it pagination stopped early after %d page(s)", page_index)
             break
         offers, cursor = page

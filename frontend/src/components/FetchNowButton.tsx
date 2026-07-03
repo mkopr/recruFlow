@@ -21,8 +21,12 @@ export function FetchNowButton({ source, label, onIngested }: FetchNowButtonProp
     setSummary(null);
     try {
       const result = await triggerIngest(source);
-      setSummary(`Fetched ${result.fetched}, ${result.created} new`);
-      onIngested();
+      if (result.ok) {
+        setSummary(`Fetched ${result.fetched}, ${result.created} new`);
+        onIngested();
+      } else {
+        setError(result.error_message ?? 'ingestion failed');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'failed to trigger ingest');
     } finally {
