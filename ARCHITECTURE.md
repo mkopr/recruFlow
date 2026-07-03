@@ -47,11 +47,15 @@ recruFlow/
 
 - `main` — runtime dependencies of the FastAPI application: `fastapi`, `uvicorn`, the async
   SQLAlchemy stack (`sqlalchemy[asyncio]`, `asyncpg`), `alembic`, `pydantic`,
-  `pydantic-settings`. Later phases add further runtime deps here incrementally
+  `pydantic-settings`, `httpx`. Later phases add further runtime deps here incrementally
   (`langchain`/`langgraph`/`langchain-ollama` in P3US2, `playwright` in P5US6,
   `weasyprint`/`python-docx` in P4US4/P6US4) as the story that needs them lands.
 - `dev` — local developer tooling: `ruff`, `mypy`, `pre-commit`.
-- `test` — test-only dependencies: `pytest`, `pytest-asyncio`, `httpx`, `pytest-cov`.
+- `test` — test-only dependencies: `pytest`, `pytest-asyncio`, `pytest-cov`.
+
+`httpx` moved from `test`-only to `main` in P1US3 (the JustJoin.it connector): it previously only
+backed FastAPI's `TestClient` in tests, but `app/connectors/justjoinit.py` is production code that
+imports it directly as its HTTP client.
 
 `[tool.ruff.lint]`'s `select` list adds `C90` (P0US8), enabling ruff's `mccabe`
 cyclomatic-complexity checker, with `[tool.ruff.lint.mccabe] max-complexity = 10` — 10 is
@@ -278,6 +282,63 @@ strategy needed to know the real constraints existed.
   stdout — every one of these paths logs at `ERROR` and returns `None` rather than raising.
   `run_solid_jobs_ingestion` turns a `None` from either `_run_sjctl` or `_extract_offers` into
   `IngestionResult(ok=False, fetched=0, created=0)`.
+
+### JustJoin.it connector (P1US3)
+
+- **Investigation finding (resolves OD-4 for JustJoin.it — NoFluffJobs's half of OD-4 is
+  separately resolved by US13)**: JustJoin.it exposes a real, unauthenticated JSON endpoint, so
+  Path A (thin HTTP client) was implemented — no Playwright scraper. The endpoint was found by
+  downloading justjoin.it's own served Next.js JS bundles and grepping them for the API client
+  code, since a local headless-Chromium network capture (the more direct "devtools Network tab"
+  approach) never completed in this sandboxed environment. The obvious guesses were wrong: the
+  page's own runtime config names `https://api.justjoin.it` as `baseApiUrl`, but
+  `GET https://api.justjoin.it/offers` returns `404 Invalid endpoint`; `baseCpUrl`
+  (`https://profile.justjoin.it`) redirects to a login page. The bundle code backing the public
+  `/job-offers` listing page actually calls a gateway whose `baseURL` resolves to the *relative*
+  path `/api/candidate-api` (proxied through justjoin.it's own server), giving the real endpoint:
+  `GET https://justjoin.it/api/candidate-api/offers?from=<cursor>&itemsCount=<page size>` — see
+  `docs/adr/0003-justjoinit-json-endpoint-investigation.md` for the full trail (mirrors ADR 0002's
+  "verify against the live system" discipline).
+- **`app/connectors/justjoinit.py`** — the second of three sibling connectors (P1US2–US4). Exposes
+  `run_justjoinit_ingestion(session, source) -> IngestionResult` as the single public entrypoint;
+  no `campaign` parameter (that's a SOLID.Jobs/sjctl-specific concept, not applicable here). Does
+  not commit the session and does not create or seed a `Source` row, matching `solid_jobs.py`'s
+  conventions.
+- **Response shape, confirmed live**: `{"data": [...offer objects...], "meta": {"from",
+  "totalItems", "prev": {"cursor", "itemsCount"}, "next": {"cursor", "itemsCount"}}}`, cursor
+  pagination — `meta.next.cursor` is `null` at the end of a page window.
+  `_fetch_justjoinit_json` is the sole HTTP boundary: catches `httpx.HTTPError` (covers both
+  connection/timeout failures and non-2xx status via `raise_for_status()`) and
+  `json.JSONDecodeError` on `response.json()`, logging at `ERROR` and returning `None` in both
+  cases — never raises. `_extract_offer_list` mirrors `_extract_offers`'s defensive shape
+  handling (bare list, or dict wrapping the list under `"data"`; anything else returns `None` so
+  the caller can tell "zero offers" from "the response shape changed").
+- **Pagination is bounded, not exhaustive, by design**: `meta.totalItems` was observed as a flat
+  `10000` regardless of actual result count (almost certainly a capped/estimated figure), and a
+  deep cursor (`from=9999`) returned a bare `500` from JustJoin.it's own API — looping until
+  `meta.next.cursor` is `null` would be both slow (potentially 100 pages at the default page size)
+  and fragile. `run_justjoinit_ingestion` instead loops up to a configurable `max_pages` (default
+  `5`), sleeping `rate_limit_delay_seconds` (default `1.0`) between page fetches for politeness,
+  and stops gracefully — keeping whatever was already fetched — if a page fetch fails after the
+  first page succeeded; only a first-page failure marks the whole result `ok=False`. This is a
+  documented known limitation: a full backfill of JustJoin.it's entire listed inventory is out of
+  scope for this story and would need a smarter incremental strategy (e.g. an early-stop once N
+  consecutive already-seen `dedup_hash`es are encountered, similar in spirit to sjctl's `sync`
+  mode) if a later story needs it.
+- **Field mapping** (`map_justjoinit_offer`), from the confirmed list-item shape:
+
+  | `Offer` field | Source field(s) | Notes |
+  |---|---|---|
+  | `external_id` | `guid` | |
+  | `canonical_url` | `slug` | Built as `https://justjoin.it/job-offer/{slug}` (singular `job-offer`; confirmed by following the `/offers/{slug}` → `/job-offer/{slug}` redirect live) — the list endpoint has no direct URL field |
+  | `title` | `title` | |
+  | `company` | `companyName` | |
+  | `location` | `locations[].city` | Joined with `", "` (mirrors `map_sjctl_offer`'s location join); falls back to top-level `city` if `locations` is empty |
+  | `remote` | `workplaceType == "remote"` | JustJoin.it's own 3-value enum is `{"remote", "hybrid", "office"}` — passed through directly, not translated to a new vocabulary (US14's job); this happens to already satisfy the `Remote` glossary rule that hybrid is not remote |
+  | `seniority` | `experienceLevel` | Raw pass-through (e.g. `"manager"`), no vocabulary translation |
+  | `salary_min`/`salary_max`/`salary_currency`/`contract_type` | `employmentTypes[0].{from,to,currency,type}` | **Known limitation**: a JustJoin.it offer can list several employment-type entries (e.g. both `b2b` and `permanent`, each further repeated per display currency); only the first/primary entry is mapped, matching the same simplification `map_sjctl_offer` was allowed for SOLID.Jobs's own multi-field shape. Salary values arrive as floats and are coerced to `int` for the `Integer` DB column |
+  | `posted_at` | `publishedAt` | ISO datetime string, parsed by `Offer`'s pydantic validation |
+  | `description` | *(not mapped — always `None`)* | **Known limitation**: the list endpoint's offer objects do not include the job description body; only the per-offer detail endpoint (`GET /api/candidate-api/offers/{slug}`) has it, and fetching that per offer would multiply request volume for every ingestion run. `description` is nullable on `Offer`, so this is schema-compliant; a later story could add a bounded per-offer detail fetch if the description text becomes necessary (e.g. for CV tailoring) |
 
 ### `frontend/` project
 

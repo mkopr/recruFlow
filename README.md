@@ -231,3 +231,37 @@ cache:
 If the `sjctl` binary is missing, exits non-zero, or returns malformed JSON, the connector logs the
 failure and returns `IngestionResult(ok=False, fetched=0, created=0)` rather than raising — it never
 crashes the calling ingestion process.
+
+## JustJoin.it connector
+
+`app/connectors/justjoinit.py` ingests offers from JustJoin.it's own JSON API (confirmed live —
+see `docs/adr/0003-justjoinit-json-endpoint-investigation.md` — no scraping needed) into the
+canonical `offers` table. Like the SOLID.Jobs connector, it does not create, schedule, or expose
+itself over HTTP. Call it directly with an already-resolved `Source` row:
+
+```python
+from app.connectors.justjoinit import run_justjoinit_ingestion
+
+result = await run_justjoinit_ingestion(session, source)
+# IngestionResult(ok=True, fetched=10, created=7)
+await session.commit()
+```
+
+The connector paginates JustJoin.it's cursor-based offers endpoint, up to a bounded number of
+pages per call (looping until the real end of results would mean up to ~100 requests per run at
+the API's own default page size, and deep pagination was observed to occasionally fail server-side
+— see ARCHITECTURE.md's JustJoin.it connector section). All of the following are read from the
+`Source` row's `config_json`, with defaults if absent:
+
+| `config_json` key | Default | Notes |
+| --- | --- | --- |
+| `endpoint_url` | JustJoin.it's confirmed offers API URL | Override for testing only |
+| `page_size` | `100` | Offers requested per page (`itemsCount` query param) |
+| `max_pages` | `5` | Upper bound on pages fetched per call — see the known-limitation note in ARCHITECTURE.md |
+| `rate_limit_delay_seconds` | `1.0` | Delay between page fetches, for politeness towards JustJoin.it's API |
+
+If the first page fetch fails (network error, non-2xx status, malformed JSON, or an unrecognised
+response shape), the connector logs the failure and returns
+`IngestionResult(ok=False, fetched=0, created=0)` rather than raising. A failure on a *later* page
+(after at least one page already succeeded) stops pagination early but still reports success for
+the offers already fetched — it never crashes the calling ingestion process.
