@@ -105,6 +105,48 @@ async def test_ingest_solid_jobs_passes_force_refresh_true(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_ingest_sets_source_last_fetched_at_on_success(
+    scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _fake(session: AsyncSession, source: Source) -> JustJoinItIngestionResult:
+        return JustJoinItIngestionResult(ok=True, fetched=1, created=1)
+
+    monkeypatch.setattr(registry, "run_justjoinit_ingestion", _fake)
+
+    response = await scheduled_client.post("/ingest/justjoinit")
+    assert response.status_code == 200
+
+    status_response = await scheduled_client.get("/scheduler/status")
+    entries = {entry["connector"]: entry for entry in status_response.json()["sources"]}
+    assert entries[JUSTJOINIT]["last_fetched_at"] is not None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ingest_does_not_set_source_last_fetched_at_on_failure(
+    scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    status_before = await scheduled_client.get("/scheduler/status")
+    before = {
+        entry["connector"]: entry["last_fetched_at"] for entry in status_before.json()["sources"]
+    }
+
+    async def _fake(session: AsyncSession, source: Source) -> JustJoinItIngestionResult:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(registry, "run_justjoinit_ingestion", _fake)
+
+    response = await scheduled_client.post("/ingest/justjoinit")
+    assert response.status_code == 200
+    assert response.json()["ok"] is False
+
+    status_after = await scheduled_client.get("/scheduler/status")
+    entries = {entry["connector"]: entry for entry in status_after.json()["sources"]}
+    assert entries[JUSTJOINIT]["last_fetched_at"] == before[JUSTJOINIT]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_ingest_unknown_source_returns_404_with_clear_message(
     scheduled_client: httpx.AsyncClient,
 ) -> None:

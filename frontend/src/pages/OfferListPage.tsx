@@ -4,12 +4,20 @@ import type { OfferListFilters } from '../api/offers';
 import { FetchNowButton } from '../components/FetchNowButton';
 import { OfferFilters } from '../components/OfferFilters';
 import { OfferTable } from '../components/OfferTable';
+import { SourceStatusList } from '../components/SourceStatusList';
 import { KNOWN_SOURCES } from '../constants';
 import { useOffers } from '../hooks/useOffers';
+import { useSchedulerStatus } from '../hooks/useSchedulerStatus';
 
 export function OfferListPage() {
   const [filters, setFilters] = useState<OfferListFilters>({});
   const { offers, loading, error, refetch } = useOffers(filters);
+  const { sources, refetch: refetchSchedulerStatus } = useSchedulerStatus();
+
+  const handleIngested = () => {
+    refetch();
+    refetchSchedulerStatus();
+  };
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6 p-[var(--spacing-page)]">
@@ -20,13 +28,15 @@ export function OfferListPage() {
         </p>
       </header>
 
+      <SourceStatusList sources={sources} />
+
       <div className="flex flex-wrap gap-3">
         {KNOWN_SOURCES.map((source) => (
           <FetchNowButton
             key={source.id}
             source={source.id}
             label={`Fetch now: ${source.label}`}
-            onIngested={refetch}
+            onIngested={handleIngested}
           />
         ))}
       </div>

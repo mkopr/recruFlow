@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -66,6 +66,7 @@ async def _run_source_async(connector: str, *, trigger_type: str) -> SchedulerRu
                 await finish_run_ok(
                     session, run, fetched=result.fetched, created=result.created, warning=warning
                 )
+                source.last_fetched_at = datetime.now(UTC)
                 await session.commit()
                 if warning:
                     logger.warning(

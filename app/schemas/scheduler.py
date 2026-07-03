@@ -27,6 +27,7 @@ class SourceStatus(BaseModel):
     connector: str
     name: str
     schedule: dict[str, Any]
+    last_fetched_at: datetime | None
     last_run_id: int | None
     last_run_started_at: datetime | None
     last_run_finished_at: datetime | None

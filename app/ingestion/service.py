@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import UTC, datetime
 
 from app.db.session import get_engine, get_sessionmaker
 from app.scheduler.registry import dispatch_ingestion, resolve_source_by_connector
@@ -24,6 +25,8 @@ async def _trigger_ingest_async(source: str) -> IngestResponse:
                     source=source, ok=False, fetched=0, created=0, error_message=str(exc)
                 )
 
+            if result.ok:
+                src.last_fetched_at = datetime.now(UTC)
             await session.commit()
             return IngestResponse(
                 source=source,

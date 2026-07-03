@@ -153,25 +153,44 @@ def map_justjoinit_offer(source_id: int, raw: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _persist_offers(
-    session: AsyncSession, source_id: int, offers: list[dict[str, Any]]
-) -> int:
+    session: AsyncSession,
+    source_id: int,
+    offers: list[dict[str, Any]],
+    consecutive_already_seen: int,
+) -> tuple[int, int]:
+    """Persist offers, returning (created_count, updated consecutive-already-seen streak).
+
+    The streak carries in and out across page boundaries so the caller can early-stop
+    pagination once it crosses a threshold — see `run_justjoinit_ingestion`. An offer that
+    fails validation (`ingest_offer` returns `None`) is neither new nor already-seen, so it
+    leaves the streak unchanged rather than resetting or extending it.
+    """
     created_count = 0
     for raw in offers:
         mapped = map_justjoinit_offer(source_id, raw)
         result = await ingest_offer(session, mapped, raw_payload=raw)
-        if result is not None and result[1] is True:
+        if result is None:
+            continue
+        _, created = result
+        if created:
             created_count += 1
-    return created_count
+            consecutive_already_seen = 0
+        else:
+            consecutive_already_seen += 1
+    return created_count, consecutive_already_seen
 
 
 async def run_justjoinit_ingestion(session: AsyncSession, source: Source) -> IngestionResult:
     config = source.config_json or {}
     url = config.get("endpoint_url", JUSTJOINIT_OFFERS_URL)
     page_size = int(config.get("page_size", 100))
-    max_pages = int(config.get("max_pages", 5))
+    max_pages = int(config.get("max_pages", 100))
     rate_limit_delay = float(config.get("rate_limit_delay_seconds", 1.0))
+    already_seen_stop_threshold = int(config.get("already_seen_stop_threshold", 20))
 
-    all_offers: list[dict[str, Any]] = []
+    total_fetched = 0
+    total_created = 0
+    consecutive_already_seen = 0
     cursor: int | None = 0
     for page_index in range(max_pages):
         if cursor is None:
@@ -188,9 +207,18 @@ async def run_justjoinit_ingestion(session: AsyncSession, source: Source) -> Ing
             logger.warning("JustJoin.it pagination stopped early after %d page(s)", page_index)
             break
         offers, cursor = page
-        all_offers.extend(offers)
+        total_fetched += len(offers)
+        created_count, consecutive_already_seen = await _persist_offers(
+            session, source.id, offers, consecutive_already_seen
+        )
+        total_created += created_count
+        if consecutive_already_seen >= already_seen_stop_threshold:
+            logger.info(
+                "JustJoin.it pagination stopped early: caught up to %d already-seen offers",
+                consecutive_already_seen,
+            )
+            break
         if cursor is not None and page_index + 1 < max_pages:
             await asyncio.sleep(rate_limit_delay)
 
-    created_count = await _persist_offers(session, source.id, all_offers)
-    return IngestionResult(ok=True, fetched=len(all_offers), created=created_count)
+    return IngestionResult(ok=True, fetched=total_fetched, created=total_created)

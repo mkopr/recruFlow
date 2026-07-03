@@ -37,6 +37,7 @@ async def scheduler_status(session: SessionDep) -> SchedulerStatusResponse:
                 connector=connector,
                 name=source.name,
                 schedule=(source.config_json or {}).get("schedule", {}),
+                last_fetched_at=source.last_fetched_at,
                 last_run_id=last_run.id if last_run else None,
                 last_run_started_at=last_run.started_at if last_run else None,
                 last_run_finished_at=last_run.finished_at if last_run else None,

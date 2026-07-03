@@ -332,18 +332,24 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   cases — never raises. `_extract_offer_list` mirrors `_extract_offers`'s defensive shape
   handling (bare list, or dict wrapping the list under `"data"`; anything else returns `None` so
   the caller can tell "zero offers" from "the response shape changed").
-- **Pagination is bounded, not exhaustive, by design**: `meta.totalItems` was observed as a flat
-  `10000` regardless of actual result count (almost certainly a capped/estimated figure), and a
-  deep cursor (`from=9999`) returned a bare `500` from JustJoin.it's own API — looping until
-  `meta.next.cursor` is `null` would be both slow (potentially 100 pages at the default page size)
-  and fragile. `run_justjoinit_ingestion` instead loops up to a configurable `max_pages` (default
-  `5`), sleeping `rate_limit_delay_seconds` (default `1.0`) between page fetches for politeness,
-  and stops gracefully — keeping whatever was already fetched — if a page fetch fails after the
-  first page succeeded; only a first-page failure marks the whole result `ok=False`. This is a
-  documented known limitation: a full backfill of JustJoin.it's entire listed inventory is out of
-  scope for this story and would need a smarter incremental strategy (e.g. an early-stop once N
-  consecutive already-seen `dedup_hash`es are encountered, similar in spirit to sjctl's `sync`
-  mode) if a later story needs it.
+- **Pagination early-stops on already-seen offers, with a hard ceiling as backstop (BUG02)**:
+  `meta.totalItems` was observed as a flat `10000` regardless of actual result count — not an
+  estimate, but a real enforced cap: probing live confirmed `from + itemsCount > 10000` always
+  returns a bare `500` (checked at multiple `itemsCount` values), and `meta.next.cursor` does
+  **not** reliably go `null` before that boundary (at `from=9900` it reports `next.cursor: 10000`,
+  which itself 500s). Live sampling also confirmed the feed is newest-first (`publishedAt` strictly
+  non-increasing across 30 consecutive items), which is what makes an early-stop strategy sound
+  rather than a coincidence — see `docs/adr/0009-justjoinit-incremental-pagination-strategy.md` for
+  the full trail. `run_justjoinit_ingestion` now interleaves fetch and persist per page (rather
+  than accumulating all pages then persisting once at the end) and stops requesting further pages
+  once `already_seen_stop_threshold` (default `20`) consecutive offers come back as `created=False`
+  from `persist_offer`'s own `ON CONFLICT DO NOTHING` result — no separate pre-check query, since
+  the insert's return value already carries that signal. `max_pages` remains a hard safety ceiling
+  (raised from `5` to `100`, i.e. `100 × page_size 100 = 10,000`, matching the confirmed real limit
+  exactly) for a cold/empty `Source` where nothing is ever already-seen. Pagination still stops
+  gracefully — keeping whatever was already fetched — if a page fetch fails after the first page
+  succeeded (this is what actually absorbs the `meta.next.cursor` lie at the 10,000 boundary); only
+  a first-page failure marks the whole result `ok=False`.
 - **Field mapping** (`map_justjoinit_offer`), from the confirmed list-item shape:
 
   | `Offer` field | Source field(s) | Notes |
@@ -390,6 +396,15 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   need the still-broken `search/posting` endpoint (or a different strategy entirely) if a later
   story needs it. Because ingestion is a single HTTP request per run, no `rate_limit_delay_seconds`
   config key exists for this connector — there is nothing to delay between.
+- **`Source.last_fetched_at` is deliberately *not* used to filter or skip offers here (BUG02)**: a
+  tempting fix would be to skip persisting offers whose `posted_at` predates the last successful
+  run, but because this endpoint is a re-ranked recommendation feed rather than a stable
+  chronological list, an offer could re-enter the feed's ranking later without ever having been
+  ingested before — filtering it out by an old `posted_at` would silently and permanently lose it,
+  since nothing would ever retry it. `Source.last_fetched_at` is populated for this connector the
+  same as any other (see "Scheduler" below), but is used purely as a staleness signal surfaced to
+  the user, not as a fetch-side filter. See
+  `docs/adr/0009-justjoinit-incremental-pagination-strategy.md` for the full reasoning.
 - **`_fetch_nofluffjobs_json`** is the sole HTTP boundary, structured identically to
   `_fetch_justjoinit_json`: catches `httpx.HTTPError` (connection/timeout/non-2xx via
   `raise_for_status()`) and `json.JSONDecodeError` on `response.json()`, logging at `ERROR` and
@@ -580,6 +595,18 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   `SELECT`. None of `runs.py`'s functions commit — same transaction-boundary convention as
   `app.ingestion.persist`.
 
+- **`Source.last_fetched_at` (BUG02) is not a violation of the "no `sources.last_run_*` columns"
+  choice above** — it serves a different consumer. `scheduler_runs` remains the full, append-only
+  audit trail (every run, including errors, warnings, and per-run counts) queried by `GET
+  /scheduler/status`. `Source.last_fetched_at` is a single narrow checkpoint a connector reads back
+  *for itself*, synchronously, before/while fetching — a concern the audit table was never designed
+  to serve cheaply (it would mean a `SELECT ... ORDER BY started_at DESC LIMIT 1` per connector run
+  just to answer "when did I last succeed"). It is set in `app/scheduler/service.py`'s
+  `_run_source_async`, in the same success branch as `finish_run_ok`, to `datetime.now(UTC)`
+  whenever a run completes with `ok=True` — regardless of `fetched`/`created` counts, mirroring
+  `SchedulerRun.finished_at`'s own semantics rather than gating on "found something new." See
+  `docs/adr/0009-justjoinit-incremental-pagination-strategy.md`.
+
 - **Registry/dispatch design** (`app/scheduler/registry.py`) — the seam a future P1US7 ingestion
   endpoint should reuse, not reimplement: `CONNECTOR_REGISTRY: dict[str, DispatchFn]` maps each
   connector constant to a private adapter (`_dispatch_solid_jobs`/`_dispatch_justjoinit`/
@@ -652,6 +679,9 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   NULL`, calls `get_latest_run_by_source` once per source (an intentional N+1-per-source query
   pattern — acceptable given only three sources exist; not worth a window-function query), and
   defaults every `last_run_*` field to `None`/`False` when a source has never run.
+  `SourceStatus.last_fetched_at` (BUG02) is read straight off `Source.last_fetched_at` (see above)
+  rather than derived from the joined `SchedulerRun` — it is `None` for a source that has never
+  completed a run.
 
 ### Ingestion API endpoints (P1US7)
 
@@ -680,6 +710,12 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   `SessionDep`-based route handler would block `/health` and every other route for the run's
   duration. Verified mechanically by
   `tests/integration/test_ingestion_routes.py::test_health_endpoint_responds_during_ingest_run`.
+  **`_trigger_ingest_async` also sets `source.last_fetched_at` on `result.ok` (BUG02)** — this is
+  not a `scheduler_runs` write (ADR 0006's "not scheduler-audited" stance is unchanged and still
+  applies to the run-history table) but a checkpoint on `Source` itself, and a job-seeker's
+  on-demand "Fetch now" click is exactly the kind of successful fetch that checkpoint needs to
+  reflect; leaving it scheduler-runs-only would make the Offers page's own source-status display
+  go stale immediately after the button it sits next to was clicked.
   Response shape:
 
   ```bash

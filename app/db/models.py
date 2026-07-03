@@ -16,6 +16,7 @@ class Source(Base):
     name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     connector: Mapped[str | None] = mapped_column(String(50), nullable=True)
     config_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

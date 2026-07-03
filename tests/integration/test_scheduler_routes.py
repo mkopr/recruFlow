@@ -45,6 +45,7 @@ async def test_run_source_now_returns_200_and_updates_status(
     assert entry["last_run_fetched"] == 2
     assert entry["last_run_trigger_type"] == "manual"
     assert entry["last_run_status"] == "ok"
+    assert entry["last_fetched_at"] is not None
 
 
 @pytest.mark.integration
@@ -97,6 +98,7 @@ async def test_scheduler_status_returns_null_last_run_fields_for_never_run_sourc
         entry = entries[fresh_connector]
         assert entry["last_run_status"] is None
         assert entry["last_run_started_at"] is None
+        assert entry["last_fetched_at"] is None
     finally:
         async with sessionmaker() as session:
             await session.execute(delete(Source).where(Source.id == source_id))
