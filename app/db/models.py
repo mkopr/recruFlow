@@ -14,6 +14,7 @@ class Source(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    connector: Mapped[str | None] = mapped_column(String(50), nullable=True)
     config_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -133,3 +134,21 @@ class Application(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class SchedulerRun(Base):
+    __tablename__ = "scheduler_runs"
+    __table_args__ = (Index("ix_scheduler_runs_source_id_started_at", "source_id", "started_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_id: Mapped[int] = mapped_column(Integer, ForeignKey("sources.id"), nullable=False)
+    trigger_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="running")
+    fetched_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    warning: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

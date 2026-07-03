@@ -10,6 +10,7 @@ def test_models_register_all_v1_tables() -> None:
         "cv_versions",
         "match_scores",
         "applications",
+        "scheduler_runs",
     }
 
 
@@ -33,3 +34,13 @@ def test_offers_canonical_url_is_nullable() -> None:
 def test_offers_description_column_exists_and_is_nullable() -> None:
     assert "description" in Base.metadata.tables["offers"].columns
     assert Base.metadata.tables["offers"].columns["description"].nullable is True
+
+
+def test_sources_connector_column_exists_and_is_nullable() -> None:
+    assert "connector" in Base.metadata.tables["sources"].columns
+    assert Base.metadata.tables["sources"].columns["connector"].nullable is True
+
+
+def test_scheduler_runs_source_id_started_at_index_exists() -> None:
+    index_names = {index.name for index in Base.metadata.tables["scheduler_runs"].indexes}
+    assert "ix_scheduler_runs_source_id_started_at" in index_names

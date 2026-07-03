@@ -5,19 +5,28 @@
 ```
 recruFlow/
 ├── app/            # Python application package (P0US4 added a /health stub; P0US6 adds the rest)
-│   ├── main.py     # FastAPI app object: loads Settings, wires routers (P0US6)
+│   ├── main.py     # FastAPI app object: loads Settings, lifespan-wires the scheduler (P0US6, P1US6)
 │   ├── config.py   # Settings(BaseSettings) + get_settings(), env-driven (.env) (P0US6)
 │   ├── api/        # HTTP layer: DI dependencies and routers (P0US6)
 │   │   ├── deps.py         # get_db() session dependency, SessionDep annotation
 │   │   └── routes/
-│   │       └── health.py   # GET /health, GET /health/db
-│   └── db/         # SQLAlchemy models, async engine/session, Alembic-shared base (P0US5)
-│       ├── base.py     # Declarative base, shared by models.py and alembic/env.py
-│       ├── models.py   # v1 schema: Source, Offer, Profile, CVVersion, MatchScore, Application
-│       ├── session.py  # get_engine()/get_sessionmaker(), env-driven (DATABASE_URL)
-│       └── seed.py     # idempotent fixture loader (make seed)
+│   │       ├── health.py     # GET /health, GET /health/db
+│   │       └── scheduler.py  # POST /scheduler/run/{source}, GET /scheduler/status (P1US6)
+│   ├── db/         # SQLAlchemy models, async engine/session, Alembic-shared base (P0US5)
+│   │   ├── base.py     # Declarative base, shared by models.py and alembic/env.py
+│   │   ├── models.py   # v1 schema + SchedulerRun (P1US6): Source, Offer, Profile, CVVersion, MatchScore, Application, SchedulerRun
+│   │   ├── session.py  # get_engine()/get_sessionmaker(), env-driven (DATABASE_URL)
+│   │   └── seed.py     # idempotent fixture loader (make seed)
+│   ├── schemas/
+│   │   └── scheduler.py  # ManualRunResponse, SourceStatus, SchedulerStatusResponse (P1US6)
+│   └── scheduler/  # APScheduler wiring (P1US6)
+│       ├── triggers.py   # parse_schedule(): config_json["schedule"] -> APScheduler trigger, fail-soft
+│       ├── registry.py   # CONNECTOR_REGISTRY dispatch seam; dispatch_ingestion, resolve_source_by_connector
+│       ├── runs.py       # SchedulerRun row read/write helpers (start_run, finish_run_ok/error, get_latest_run_by_source)
+│       ├── service.py    # ensure_sources_exist, run_source_sync (plain def, see ADR 0005), run_source
+│       └── lifecycle.py  # register_jobs(): one AsyncIOScheduler job per connector-tagged Source
 ├── alembic/        # Migration environment (async template) (P0US5)
-│   └── versions/   # Migration scripts; v1 schema migration creates all six tables
+│   └── versions/   # Migration scripts; v1 schema migration creates all six tables, P1US6 adds a seventh
 ├── alembic.ini     # Alembic config; sqlalchemy.url left unset, injected by env.py at runtime
 ├── frontend/       # React + Vite + TypeScript frontend (P0US2)
 │   ├── src/        # App source (main.tsx, App.tsx, index.css, vite-env.d.ts)
@@ -47,8 +56,8 @@ recruFlow/
 
 - `main` — runtime dependencies of the FastAPI application: `fastapi`, `uvicorn`, the async
   SQLAlchemy stack (`sqlalchemy[asyncio]`, `asyncpg`), `alembic`, `pydantic`,
-  `pydantic-settings`, `httpx`. Later phases add further runtime deps here incrementally
-  (`langchain`/`langgraph`/`langchain-ollama` in P3US2, `playwright` in P5US6,
+  `pydantic-settings`, `httpx`, `apscheduler`. Later phases add further runtime deps here
+  incrementally (`langchain`/`langgraph`/`langchain-ollama` in P3US2, `playwright` in P5US6,
   `weasyprint`/`python-docx` in P4US4/P6US4) as the story that needs them lands.
 - `dev` — local developer tooling: `ruff`, `mypy`, `pre-commit`.
 - `test` — test-only dependencies: `pytest`, `pytest-asyncio`, `pytest-cov`.
@@ -56,6 +65,12 @@ recruFlow/
 `httpx` moved from `test`-only to `main` in P1US3 (the JustJoin.it connector): it previously only
 backed FastAPI's `TestClient` in tests, but `app/connectors/justjoinit.py` is production code that
 imports it directly as its HTTP client.
+
+`apscheduler` (`>=3.10`, the 3.x line — 4.x is alpha-only and not used) was added to `main` in
+P1US6 for the ingestion scheduler. `apscheduler` ships no `py.typed` marker, so
+`[[tool.mypy.overrides]]` sets `ignore_missing_imports = true` for `apscheduler.*` — every
+`apscheduler` import elsewhere in `app/` is otherwise fully type-checked as normal, this only
+suppresses the "missing library stubs" note on the import itself.
 
 `[tool.ruff.lint]`'s `select` list adds `C90` (P0US8), enabling ruff's `mccabe`
 cyclomatic-complexity checker, with `[tool.ruff.lint.mccabe] max-complexity = 10` — 10 is
@@ -125,7 +140,7 @@ runtime, not from constructor arguments.
 - `base.py` — a single `Base(DeclarativeBase)` that every ORM model and Alembic's
   `target_metadata` share, so migrations autogenerate off the same metadata the app queries
   against.
-- `models.py` — the six v1 tables (see "Database schema" below).
+- `models.py` — the six v1 tables plus `scheduler_runs` (P1US6, see "Database schema" below).
 - `session.py` — `get_database_url() -> str` (reads `DATABASE_URL`, raises `RuntimeError` if
   unset — fails loudly rather than silently defaulting to the wrong database),
   `get_engine() -> AsyncEngine`, `get_sessionmaker(engine: AsyncEngine | None = None) ->
@@ -149,12 +164,13 @@ repeated foundational migration:
 
 | Table | Purpose | Key columns / constraints |
 | --- | --- | --- |
-| `sources` | A job board connector (SOLID.Jobs, JustJoin.it, NoFluffJobs) | `name` unique; `config_json` (JSONB) per-source config |
+| `sources` | A job board connector (SOLID.Jobs, JustJoin.it, NoFluffJobs) | `name` unique; `config_json` (JSONB) per-source config; `connector` nullable `String(50)` (P1US6, see below) |
 | `offers` | A normalised job posting with exactly one Source | `dedup_hash` unique + indexed (dedup on canonical URL, P1US1 fallback to title+company+location); `canonical_url` nullable (P1US1 — not every source guarantees a stable URL); `description` nullable `Text` (P1US1); `raw_payload` (JSONB, ELT raw payload always populated at ingest) |
 | `profiles` | Candidate's structured facts: skills, experience, preferences | `name` unique; `is_active` (only one row active at a time, enforced by application logic, not a DB constraint); `data` (JSONB) |
 | `cv_versions` | Tailored CV + cover letter drafted for one Offer/Profile pair | FKs to `offers`/`profiles`; `status` string (no DB enum, so later statuses need no migration) |
 | `match_scores` | Structured evaluation of one Offer against a Profile (grade A–F + dimensions) | FKs to `offers`/`profiles`; `engine` distinguishes LangChain vs. `sjctl` scoring |
 | `applications` | Record of intent/action to apply | FKs to `offers`/`profiles`/`cv_versions`; `status` one of `drafted`/`reviewed`/`sent`/`failed`/`interview`/`offer`/`rejected` (unconstrained string, not a DB enum) |
+| `scheduler_runs` (P1US6) | One row per ingestion run, automatic or manual — the scheduler's audit trail | FK to `sources`; index on `(source_id, started_at)` for cheap "latest row per source" lookups; `status` one of `running`/`ok`/`error` (unconstrained string, same no-DB-enum convention as `applications.status`); `fetched_count`/`created_count` nullable `Integer` (null only while `status="running"`); `warning` `Boolean` (zero-result flag, see below); see "Scheduler" below |
 
 `make migrate` runs `docker compose exec api alembic upgrade head` (mirrors the `sjctl-version`
 pattern — `DATABASE_URL`'s `db` hostname only resolves inside the Compose network, not from the
@@ -166,6 +182,9 @@ nullable and adds `offers.description` (nullable `Text`). Both changes were defe
 P0US5 migration deliberately — P0US5 only had to create "all v1 tables", not pin the exact
 `offers` shape — and are resolved by P1US1 (see below) once the canonical `Offer` schema and dedup
 strategy needed to know the real constraints existed.
+
+A third migration (`12bc4e296410`, chained after `aa3fa339111b`, P1US6) adds `sources.connector`
+and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "Scheduler" below.
 
 ### Offer schema and dedup strategy (P1US1)
 
@@ -482,6 +501,157 @@ strategy needed to know the real constraints existed.
     SOLID.Jobs, NoFluffJobs — is never penalized for a field it doesn't have and `raw_gross=None`
     stays silent), a `WARNING` is logged naming the source and figures; recruFlow performs no
     net-to-gross conversion and stores the figures unchanged.
+
+### Scheduler (P1US6)
+
+- **Purpose**: all three connectors (P1US2–US4) exist and produce comparable `Offer` rows
+  (P1US5), but nothing yet calls them automatically or on a schedule, and nothing reports on what
+  happened when they ran. This story wires `APScheduler` into the FastAPI lifespan, gives each
+  source its own configurable schedule, and adds a manual trigger endpoint plus a status endpoint.
+  P1US7 (ingestion API endpoints, not part of this story) will add its own `POST /ingest/{source}`
+  reusing this story's dispatch seam (see "Registry/dispatch design" below) — do not confuse this
+  story's per-source ingestion scheduler with the later, separate P6US2 Digest job, and do not
+  confuse this story's single-run zero-result warning with P6US1's later two-consecutive-run
+  escalation and dedicated `/health/sources` endpoint — both are explicitly out of scope here.
+
+- **Lifecycle within the FastAPI lifespan** (`app/main.py`): `app/main.py` gained a `lifespan`
+  context manager — the first time this file has had one. On startup it builds its own long-lived
+  `AsyncEngine`/sessionmaker (via `app.db.session.get_engine`/`get_sessionmaker`, *not* the
+  request-scoped `SessionDep`), calls `ensure_sources_exist` once and commits, constructs an
+  `AsyncIOScheduler(timezone="UTC")`, calls `register_jobs` to add one job per connector-tagged
+  `Source`, then `scheduler.start()`. The scheduler instance is stashed on `app.state.scheduler` so
+  tests and future endpoints can introspect `get_jobs()`/`running`. On shutdown, `scheduler.shutdown
+  (wait=True)` runs before `engine.dispose()` — `wait=True` is APScheduler's default but is passed
+  explicitly to document intent; it does not risk hanging indefinitely because every connector
+  already enforces its own request timeout (`sjctl`'s subprocess call and both HTTP connectors'
+  `httpx.get` calls all pass an explicit `timeout`), so an in-flight job always finishes or times
+  out within a bounded window.
+- **Real behavioral change, documented deliberately**: before this story, FastAPI could start even
+  with the DB down (only `/health/db` would fail per request). After this story, startup itself
+  calls `ensure_sources_exist`/`register_jobs`, so the app now fails to start if the DB is
+  unreachable or unmigrated. `docker-compose.yml`'s `api` service `depends_on: db: condition:
+  service_healthy` only guarantees Postgres itself is up, not that `alembic upgrade head` has
+  already run — `make up` alone does not run migrations; `make migrate` must be run once against a
+  fresh database before the `api` container will start cleanly. This is a real, new coupling
+  introduced by this story, not a defect to silently work around.
+
+- **`sources.connector` vs. `sources.name`**: a new nullable `String(50)` column,
+  `sources.connector`, holds one of the three connector identity constants
+  (`app.ingestion.normalize.SOLID_JOBS`/`JUSTJOINIT`/`NOFLUFFJOBS`) and is used purely as the
+  scheduler's dispatch key. `sources.name` was deliberately **not** reused for dispatch — it is
+  documented (see "Database schema" above) as an arbitrary, display-only, per-deployment label, and
+  repurposing it for dispatch would silently break that invariant for any deployment that renamed a
+  Source row. `connector` is nullable specifically so pre-existing/arbitrary `Source` rows (e.g.
+  `seed.py`'s `"seed"` fixture row) remain valid with `connector=NULL` and are simply invisible to
+  the scheduler — both `register_jobs` and `GET /scheduler/status` filter on `connector IS NOT
+  NULL`.
+
+- **Schedule config schema**: schedule configuration lives under a new reserved `"schedule"` key
+  inside the existing `sources.config_json` JSONB blob, coexisting with each connector's own keys
+  (`division`/`cities`/... for SOLID.Jobs, `page_size`/... for the other two) rather than adding new
+  columns. `app/scheduler/triggers.py`'s `parse_schedule(config_json) -> BaseTrigger` supports a
+  tagged union on `"type"`:
+  - interval: `{"schedule": {"type": "interval", "seconds": 3600}}` → `IntervalTrigger(seconds=...)`
+  - cron: `{"schedule": {"type": "cron", "expression": "0 */2 * * *"}}` →
+    `CronTrigger.from_crontab(expression)`
+
+  Any missing or malformed schedule value (missing `"schedule"` key, non-dict value, unknown
+  `"type"`, missing/non-positive/non-numeric `"seconds"` for `interval`, missing/empty/unparseable
+  `"expression"` for `cron`) **never raises** — it logs a `WARNING` via the module logger
+  `app.scheduler.triggers` and falls back to `DEFAULT_INTERVAL_SECONDS = 3600`. This matches the
+  connectors' established fail-soft philosophy: bad per-source config must never crash startup or
+  block other sources' jobs from registering. The three built-in sources' shipped defaults
+  (`app.scheduler.service.DEFAULT_SOURCE_CONFIGS`): `solid_jobs` — interval, 3600s (1h); `justjoinit`
+  — interval, 1800s (30m); `nofluffjobs` — cron, `"0 */2 * * *"` (every 2 hours on the hour).
+
+- **`scheduler_runs` table, not `sources.last_run_*` columns**: a new table rather than columns on
+  `sources`, matching the project's existing ELT/audit-trail instinct (raw payloads are always kept,
+  not overwritten) — this keeps `GET /scheduler/status` queryable by "latest row per source" cheaply
+  via the `(source_id, started_at)` index, and leaves headroom for P6US1's later two-consecutive-run
+  escalation without a further migration. Columns: `id`, `source_id` (FK), `trigger_type`
+  (`"automatic"`/`"manual"`), `status` (`"running"`/`"ok"`/`"error"`, unconstrained string, no DB
+  enum — same convention as `applications.status`), `fetched_count`/`created_count` (nullable
+  `Integer`, populated only once a run finishes), `warning` (`Boolean`), `error_message` (nullable
+  `Text`), `started_at`/`finished_at` (`DateTime(timezone=True)`, `finished_at` nullable while
+  `status="running"`). `app/scheduler/runs.py` is the sole read/write surface:
+  `start_run`/`finish_run_ok`/`finish_run_error` set explicit Python-side `datetime.now(UTC)`
+  values (rather than relying on the column's `server_default=now()`/an eager-refresh round-trip) so
+  the caller has a real, immediately-usable timestamp on the in-memory row without an extra
+  `SELECT`. None of `runs.py`'s functions commit — same transaction-boundary convention as
+  `app.ingestion.persist`.
+
+- **Registry/dispatch design** (`app/scheduler/registry.py`) — the seam a future P1US7 ingestion
+  endpoint should reuse, not reimplement: `CONNECTOR_REGISTRY: dict[str, DispatchFn]` maps each
+  connector constant to a private adapter (`_dispatch_solid_jobs`/`_dispatch_justjoinit`/
+  `_dispatch_nofluffjobs`) that calls the matching `run_*_ingestion` and normalises its own,
+  structurally-identical-but-distinct `IngestionResult` dataclass into one shared, frozen
+  `DispatchResult(ok, fetched, created)`. `_dispatch_solid_jobs` is the odd one out — it reads
+  `campaign=get_settings().sjctl_campaign` internally so all three adapters present the same
+  `(session, source) -> DispatchResult` signature despite `solid_jobs` needing an extra keyword
+  argument underneath. `resolve_source_by_connector(session, connector) -> Source` raises
+  `UnknownConnectorError` if `connector` isn't a `CONNECTOR_REGISTRY` key at all, `
+  SourceNotConfiguredError` if it's a known connector with no matching `Source` row yet, and
+  otherwise returns the row; `dispatch_ingestion(session, source)` assumes the caller already
+  resolved/validated `source.connector` (asserts non-`None`) and calls straight through the
+  registry. **P1US7's `POST /ingest/{source}` should call `resolve_source_by_connector` +
+  `dispatch_ingestion` directly** rather than duplicating connector-selection logic.
+
+- **Non-blocking execution model — why job callables are plain `def`, not `async def`**: see
+  `docs/adr/0005-scheduler-jobs-must-be-plain-sync-callables.md` for the full reasoning; summary
+  here. `AsyncIOScheduler` shares uvicorn's single event loop and only offloads a job to its thread
+  pool when the registered callable is a plain function — an `async def` job runs directly on the
+  main loop instead. None of the three connectors are actually non-blocking on their own (`sjctl`
+  via blocking `subprocess.run`; the two HTTP connectors via synchronous `httpx.get`), so an
+  `async def` scheduler job would block the *entire* API for the duration of every run.
+  `app.scheduler.service.run_source_sync` is therefore a plain `def`: it builds its own throwaway
+  `AsyncEngine`/sessionmaker (via `get_engine()`/`get_sessionmaker()` — never the request-scoped,
+  main-loop-pinned `SessionDep`) and drives the async work through a fresh `asyncio.run(...)`, since
+  it executes inside a worker thread with no event loop of its own. `register_jobs`
+  (`app/scheduler/lifecycle.py`) passes `run_source_sync` itself (not a coroutine function) to
+  `scheduler.add_job(..., max_instances=1, coalesce=True)` — both non-optional: without them, a
+  source whose run takes longer than its own interval would stack overlapping concurrent runs
+  against the same source. The manual-trigger endpoint's async wrapper,
+  `app.scheduler.service.run_source`, calls `run_source_sync` via `asyncio.to_thread(...)` for the
+  identical reason, so automatic and manual runs share one code path and one `SchedulerRun`
+  bookkeeping implementation, and neither blocks the main loop. Verified mechanically (not just by
+  code inspection) by
+  `tests/integration/test_scheduler_routes.py::test_health_endpoint_responds_during_scheduler_run`,
+  which kicks off a deliberately slow mocked run and asserts `/health` still responds in well under
+  the run's duration.
+
+- **Zero-result warning semantics**: `run_source_sync` sets `warning=True` on `finish_run_ok`
+  precisely when `result.fetched == 0` — **not** `result.created == 0`. Zero *created* offers after
+  dedup is a normal, expected steady state once a source's inventory has already been ingested;
+  zero *fetched* offers means the connector's own request round-trip returned nothing at all, which
+  is the actual source-breakage signal the acceptance criteria describes. When the warning
+  condition is hit, a `WARNING` is logged via the module logger `app.scheduler.service` naming the
+  connector, and `GET /scheduler/status`'s `last_run_warning` reflects it. Note that a connector's
+  own internally-handled failure (e.g. `sjctl` binary missing, an HTTP transport error) already
+  returns `IngestionResult(ok=False, fetched=0, ...)` rather than raising (established connector
+  convention from P1US2–US4) — from the scheduler's perspective this is indistinguishable from a
+  "genuinely zero offers available" run: both surface as `status="ok"`, `warning=True`.
+  `SchedulerRun.status="error"` is reserved for an actual Python exception escaping
+  `dispatch_ingestion` (verified via a mocked `RuntimeError` in
+  `test_run_source_now_connector_exception_records_error_status_not_stuck_running`) — the
+  `try`/`except Exception` around the `dispatch_ingestion` call in `_run_source_async` guarantees a
+  run is never left stuck at `status="running"` if a connector bug throws.
+
+- **`POST /scheduler/run/{source}` and `GET /scheduler/status`** (`app/api/routes/scheduler.py`,
+  bare `APIRouter()`, no prefix, full literal paths — mirrors `health.py`'s convention exactly).
+  `trigger_run` deliberately does **not** take `SessionDep` — it calls the shared `run_source` async
+  wrapper, which manages its own engine/session on a worker thread exactly like automatic runs; this
+  is what makes manual and automatic runs one shared code path and what makes "the API stays
+  responsive during a manual run" mechanically true, not just true for automatic runs. Status code
+  convention: the endpoint returns **200 even when the resulting run's own `status` is `"error"`**
+  (a connector failure or exception) — the HTTP request itself succeeded in the sense that a run was
+  triggered and its outcome reported, mirroring the connectors' own "return `ok=False`, don't raise"
+  philosophy. Only a `SchedulerLookupError` (unknown connector, or a known connector with no
+  provisioned `Source` row) maps to `HTTPException(404, ...)`, with the detail message
+  distinguishing "unknown connector" from "no configured source" so a caller (or test) can tell the
+  two failure modes apart. `scheduler_status` selects every `Source` row with `connector IS NOT
+  NULL`, calls `get_latest_run_by_source` once per source (an intentional N+1-per-source query
+  pattern — acceptable given only three sources exist; not worth a window-function query), and
+  defaults every `last_run_*` field to `None`/`False` when a source has never run.
 
 ### `frontend/` project
 

@@ -2,6 +2,7 @@ import os
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
+import httpx
 import pytest
 import pytest_asyncio
 from alembic import command
@@ -45,3 +46,13 @@ async def db_session(db_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, Non
     async with sessionmaker() as session:
         yield session
         await session.rollback()
+
+
+@pytest_asyncio.fixture
+async def scheduled_client() -> AsyncGenerator[httpx.AsyncClient, None]:
+    from app.main import app
+
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            yield ac

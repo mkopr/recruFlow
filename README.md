@@ -299,3 +299,108 @@ HTTP request per run, there is nothing to delay between.
 If the fetch fails (network error, non-2xx status, malformed JSON, or an unrecognised response
 shape), the connector logs the failure and returns `IngestionResult(ok=False, fetched=0,
 created=0)` rather than raising — it never crashes the calling ingestion process.
+
+## Scheduler
+
+`app/scheduler/` wires [APScheduler](https://apscheduler.readthedocs.io/) into the FastAPI
+lifespan (`app/main.py`) so all three connectors run automatically on their own schedule, plus
+exposes a manual trigger and a status endpoint. On every process start, the three built-in sources
+(`solid_jobs`, `justjoinit`, `nofluffjobs`) are provisioned idempotently if they don't already
+exist — you don't need to run `make seed` first for the scheduler to have something to run against.
+
+### Configuring a source's schedule
+
+Each `sources` row's `config_json` JSONB column carries a reserved `"schedule"` key, alongside that
+connector's own filter keys (`division`/`cities`/... for SOLID.Jobs, `page_size`/... for the other
+two). Two shapes are supported, a tagged union on `"type"`:
+
+```json
+{"schedule": {"type": "interval", "seconds": 3600}}
+{"schedule": {"type": "cron", "expression": "0 */2 * * *"}}
+```
+
+`expression` is a standard five-field crontab string. To change a source's schedule, update its row
+directly (e.g. via `psql` or a future admin UI — there is no `PATCH /sources/{id}` endpoint yet) and
+restart the API so `register_jobs` picks up the new trigger; a running scheduler does not hot-reload
+config changes mid-process. A missing or malformed `"schedule"` value never crashes the app — it
+logs a `WARNING` and falls back to a 1-hour interval.
+
+The three built-in sources ship with these defaults (`app/scheduler/service.py`'s
+`DEFAULT_SOURCE_CONFIGS`):
+
+| Source | Schedule |
+| --- | --- |
+| `solid_jobs` | interval, every 3600s (1 hour) |
+| `justjoinit` | interval, every 1800s (30 minutes) |
+| `nofluffjobs` | cron, `0 */2 * * *` (every 2 hours, on the hour) |
+
+### `POST /scheduler/run/{source}`
+
+Triggers one source's ingestion immediately, outside its automatic schedule. `{source}` is a
+connector identity string (`solid_jobs`, `justjoinit`, or `nofluffjobs`), not `sources.name`.
+
+```bash
+curl -X POST http://localhost:8000/scheduler/run/justjoinit
+```
+
+```json
+{
+  "id": 12,
+  "source_id": 3,
+  "connector": "justjoinit",
+  "trigger_type": "manual",
+  "status": "ok",
+  "fetched": 42,
+  "created": 7,
+  "warning": false,
+  "error_message": null,
+  "started_at": "2026-07-03T10:15:00Z",
+  "finished_at": "2026-07-03T10:15:04Z"
+}
+```
+
+Returns `404` only when `{source}` isn't a recognised connector at all, or is a recognised
+connector with no provisioned `Source` row — the detail message distinguishes the two. A `200` with
+`"status": "error"` means the run itself failed (an unexpected exception from the connector); the
+request still succeeded in the sense that a run was triggered and its outcome reported, mirroring
+the connectors' own "return `ok=False`/an error result, don't raise" philosophy.
+
+`fetched` vs. `created`: `fetched` is how many offers the connector's request round-trip returned;
+`created` is how many of those were genuinely new rows after dedup. `created` reaching `0` on a
+healthy, previously-ingested source is normal and expected. `fetched` reaching `0` is the real
+signal something's wrong (source unreachable, API contract changed, filters too narrow) — a `0`
+`fetched` count sets `"warning": true` and logs a `WARNING`, whether the run was automatic or
+manual.
+
+### `GET /scheduler/status`
+
+Reports every provisioned source's configured schedule and last run outcome.
+
+```bash
+curl http://localhost:8000/scheduler/status
+```
+
+```json
+{
+  "sources": [
+    {
+      "source_id": 3,
+      "connector": "justjoinit",
+      "name": "justjoinit",
+      "schedule": {"type": "interval", "seconds": 1800},
+      "last_run_id": 12,
+      "last_run_started_at": "2026-07-03T10:15:00Z",
+      "last_run_finished_at": "2026-07-03T10:15:04Z",
+      "last_run_status": "ok",
+      "last_run_trigger_type": "manual",
+      "last_run_fetched": 42,
+      "last_run_created": 7,
+      "last_run_warning": false,
+      "last_run_error_message": null
+    }
+  ]
+}
+```
+
+All `last_run_*` fields are `null`/`false` for a source that has never run yet. A source with
+`connector` unset (e.g. `seed.py`'s `"seed"` fixture row) is not scheduled and does not appear here.
