@@ -265,3 +265,37 @@ response shape), the connector logs the failure and returns
 `IngestionResult(ok=False, fetched=0, created=0)` rather than raising. A failure on a *later* page
 (after at least one page already succeeded) stops pagination early but still reports success for
 the offers already fetched — it never crashes the calling ingestion process.
+
+## NoFluffJobs connector
+
+`app/connectors/nofluffjobs.py` ingests offers from NoFluffJobs's own JSON API (confirmed live —
+see `docs/adr/0004-nofluffjobs-json-endpoint-investigation.md` — no scraping needed) into the
+canonical `offers` table. Like the other two connectors, it does not create, schedule, or expose
+itself over HTTP. Call it directly with an already-resolved `Source` row:
+
+```python
+from app.connectors.nofluffjobs import run_nofluffjobs_ingestion
+
+result = await run_nofluffjobs_ingestion(session, source)
+# IngestionResult(ok=True, fetched=191, created=180)
+await session.commit()
+```
+
+Unlike JustJoin.it's connector, this one does **not** paginate: NoFluffJobs's confirmed endpoint
+(`/api/joboffers/main`) was verified to ignore its own `page` query parameter as an offset — every
+`page` value returns the same result set — so looping over pages would not surface additional
+offers. `pageSize` does control how many postings a single call returns (non-linearly — see
+ARCHITECTURE.md's NoFluffJobs connector section), so the connector issues exactly one request per
+run, sized by `config_json`:
+
+| `config_json` key | Default | Notes |
+| --- | --- | --- |
+| `endpoint_url` | NoFluffJobs's confirmed offers API URL | Override for testing only |
+| `page_size` | `100` | Requested `pageSize` query param — controls the volume of the single feed pull (observed ~327 postings at the default) |
+
+There is no `rate_limit_delay_seconds` config key for this connector: because ingestion is a single
+HTTP request per run, there is nothing to delay between.
+
+If the fetch fails (network error, non-2xx status, malformed JSON, or an unrecognised response
+shape), the connector logs the failure and returns `IngestionResult(ok=False, fetched=0,
+created=0)` rather than raising — it never crashes the calling ingestion process.

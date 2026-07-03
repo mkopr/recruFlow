@@ -1,0 +1,145 @@
+import json
+import logging
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
+
+import httpx
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.models import Source
+from app.ingestion.persist import ingest_offer
+
+NOFLUFFJOBS_OFFERS_URL = "https://nofluffjobs.com/api/joboffers/main"
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class IngestionResult:
+    ok: bool
+    fetched: int
+    created: int
+
+
+def _fetch_nofluffjobs_json(
+    url: str = NOFLUFFJOBS_OFFERS_URL,
+    *,
+    params: dict[str, Any] | None = None,
+    timeout: float = 10.0,
+) -> Any | None:
+    try:
+        response = httpx.get(
+            url, params=params, timeout=timeout, headers={"User-Agent": "recruFlow/0.1"}
+        )
+        response.raise_for_status()
+    except httpx.HTTPError:
+        logger.error(
+            "failed to fetch NoFluffJobs offers: url=%r params=%r", url, params, exc_info=True
+        )
+        return None
+
+    try:
+        return response.json()
+    except json.JSONDecodeError:
+        logger.error(
+            "NoFluffJobs returned malformed JSON: url=%r body=%r", url, response.text[:500]
+        )
+        return None
+
+
+def _extract_offer_list(payload: Any) -> list[dict[str, Any]] | None:
+    if not isinstance(payload, dict) or "postings" not in payload:
+        return None
+    postings = payload["postings"]
+    if postings is None:
+        return []
+    if not isinstance(postings, list):
+        return None
+    return [item for item in postings if isinstance(item, dict)]
+
+
+def _to_int(value: Any) -> int | None:
+    return int(value) if isinstance(value, int | float) else None
+
+
+def _epoch_ms_to_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, int | float):
+        return None
+    return datetime.fromtimestamp(value / 1000, tz=UTC)
+
+
+def _join_cities(location: dict[str, Any]) -> str | None:
+    places = location.get("places")
+    if not isinstance(places, list) or not places:
+        return None
+    cities = [
+        str(place["city"]) for place in places if isinstance(place, dict) and place.get("city")
+    ]
+    return ", ".join(cities) if cities else None
+
+
+def _join_seniority(raw: dict[str, Any]) -> str | None:
+    seniority = raw.get("seniority")
+    if not isinstance(seniority, list) or not seniority:
+        return None
+    return ", ".join(str(level) for level in seniority)
+
+
+def map_nofluffjobs_offer(source_id: int, raw: dict[str, Any]) -> dict[str, Any]:
+    raw_location = raw.get("location")
+    location: dict[str, Any] = raw_location if isinstance(raw_location, dict) else {}
+
+    raw_salary = raw.get("salary")
+    salary: dict[str, Any] = raw_salary if isinstance(raw_salary, dict) else {}
+
+    url = raw.get("url")
+
+    return {
+        "source_id": source_id,
+        "external_id": raw.get("id"),
+        "canonical_url": f"https://nofluffjobs.com/job/{url}" if url else None,
+        "title": raw.get("title") or "",
+        "company": raw.get("name") or "",
+        "location": _join_cities(location),
+        "remote": bool(location.get("fullyRemote", False)),
+        "seniority": _join_seniority(raw),
+        "salary_min": _to_int(salary.get("from")),
+        "salary_max": _to_int(salary.get("to")),
+        "salary_currency": salary.get("currency") or "PLN",
+        "contract_type": salary.get("type") or None,
+        "posted_at": _epoch_ms_to_datetime(raw.get("posted")),
+        "description": None,
+    }
+
+
+async def _persist_offers(
+    session: AsyncSession, source_id: int, offers: list[dict[str, Any]]
+) -> int:
+    created_count = 0
+    for raw in offers:
+        mapped = map_nofluffjobs_offer(source_id, raw)
+        result = await ingest_offer(session, mapped, raw_payload=raw)
+        if result is not None and result[1] is True:
+            created_count += 1
+    return created_count
+
+
+async def run_nofluffjobs_ingestion(session: AsyncSession, source: Source) -> IngestionResult:
+    config = source.config_json or {}
+    url = config.get("endpoint_url", NOFLUFFJOBS_OFFERS_URL)
+    page_size = int(config.get("page_size", 100))
+
+    payload = _fetch_nofluffjobs_json(
+        url, params={"pageSize": page_size, "salaryCurrency": "PLN", "salaryPeriod": "month"}
+    )
+    if payload is None:
+        return IngestionResult(ok=False, fetched=0, created=0)
+
+    offers = _extract_offer_list(payload)
+    if offers is None:
+        logger.error("NoFluffJobs returned unexpected JSON shape: url=%r", url)
+        return IngestionResult(ok=False, fetched=0, created=0)
+
+    created_count = await _persist_offers(session, source.id, offers)
+    return IngestionResult(ok=True, fetched=len(offers), created=created_count)
