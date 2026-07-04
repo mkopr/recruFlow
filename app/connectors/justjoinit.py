@@ -1,11 +1,10 @@
 import asyncio
-import json
 import logging
 from typing import Any
 
-import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.connectors.http import fetch_json
 from app.db.models import Source
 from app.ingestion.normalize import (
     JUSTJOINIT,
@@ -28,24 +27,7 @@ def _fetch_justjoinit_json(
     params: dict[str, Any] | None = None,
     timeout: float = 10.0,
 ) -> Any | None:
-    try:
-        response = httpx.get(
-            url, params=params, timeout=timeout, headers={"User-Agent": "recruFlow/0.1"}
-        )
-        response.raise_for_status()
-    except httpx.HTTPError:
-        logger.error(
-            "failed to fetch JustJoin.it offers: url=%r params=%r", url, params, exc_info=True
-        )
-        return None
-
-    try:
-        return response.json()
-    except json.JSONDecodeError:
-        logger.error(
-            "JustJoin.it returned malformed JSON: url=%r body=%r", url, response.text[:500]
-        )
-        return None
+    return fetch_json(url, source_name="JustJoin.it", logger=logger, params=params, timeout=timeout)
 
 
 def _extract_offer_list(payload: Any) -> list[dict[str, Any]] | None:
