@@ -1,6 +1,5 @@
 import json
 import logging
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -16,18 +15,11 @@ from app.ingestion.normalize import (
     to_int,
 )
 from app.ingestion.persist import ingest_offer
+from app.ingestion.types import IngestionResult
 
 NOFLUFFJOBS_OFFERS_URL = "https://nofluffjobs.com/api/joboffers/main"
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class IngestionResult:
-    ok: bool
-    fetched: int
-    created: int
-    error_message: str | None = None
 
 
 def _fetch_nofluffjobs_json(

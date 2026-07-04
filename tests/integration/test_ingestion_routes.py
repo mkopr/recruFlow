@@ -3,14 +3,14 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from app.connectors.justjoinit import IngestionResult as JustJoinItIngestionResult
-from app.connectors.nofluffjobs import IngestionResult as NoFluffJobsIngestionResult
-from app.connectors.solid_jobs import IngestionResult as SolidJobsIngestionResult
 from app.db.models import Offer as OfferModel
 from app.db.models import Source
 from app.db.session import get_engine, get_sessionmaker
 from app.ingestion.normalize import JUSTJOINIT
 from app.ingestion.persist import ingest_offer
+from app.ingestion.types import IngestionResult as JustJoinItIngestionResult
+from app.ingestion.types import IngestionResult as NoFluffJobsIngestionResult
+from app.ingestion.types import IngestionResult as SolidJobsIngestionResult
 from app.scheduler import registry
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession

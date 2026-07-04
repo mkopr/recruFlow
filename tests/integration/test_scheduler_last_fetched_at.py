@@ -1,9 +1,9 @@
 from datetime import UTC, datetime
 
 import pytest
-from app.connectors.nofluffjobs import IngestionResult as NoFluffJobsIngestionResult
 from app.db.models import Source
 from app.ingestion.normalize import NOFLUFFJOBS
+from app.ingestion.types import IngestionResult as NoFluffJobsIngestionResult
 from app.scheduler import registry
 from app.scheduler.service import ensure_sources_exist, run_source
 from sqlalchemy import select

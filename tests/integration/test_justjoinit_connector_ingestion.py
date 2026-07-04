@@ -3,9 +3,10 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from app.connectors.justjoinit import IngestionResult, run_justjoinit_ingestion
+from app.connectors.justjoinit import run_justjoinit_ingestion
 from app.db.models import Offer as OfferModel
 from app.db.models import Source
+from app.ingestion.types import IngestionResult
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 

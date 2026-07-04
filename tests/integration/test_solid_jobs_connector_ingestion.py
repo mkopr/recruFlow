@@ -4,9 +4,10 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from app.connectors.solid_jobs import IngestionResult, run_solid_jobs_ingestion
+from app.connectors.solid_jobs import run_solid_jobs_ingestion
 from app.db.models import Offer as OfferModel
 from app.db.models import Source
+from app.ingestion.types import IngestionResult
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 

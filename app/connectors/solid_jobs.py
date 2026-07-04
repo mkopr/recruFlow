@@ -1,7 +1,6 @@
 import json
 import logging
 import subprocess
-from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,18 +13,11 @@ from app.ingestion.normalize import (
     normalize_seniority,
 )
 from app.ingestion.persist import ingest_offer
+from app.ingestion.types import IngestionResult
 
 SJCTL_BINARY = "sjctl"
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class IngestionResult:
-    ok: bool
-    fetched: int
-    created: int
-    error_message: str | None = None
 
 
 def build_search_args(config: dict[str, Any], *, campaign: str) -> list[str]:

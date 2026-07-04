@@ -2,14 +2,11 @@ from uuid import uuid4
 
 import pytest
 from app.config import get_settings
-from app.connectors.justjoinit import IngestionResult as JustJoinItIngestionResult
-from app.connectors.nofluffjobs import IngestionResult as NoFluffJobsIngestionResult
-from app.connectors.solid_jobs import IngestionResult as SolidJobsIngestionResult
 from app.db.models import Source
-from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
+from app.ingestion.normalize import JUSTJOINIT, SOLID_JOBS
+from app.ingestion.types import IngestionResult
 from app.scheduler import registry
 from app.scheduler.registry import (
-    DispatchResult,
     SourceNotConfiguredError,
     UnknownConnectorError,
     dispatch_ingestion,
@@ -80,55 +77,13 @@ async def test_dispatch_ingestion_solid_jobs_passes_campaign_from_settings(
 
     async def _fake_run_solid_jobs_ingestion(
         session: AsyncSession, src: Source, *, campaign: str, force_refresh: bool = False
-    ) -> SolidJobsIngestionResult:
+    ) -> IngestionResult:
         captured["campaign"] = campaign
-        return SolidJobsIngestionResult(ok=True, fetched=0, created=0)
+        return IngestionResult(ok=True, fetched=0, created=0)
 
     monkeypatch.setattr(registry, "run_solid_jobs_ingestion", _fake_run_solid_jobs_ingestion)
 
     result = await dispatch_ingestion(db_session, source)
 
     assert captured["campaign"] == get_settings().sjctl_campaign
-    assert result == DispatchResult(ok=True, fetched=0, created=0)
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_dispatch_ingestion_justjoinit_normalizes_result_to_dispatch_result(
-    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    source = Source(name=f"justjoinit-{uuid4()}", connector=JUSTJOINIT, config_json={})
-    db_session.add(source)
-    await db_session.flush()
-
-    async def _fake_run_justjoinit_ingestion(
-        session: AsyncSession, src: Source
-    ) -> JustJoinItIngestionResult:
-        return JustJoinItIngestionResult(ok=True, fetched=3, created=2)
-
-    monkeypatch.setattr(registry, "run_justjoinit_ingestion", _fake_run_justjoinit_ingestion)
-
-    result = await dispatch_ingestion(db_session, source)
-
-    assert result == DispatchResult(ok=True, fetched=3, created=2)
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_dispatch_ingestion_nofluffjobs_normalizes_result_to_dispatch_result(
-    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    source = Source(name=f"nofluffjobs-{uuid4()}", connector=NOFLUFFJOBS, config_json={})
-    db_session.add(source)
-    await db_session.flush()
-
-    async def _fake_run_nofluffjobs_ingestion(
-        session: AsyncSession, src: Source
-    ) -> NoFluffJobsIngestionResult:
-        return NoFluffJobsIngestionResult(ok=True, fetched=3, created=2)
-
-    monkeypatch.setattr(registry, "run_nofluffjobs_ingestion", _fake_run_nofluffjobs_ingestion)
-
-    result = await dispatch_ingestion(db_session, source)
-
-    assert result == DispatchResult(ok=True, fetched=3, created=2)
+    assert result == IngestionResult(ok=True, fetched=0, created=0)

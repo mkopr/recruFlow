@@ -3,9 +3,10 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from app.connectors.nofluffjobs import IngestionResult, run_nofluffjobs_ingestion
+from app.connectors.nofluffjobs import run_nofluffjobs_ingestion
 from app.db.models import Offer as OfferModel
 from app.db.models import Source
+from app.ingestion.types import IngestionResult
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 

@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -16,18 +15,11 @@ from app.ingestion.normalize import (
     to_int,
 )
 from app.ingestion.persist import ingest_offer
+from app.ingestion.types import IngestionResult
 
 JUSTJOINIT_OFFERS_URL = "https://justjoin.it/api/candidate-api/offers"
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class IngestionResult:
-    ok: bool
-    fetched: int
-    created: int
-    error_message: str | None = None
 
 
 def _fetch_justjoinit_json(

@@ -1,5 +1,4 @@
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +9,7 @@ from app.connectors.nofluffjobs import run_nofluffjobs_ingestion
 from app.connectors.solid_jobs import run_solid_jobs_ingestion
 from app.db.models import Source
 from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
+from app.ingestion.types import IngestionResult
 
 
 class SchedulerLookupError(Exception):
@@ -24,53 +24,27 @@ class SourceNotConfiguredError(SchedulerLookupError):
     pass
 
 
-@dataclass(frozen=True)
-class DispatchResult:
-    ok: bool
-    fetched: int
-    created: int
-    error_message: str | None = None
-
-
-DispatchFn = Callable[[AsyncSession, Source, bool], Awaitable[DispatchResult]]
+DispatchFn = Callable[[AsyncSession, Source, bool], Awaitable[IngestionResult]]
 
 
 async def _dispatch_solid_jobs(
     session: AsyncSession, source: Source, force_refresh: bool
-) -> DispatchResult:
-    result = await run_solid_jobs_ingestion(
+) -> IngestionResult:
+    return await run_solid_jobs_ingestion(
         session, source, campaign=get_settings().sjctl_campaign, force_refresh=force_refresh
-    )
-    return DispatchResult(
-        ok=result.ok,
-        fetched=result.fetched,
-        created=result.created,
-        error_message=result.error_message,
     )
 
 
 async def _dispatch_justjoinit(
     session: AsyncSession, source: Source, force_refresh: bool
-) -> DispatchResult:
-    result = await run_justjoinit_ingestion(session, source)
-    return DispatchResult(
-        ok=result.ok,
-        fetched=result.fetched,
-        created=result.created,
-        error_message=result.error_message,
-    )
+) -> IngestionResult:
+    return await run_justjoinit_ingestion(session, source)
 
 
 async def _dispatch_nofluffjobs(
     session: AsyncSession, source: Source, force_refresh: bool
-) -> DispatchResult:
-    result = await run_nofluffjobs_ingestion(session, source)
-    return DispatchResult(
-        ok=result.ok,
-        fetched=result.fetched,
-        created=result.created,
-        error_message=result.error_message,
-    )
+) -> IngestionResult:
+    return await run_nofluffjobs_ingestion(session, source)
 
 
 CONNECTOR_REGISTRY: dict[str, DispatchFn] = {
@@ -82,7 +56,7 @@ CONNECTOR_REGISTRY: dict[str, DispatchFn] = {
 
 async def dispatch_ingestion(
     session: AsyncSession, source: Source, *, force_refresh: bool = False
-) -> DispatchResult:
+) -> IngestionResult:
     connector = source.connector
     assert connector is not None, "source.connector must be resolved before dispatch"
     dispatch_fn = CONNECTOR_REGISTRY[connector]
