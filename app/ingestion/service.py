@@ -3,7 +3,7 @@ import logging
 from datetime import UTC, datetime
 
 from app.db.session import get_engine, get_sessionmaker
-from app.scheduler.registry import dispatch_ingestion, resolve_source_by_connector
+from app.ingestion.registry import dispatch_ingestion, resolve_source_by_connector
 from app.schemas.ingestion import IngestResponse
 
 logger = logging.getLogger(__name__)

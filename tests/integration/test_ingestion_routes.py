@@ -3,15 +3,16 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from app.connectors import justjoinit, nofluffjobs, solid_jobs
 from app.db.models import Offer as OfferModel
 from app.db.models import Source
 from app.db.session import get_engine, get_sessionmaker
+from app.ingestion import registry
 from app.ingestion.normalize import JUSTJOINIT
 from app.ingestion.persist import ingest_offer
 from app.ingestion.types import IngestionResult as JustJoinItIngestionResult
 from app.ingestion.types import IngestionResult as NoFluffJobsIngestionResult
 from app.ingestion.types import IngestionResult as SolidJobsIngestionResult
-from app.scheduler import registry
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,7 +29,7 @@ async def test_ingest_triggers_fetch_and_returns_new_updated_count(
     async def _fake(session: AsyncSession, source: Source) -> JustJoinItIngestionResult:
         return JustJoinItIngestionResult(ok=True, fetched=5, created=3)
 
-    monkeypatch.setattr(registry, "run_justjoinit_ingestion", _fake)
+    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake)
 
     response = await scheduled_client.post("/ingest/justjoinit")
 
@@ -64,7 +65,7 @@ async def test_ingest_persists_offers_end_to_end_visible_in_db(
         )
         return SolidJobsIngestionResult(ok=True, fetched=1, created=1)
 
-    monkeypatch.setattr(registry, "run_solid_jobs_ingestion", _fake)
+    monkeypatch.setattr(solid_jobs, "run_solid_jobs_ingestion", _fake)
 
     response = await scheduled_client.post("/ingest/solid_jobs")
 
@@ -95,7 +96,7 @@ async def test_ingest_solid_jobs_passes_force_refresh_true(
         captured["force_refresh"] = force_refresh
         return SolidJobsIngestionResult(ok=True, fetched=0, created=0)
 
-    monkeypatch.setattr(registry, "run_solid_jobs_ingestion", _fake)
+    monkeypatch.setattr(solid_jobs, "run_solid_jobs_ingestion", _fake)
 
     response = await scheduled_client.post("/ingest/solid_jobs")
 
@@ -111,7 +112,7 @@ async def test_ingest_sets_source_last_fetched_at_on_success(
     async def _fake(session: AsyncSession, source: Source) -> JustJoinItIngestionResult:
         return JustJoinItIngestionResult(ok=True, fetched=1, created=1)
 
-    monkeypatch.setattr(registry, "run_justjoinit_ingestion", _fake)
+    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake)
 
     response = await scheduled_client.post("/ingest/justjoinit")
     assert response.status_code == 200
@@ -134,7 +135,7 @@ async def test_ingest_does_not_set_source_last_fetched_at_on_failure(
     async def _fake(session: AsyncSession, source: Source) -> JustJoinItIngestionResult:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(registry, "run_justjoinit_ingestion", _fake)
+    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake)
 
     response = await scheduled_client.post("/ingest/justjoinit")
     assert response.status_code == 200
@@ -179,7 +180,7 @@ async def test_ingest_connector_exception_returns_200_ok_false_with_error_messag
     async def _fake(session: AsyncSession, source: Source) -> NoFluffJobsIngestionResult:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(registry, "run_nofluffjobs_ingestion", _fake)
+    monkeypatch.setattr(nofluffjobs, "run_nofluffjobs_ingestion", _fake)
 
     response = await scheduled_client.post("/ingest/nofluffjobs")
 
@@ -200,7 +201,7 @@ async def test_health_endpoint_responds_during_ingest_run(
         await asyncio.sleep(1.5)
         return JustJoinItIngestionResult(ok=True, fetched=1, created=1)
 
-    monkeypatch.setattr(registry, "run_justjoinit_ingestion", _fake)
+    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake)
 
     task = asyncio.create_task(scheduled_client.post("/ingest/justjoinit"))
     await asyncio.sleep(0.2)

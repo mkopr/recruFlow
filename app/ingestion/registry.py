@@ -1,12 +1,10 @@
-from collections.abc import Awaitable, Callable
+from typing import Protocol
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.connectors.justjoinit import run_justjoinit_ingestion
-from app.connectors.nofluffjobs import run_nofluffjobs_ingestion
-from app.connectors.solid_jobs import run_solid_jobs_ingestion
+from app.connectors import justjoinit, nofluffjobs, solid_jobs
 from app.db.models import Source
 from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
 from app.ingestion.types import IngestionResult
@@ -24,13 +22,16 @@ class SourceNotConfiguredError(SchedulerLookupError):
     pass
 
 
-DispatchFn = Callable[[AsyncSession, Source, bool], Awaitable[IngestionResult]]
+class Connector(Protocol):
+    async def __call__(
+        self, session: AsyncSession, source: Source, force_refresh: bool
+    ) -> IngestionResult: ...
 
 
 async def _dispatch_solid_jobs(
     session: AsyncSession, source: Source, force_refresh: bool
 ) -> IngestionResult:
-    return await run_solid_jobs_ingestion(
+    return await solid_jobs.run_solid_jobs_ingestion(
         session, source, campaign=get_settings().sjctl_campaign, force_refresh=force_refresh
     )
 
@@ -38,16 +39,16 @@ async def _dispatch_solid_jobs(
 async def _dispatch_justjoinit(
     session: AsyncSession, source: Source, force_refresh: bool
 ) -> IngestionResult:
-    return await run_justjoinit_ingestion(session, source)
+    return await justjoinit.run_justjoinit_ingestion(session, source)
 
 
 async def _dispatch_nofluffjobs(
     session: AsyncSession, source: Source, force_refresh: bool
 ) -> IngestionResult:
-    return await run_nofluffjobs_ingestion(session, source)
+    return await nofluffjobs.run_nofluffjobs_ingestion(session, source)
 
 
-CONNECTOR_REGISTRY: dict[str, DispatchFn] = {
+CONNECTOR_REGISTRY: dict[str, Connector] = {
     SOLID_JOBS: _dispatch_solid_jobs,
     JUSTJOINIT: _dispatch_justjoinit,
     NOFLUFFJOBS: _dispatch_nofluffjobs,

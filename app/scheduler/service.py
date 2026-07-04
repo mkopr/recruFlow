@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import Source
 from app.db.session import get_engine, get_sessionmaker
 from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
-from app.scheduler.registry import dispatch_ingestion, resolve_source_by_connector
+from app.ingestion.registry import dispatch_ingestion, resolve_source_by_connector
 from app.scheduler.runs import finish_run_error, finish_run_ok, start_run
 
 logger = logging.getLogger(__name__)

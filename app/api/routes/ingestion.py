@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
+from app.ingestion.registry import SchedulerLookupError
 from app.ingestion.service import trigger_ingest
-from app.scheduler.registry import SchedulerLookupError
 from app.schemas.ingestion import IngestResponse
 
 router = APIRouter()

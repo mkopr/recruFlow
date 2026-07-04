@@ -2,10 +2,10 @@ import logging
 
 import httpx
 import pytest
+from app.connectors import nofluffjobs
 from app.db.models import Source
 from app.ingestion.normalize import NOFLUFFJOBS
 from app.ingestion.types import IngestionResult as NoFluffJobsIngestionResult
-from app.scheduler import registry
 from app.scheduler.service import ensure_sources_exist, run_source
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,7 +29,7 @@ async def test_scheduled_run_with_zero_offers_logs_warning_and_flags_status(
     async def _fake(session: AsyncSession, source: Source) -> NoFluffJobsIngestionResult:
         return NoFluffJobsIngestionResult(ok=True, fetched=0, created=0)
 
-    monkeypatch.setattr(registry, "run_nofluffjobs_ingestion", _fake)
+    monkeypatch.setattr(nofluffjobs, "run_nofluffjobs_ingestion", _fake)
 
     with caplog.at_level(logging.WARNING, logger="app.scheduler.service"):
         record = await run_source(NOFLUFFJOBS, trigger_type="automatic")

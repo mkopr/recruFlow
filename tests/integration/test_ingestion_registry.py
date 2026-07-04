@@ -2,16 +2,17 @@ from uuid import uuid4
 
 import pytest
 from app.config import get_settings
+from app.connectors import solid_jobs
 from app.db.models import Source
+from app.ingestion import registry
 from app.ingestion.normalize import JUSTJOINIT, SOLID_JOBS
-from app.ingestion.types import IngestionResult
-from app.scheduler import registry
-from app.scheduler.registry import (
+from app.ingestion.registry import (
     SourceNotConfiguredError,
     UnknownConnectorError,
     dispatch_ingestion,
     resolve_source_by_connector,
 )
+from app.ingestion.types import IngestionResult
 from app.scheduler.service import ensure_sources_exist
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -81,7 +82,7 @@ async def test_dispatch_ingestion_solid_jobs_passes_campaign_from_settings(
         captured["campaign"] = campaign
         return IngestionResult(ok=True, fetched=0, created=0)
 
-    monkeypatch.setattr(registry, "run_solid_jobs_ingestion", _fake_run_solid_jobs_ingestion)
+    monkeypatch.setattr(solid_jobs, "run_solid_jobs_ingestion", _fake_run_solid_jobs_ingestion)
 
     result = await dispatch_ingestion(db_session, source)
 

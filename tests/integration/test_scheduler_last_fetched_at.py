@@ -1,10 +1,10 @@
 from datetime import UTC, datetime
 
 import pytest
+from app.connectors import nofluffjobs
 from app.db.models import Source
 from app.ingestion.normalize import NOFLUFFJOBS
 from app.ingestion.types import IngestionResult as NoFluffJobsIngestionResult
-from app.scheduler import registry
 from app.scheduler.service import ensure_sources_exist, run_source
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +24,7 @@ async def test_successful_run_sets_source_last_fetched_at(
     async def _fake(session: AsyncSession, source: Source) -> NoFluffJobsIngestionResult:
         return NoFluffJobsIngestionResult(ok=True, fetched=3, created=2)
 
-    monkeypatch.setattr(registry, "run_nofluffjobs_ingestion", _fake)
+    monkeypatch.setattr(nofluffjobs, "run_nofluffjobs_ingestion", _fake)
 
     await run_source(NOFLUFFJOBS, trigger_type="automatic")
 
@@ -51,7 +51,7 @@ async def test_failed_run_does_not_set_source_last_fetched_at(
     async def _fake(session: AsyncSession, source: Source) -> None:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(registry, "run_nofluffjobs_ingestion", _fake)
+    monkeypatch.setattr(nofluffjobs, "run_nofluffjobs_ingestion", _fake)
 
     await run_source(NOFLUFFJOBS, trigger_type="automatic")
 

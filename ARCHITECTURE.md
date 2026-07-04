@@ -19,9 +19,10 @@ recruFlow/
 │   │   └── seed.py     # idempotent fixture loader (make seed)
 │   ├── schemas/
 │   │   └── scheduler.py  # ManualRunResponse, SourceStatus, SchedulerStatusResponse (P1US6)
-│   └── scheduler/  # APScheduler wiring (P1US6)
+│   ├── ingestion/  # ELT pipeline + dispatch seam (P1US1-7, BUG04)
+│   │   └── registry.py  # CONNECTOR_REGISTRY dispatch seam; dispatch_ingestion, resolve_source_by_connector
+│   └── scheduler/  # APScheduler wiring only (P1US6, BUG04)
 │       ├── triggers.py   # parse_schedule(): config_json["schedule"] -> APScheduler trigger, fail-soft
-│       ├── registry.py   # CONNECTOR_REGISTRY dispatch seam; dispatch_ingestion, resolve_source_by_connector
 │       ├── runs.py       # SchedulerRun row read/write helpers (start_run, finish_run_ok/error, get_latest_run_by_source)
 │       ├── service.py    # ensure_sources_exist, run_source_sync (plain def, see ADR 0005), run_source
 │       └── lifecycle.py  # register_jobs(): one AsyncIOScheduler job per connector-tagged Source
@@ -607,21 +608,27 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   `SchedulerRun.finished_at`'s own semantics rather than gating on "found something new." See
   `docs/adr/0009-justjoinit-incremental-pagination-strategy.md`.
 
-- **Registry/dispatch design** (`app/scheduler/registry.py`) — the seam a future P1US7 ingestion
-  endpoint should reuse, not reimplement: `CONNECTOR_REGISTRY: dict[str, DispatchFn]` maps each
-  connector constant to a private adapter (`_dispatch_solid_jobs`/`_dispatch_justjoinit`/
-  `_dispatch_nofluffjobs`) that calls the matching `run_*_ingestion` and normalises its own,
-  structurally-identical-but-distinct `IngestionResult` dataclass into one shared, frozen
-  `DispatchResult(ok, fetched, created)`. `_dispatch_solid_jobs` is the odd one out — it reads
-  `campaign=get_settings().sjctl_campaign` internally so all three adapters present the same
-  `(session, source) -> DispatchResult` signature despite `solid_jobs` needing an extra keyword
-  argument underneath. `resolve_source_by_connector(session, connector) -> Source` raises
-  `UnknownConnectorError` if `connector` isn't a `CONNECTOR_REGISTRY` key at all, `
-  SourceNotConfiguredError` if it's a known connector with no matching `Source` row yet, and
+- **Registry/dispatch design** (`app/ingestion/registry.py`, moved from `app/scheduler/registry.py`
+  by BUG04 — the ingestion package now owns the dispatch seam its name always promised, and
+  `app/scheduler` is left with only APScheduler job registration and run-tracking, per ADR 0006) —
+  the seam every "run a connector" flow reuses, not reimplements: `CONNECTOR_REGISTRY: dict[str,
+  Connector]` maps each connector constant to a private adapter (`_dispatch_solid_jobs`/
+  `_dispatch_justjoinit`/`_dispatch_nofluffjobs`) satisfying the `Connector` protocol
+  (`async def(session, source, force_refresh) -> IngestionResult`) that calls the matching
+  `run_*_ingestion` through a qualified module reference (e.g. `solid_jobs.run_solid_jobs_ingestion`,
+  not a name imported into `registry`'s own namespace) — a declared interface rather than an
+  accident of import binding, and the reason tests now patch `app.connectors.<name>.run_*_ingestion`
+  directly instead of `registry`'s copy of the name. `_dispatch_solid_jobs` is the odd one out — it
+  reads `campaign=get_settings().sjctl_campaign` internally so all three adapters present the same
+  `(session, source, force_refresh) -> IngestionResult` signature despite `solid_jobs` needing an
+  extra keyword argument underneath. `resolve_source_by_connector(session, connector) -> Source`
+  raises `UnknownConnectorError` if `connector` isn't a `CONNECTOR_REGISTRY` key at all,
+  `SourceNotConfiguredError` if it's a known connector with no matching `Source` row yet, and
   otherwise returns the row; `dispatch_ingestion(session, source)` assumes the caller already
   resolved/validated `source.connector` (asserts non-`None`) and calls straight through the
-  registry. **P1US7's `POST /ingest/{source}` should call `resolve_source_by_connector` +
-  `dispatch_ingestion` directly** rather than duplicating connector-selection logic.
+  registry. Both `app.scheduler.service` and `app/api/routes/ingestion.py` call
+  `resolve_source_by_connector` + `dispatch_ingestion` directly rather than duplicating
+  connector-selection logic.
 
 - **Non-blocking execution model — why job callables are plain `def`, not `async def`**: see
   `docs/adr/0005-scheduler-jobs-must-be-plain-sync-callables.md` for the full reasoning; summary
@@ -695,7 +702,7 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
 
 - **`POST /ingest/{source}`** (`app/api/routes/ingestion.py` + `app/ingestion/service.py`) reuses
   P1US6's dispatch seam directly — `resolve_source_by_connector` + `dispatch_ingestion`
-  (`app/scheduler/registry.py`) — rather than `app.scheduler.service.run_source`, and deliberately
+  (`app/ingestion/registry.py`) — rather than `app.scheduler.service.run_source`, and deliberately
   does **not** write to `scheduler_runs`. This is a separate, lighter-weight, job-seeker-facing
   trigger, distinct from the scheduler subsystem's own audited manual trigger at
   `POST /scheduler/run/{source}`; see

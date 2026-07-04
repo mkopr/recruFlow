@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from app.api.deps import SessionDep
 from app.db.models import Source
-from app.scheduler.registry import SchedulerLookupError
+from app.ingestion.registry import SchedulerLookupError
 from app.scheduler.runs import get_latest_run_by_source
 from app.scheduler.service import run_source
 from app.schemas.scheduler import ManualRunResponse, SchedulerStatusResponse, SourceStatus

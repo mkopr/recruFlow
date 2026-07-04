@@ -5,13 +5,14 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from app.connectors import justjoinit, nofluffjobs, solid_jobs
 from app.db.models import Source
 from app.db.session import get_engine, get_sessionmaker
+from app.ingestion import registry
 from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
 from app.ingestion.types import IngestionResult as JustJoinItIngestionResult
 from app.ingestion.types import IngestionResult as NoFluffJobsIngestionResult
 from app.ingestion.types import IngestionResult as SolidJobsIngestionResult
-from app.scheduler import registry
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,7 +29,7 @@ async def test_run_source_now_returns_200_and_updates_status(
     async def _fake(session: AsyncSession, source: Source) -> JustJoinItIngestionResult:
         return JustJoinItIngestionResult(ok=True, fetched=2, created=1)
 
-    monkeypatch.setattr(registry, "run_justjoinit_ingestion", _fake)
+    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake)
 
     response = await scheduled_client.post("/scheduler/run/justjoinit")
     assert response.status_code == 200
@@ -143,7 +144,7 @@ async def test_run_source_now_zero_result_flags_warning_in_status(
     async def _fake(session: AsyncSession, source: Source) -> NoFluffJobsIngestionResult:
         return NoFluffJobsIngestionResult(ok=True, fetched=0, created=0)
 
-    monkeypatch.setattr(registry, "run_nofluffjobs_ingestion", _fake)
+    monkeypatch.setattr(nofluffjobs, "run_nofluffjobs_ingestion", _fake)
 
     with caplog.at_level(logging.WARNING, logger="app.scheduler.service"):
         response = await scheduled_client.post("/scheduler/run/nofluffjobs")
@@ -171,7 +172,7 @@ async def test_run_source_now_connector_exception_records_error_status_not_stuck
     ) -> SolidJobsIngestionResult:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(registry, "run_solid_jobs_ingestion", _raise)
+    monkeypatch.setattr(solid_jobs, "run_solid_jobs_ingestion", _raise)
 
     response = await scheduled_client.post("/scheduler/run/solid_jobs")
 
@@ -194,7 +195,7 @@ async def test_health_endpoint_responds_during_scheduler_run(
         await asyncio.sleep(1.5)
         return JustJoinItIngestionResult(ok=True, fetched=1, created=1)
 
-    monkeypatch.setattr(registry, "run_justjoinit_ingestion", _slow)
+    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _slow)
 
     run_task = asyncio.create_task(scheduled_client.post("/scheduler/run/justjoinit"))
     await asyncio.sleep(0.2)
