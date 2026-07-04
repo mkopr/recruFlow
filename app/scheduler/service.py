@@ -7,10 +7,10 @@ from typing import Any
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Source
-from app.db.session import get_engine, get_sessionmaker
+from app.db.models import SchedulerRun, Source
+from app.ingestion.lifecycle import run_with_lifecycle
 from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
-from app.ingestion.registry import dispatch_ingestion, resolve_source_by_connector
+from app.ingestion.types import IngestionResult
 from app.scheduler.runs import finish_run_error, finish_run_ok, start_run
 
 logger = logging.getLogger(__name__)
@@ -48,47 +48,48 @@ class SchedulerRunRecord:
 
 
 async def _run_source_async(connector: str, *, trigger_type: str) -> SchedulerRunRecord:
-    engine = get_engine()
-    try:
-        sessionmaker = get_sessionmaker(engine)
-        async with sessionmaker() as session:
-            source = await resolve_source_by_connector(session, connector)
-            run = await start_run(session, source.id, trigger_type=trigger_type)
-            await session.commit()
+    run: SchedulerRun | None = None
 
-            try:
-                result = await dispatch_ingestion(session, source)
-            except Exception as exc:
-                await finish_run_error(session, run, error_message=str(exc))
-                await session.commit()
-            else:
-                warning = result.fetched == 0
-                await finish_run_ok(
-                    session, run, fetched=result.fetched, created=result.created, warning=warning
-                )
-                source.last_fetched_at = datetime.now(UTC)
-                await session.commit()
-                if warning:
-                    logger.warning(
-                        "connector %r returned zero results on this run, possible source breakage",
-                        connector,
-                    )
+    async def before_dispatch(session: AsyncSession, source: Source) -> None:
+        nonlocal run
+        run = await start_run(session, source.id, trigger_type=trigger_type)
 
-            return SchedulerRunRecord(
-                id=run.id,
-                source_id=run.source_id,
-                connector=connector,
-                trigger_type=run.trigger_type,
-                status=run.status,
-                fetched=run.fetched_count,
-                created=run.created_count,
-                warning=run.warning,
-                error_message=run.error_message,
-                started_at=run.started_at,
-                finished_at=run.finished_at,
+    async def on_success(session: AsyncSession, source: Source, result: IngestionResult) -> None:
+        assert run is not None
+        warning = result.fetched == 0
+        await finish_run_ok(
+            session, run, fetched=result.fetched, created=result.created, warning=warning
+        )
+        source.last_fetched_at = datetime.now(UTC)
+        if warning:
+            logger.warning(
+                "connector %r returned zero results on this run, possible source breakage",
+                connector,
             )
-    finally:
-        await engine.dispose()
+
+    async def on_error(session: AsyncSession, source: Source, exc: Exception) -> None:
+        assert run is not None
+        await finish_run_error(session, run, error_message=str(exc))
+        await session.commit()
+
+    await run_with_lifecycle(
+        connector, before_dispatch=before_dispatch, on_success=on_success, on_error=on_error
+    )
+
+    assert run is not None
+    return SchedulerRunRecord(
+        id=run.id,
+        source_id=run.source_id,
+        connector=connector,
+        trigger_type=run.trigger_type,
+        status=run.status,
+        fetched=run.fetched_count,
+        created=run.created_count,
+        warning=run.warning,
+        error_message=run.error_message,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+    )
 
 
 def run_source_sync(connector: str, *, trigger_type: str) -> SchedulerRunRecord:

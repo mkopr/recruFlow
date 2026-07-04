@@ -723,6 +723,23 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   on-demand "Fetch now" click is exactly the kind of successful fetch that checkpoint needs to
   reflect; leaving it scheduler-runs-only would make the Offers page's own source-status display
   go stale immediately after the button it sits next to was clicked.
+
+- **Shared engine/session/dispatch lifecycle (BUG05)**: `_trigger_ingest_async` and
+  `_run_source_async` both need the throwaway-engine/sessionmaker/`resolve_source_by_connector`/
+  `dispatch_ingestion`/commit/`engine.dispose()` scaffolding described above; that plumbing now
+  lives in one place, `app.ingestion.lifecycle.run_with_lifecycle(connector, force_refresh=...,
+  before_dispatch=..., on_success=..., on_error=...)`, so the two flows differ only in the
+  run-tracking hooks they pass — not in ~30 lines of copy-pasted lifecycle code. This does **not**
+  change the ADR 0006 boundary: `_trigger_ingest_async` still passes no `before_dispatch` and an
+  `on_success` that conditionally sets `last_fetched_at` (only if `result.ok`); `_run_source_async`
+  still plugs `start_run` into `before_dispatch` and `finish_run_ok`/`finish_run_error` into
+  `on_success`/`on_error`, unconditionally setting `last_fetched_at` in the success branch
+  regardless of `result.ok` (see the zero-result-warning note above — this asymmetry between the
+  two flows predates and is preserved by this refactor, not introduced by it). `on_error` owns its
+  own commit/rollback rather than the helper doing it uniformly, because the two callers disagree:
+  `_trigger_ingest_async`'s hook rolls back and logs without committing (matching its early-return
+  shape), `_run_source_async`'s hook calls `finish_run_error` and commits — the one lifecycle stage
+  that is not actually identical between the two flows.
   Response shape:
 
   ```bash
