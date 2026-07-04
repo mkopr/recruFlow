@@ -276,6 +276,57 @@ async def test_run_justjoinit_ingestion_stops_pagination_after_consecutive_alrea
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_run_justjoinit_ingestion_force_refresh_bypasses_early_stop(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Same already-seen setup as the early-stop test above, but with force_refresh=True: the
+    # third page (from=4) must now be requested instead of the loop stopping after page 2.
+    source = await _create_source(
+        db_session,
+        config_json={
+            "page_size": 2,
+            "already_seen_stop_threshold": 2,
+            "rate_limit_delay_seconds": 0,
+        },
+    )
+    already_seen_offers = [_raw_offer(), _raw_offer()]
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda *a, **kw: _FakeResponse(
+            json_data=_paged_payload(already_seen_offers, next_cursor=None)
+        ),
+    )
+    await run_justjoinit_ingestion(db_session, source)
+    await db_session.commit()
+
+    new_offer = _raw_offer()
+    calls: list[int] = []
+
+    def _fake_get(url: str, *, params: dict[str, Any], **kw: Any) -> _FakeResponse:
+        cursor = params["from"]
+        calls.append(cursor)
+        if cursor == 0:
+            return _FakeResponse(json_data=_paged_payload(already_seen_offers, next_cursor=2))
+        if cursor == 2:
+            return _FakeResponse(json_data=_paged_payload(already_seen_offers, next_cursor=4))
+        if cursor == 4:
+            return _FakeResponse(json_data=_paged_payload([new_offer], next_cursor=None))
+        raise AssertionError(f"unexpected page request from={cursor}")
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+
+    result = await run_justjoinit_ingestion(db_session, source, force_refresh=True)
+    await db_session.commit()
+
+    assert calls == [0, 2, 4]
+    assert result.ok is True
+    assert result.fetched == 5
+    assert result.created == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_run_justjoinit_ingestion_respects_max_pages_ceiling(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:

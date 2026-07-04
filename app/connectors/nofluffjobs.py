@@ -121,7 +121,12 @@ async def _persist_offers(
     return created_count
 
 
-async def run_nofluffjobs_ingestion(session: AsyncSession, source: Source) -> IngestionResult:
+async def run_nofluffjobs_ingestion(
+    session: AsyncSession, source: Source, *, force_refresh: bool = False
+) -> IngestionResult:
+    # force_refresh is accepted for interface parity with the other connectors but has no effect
+    # here: unlike JustJoin.it's early-stop pagination, this connector has no incremental
+    # checkpoint to bypass -- every call already issues one full live fetch (see ADR 0009).
     config = source.config_json or {}
     url = config.get("endpoint_url", NOFLUFFJOBS_OFFERS_URL)
     page_size = int(config.get("page_size", 100))

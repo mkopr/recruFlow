@@ -26,7 +26,9 @@ def _enable_logger() -> None:
 async def test_run_source_now_returns_200_and_updates_status(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def _fake(session: AsyncSession, source: Source) -> JustJoinItIngestionResult:
+    async def _fake(
+        session: AsyncSession, source: Source, *, force_refresh: bool = False
+    ) -> JustJoinItIngestionResult:
         return JustJoinItIngestionResult(ok=True, fetched=2, created=1)
 
     monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake)
@@ -141,7 +143,9 @@ async def test_run_source_now_zero_result_flags_warning_in_status(
 ) -> None:
     _enable_logger()
 
-    async def _fake(session: AsyncSession, source: Source) -> NoFluffJobsIngestionResult:
+    async def _fake(
+        session: AsyncSession, source: Source, *, force_refresh: bool = False
+    ) -> NoFluffJobsIngestionResult:
         return NoFluffJobsIngestionResult(ok=True, fetched=0, created=0)
 
     monkeypatch.setattr(nofluffjobs, "run_nofluffjobs_ingestion", _fake)
@@ -191,7 +195,9 @@ async def test_run_source_now_connector_exception_records_error_status_not_stuck
 async def test_health_endpoint_responds_during_scheduler_run(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def _slow(session: AsyncSession, source: Source) -> JustJoinItIngestionResult:
+    async def _slow(
+        session: AsyncSession, source: Source, *, force_refresh: bool = False
+    ) -> JustJoinItIngestionResult:
         await asyncio.sleep(1.5)
         return JustJoinItIngestionResult(ok=True, fetched=1, created=1)
 

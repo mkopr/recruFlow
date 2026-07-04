@@ -26,7 +26,9 @@ def _unique_url(path: str) -> str:
 async def test_ingest_triggers_fetch_and_returns_new_updated_count(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def _fake(session: AsyncSession, source: Source) -> JustJoinItIngestionResult:
+    async def _fake(
+        session: AsyncSession, source: Source, *, force_refresh: bool = False
+    ) -> JustJoinItIngestionResult:
         return JustJoinItIngestionResult(ok=True, fetched=5, created=3)
 
     monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake)
@@ -109,7 +111,9 @@ async def test_ingest_solid_jobs_passes_force_refresh_true(
 async def test_ingest_sets_source_last_fetched_at_on_success(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def _fake(session: AsyncSession, source: Source) -> JustJoinItIngestionResult:
+    async def _fake(
+        session: AsyncSession, source: Source, *, force_refresh: bool = False
+    ) -> JustJoinItIngestionResult:
         return JustJoinItIngestionResult(ok=True, fetched=1, created=1)
 
     monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake)
@@ -132,7 +136,9 @@ async def test_ingest_does_not_set_source_last_fetched_at_on_failure(
         entry["connector"]: entry["last_fetched_at"] for entry in status_before.json()["sources"]
     }
 
-    async def _fake(session: AsyncSession, source: Source) -> JustJoinItIngestionResult:
+    async def _fake(
+        session: AsyncSession, source: Source, *, force_refresh: bool = False
+    ) -> JustJoinItIngestionResult:
         raise RuntimeError("boom")
 
     monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake)
@@ -177,7 +183,9 @@ async def test_ingest_known_connector_without_configured_source_returns_404(
 async def test_ingest_connector_exception_returns_200_ok_false_with_error_message(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def _fake(session: AsyncSession, source: Source) -> NoFluffJobsIngestionResult:
+    async def _fake(
+        session: AsyncSession, source: Source, *, force_refresh: bool = False
+    ) -> NoFluffJobsIngestionResult:
         raise RuntimeError("boom")
 
     monkeypatch.setattr(nofluffjobs, "run_nofluffjobs_ingestion", _fake)
@@ -197,7 +205,9 @@ async def test_ingest_connector_exception_returns_200_ok_false_with_error_messag
 async def test_health_endpoint_responds_during_ingest_run(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def _fake(session: AsyncSession, source: Source) -> JustJoinItIngestionResult:
+    async def _fake(
+        session: AsyncSession, source: Source, *, force_refresh: bool = False
+    ) -> JustJoinItIngestionResult:
         await asyncio.sleep(1.5)
         return JustJoinItIngestionResult(ok=True, fetched=1, created=1)
 

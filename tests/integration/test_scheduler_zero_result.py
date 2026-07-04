@@ -26,7 +26,9 @@ async def test_scheduled_run_with_zero_offers_logs_warning_and_flags_status(
     await ensure_sources_exist(db_session)
     await db_session.commit()
 
-    async def _fake(session: AsyncSession, source: Source) -> NoFluffJobsIngestionResult:
+    async def _fake(
+        session: AsyncSession, source: Source, *, force_refresh: bool = False
+    ) -> NoFluffJobsIngestionResult:
         return NoFluffJobsIngestionResult(ok=True, fetched=0, created=0)
 
     monkeypatch.setattr(nofluffjobs, "run_nofluffjobs_ingestion", _fake)

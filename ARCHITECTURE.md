@@ -351,6 +351,11 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   gracefully — keeping whatever was already fetched — if a page fetch fails after the first page
   succeeded (this is what actually absorbs the `meta.next.cursor` lie at the 10,000 boundary); only
   a first-page failure marks the whole result `ok=False`.
+- **`force_refresh=True` bypasses the early-stop checkpoint (BUG06)**:
+  `run_justjoinit_ingestion(..., force_refresh=True)` skips the consecutive-already-seen check
+  entirely, so pagination only stops on `cursor is None` or the `max_pages` ceiling — a genuine
+  "re-walk the full catalog" behavior, not a no-op. See
+  `docs/adr/0010-force-refresh-threaded-through-all-connectors.md`.
 - **Field mapping** (`map_justjoinit_offer`), from the confirmed list-item shape:
 
   | `Offer` field | Source field(s) | Notes |
@@ -629,6 +634,18 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   registry. Both `app.scheduler.service` and `app/api/routes/ingestion.py` call
   `resolve_source_by_connector` + `dispatch_ingestion` directly rather than duplicating
   connector-selection logic.
+
+- **`force_refresh` is now genuinely threaded through every connector, not just `solid_jobs`
+  (BUG06)** — `_dispatch_justjoinit`/`_dispatch_nofluffjobs` used to accept `force_refresh` (to
+  satisfy the shared `Connector` protocol) and then silently drop it, so the interface promised
+  uniform behavior none of the connectors but `solid_jobs` actually had. Fixed per-connector, not
+  by dropping the parameter, since JustJoin.it turned out to have real meaning to give it:
+  `run_justjoinit_ingestion(..., force_refresh=True)` now bypasses the BUG02/ADR0009 early-stop
+  checkpoint, walking pagination all the way to `max_pages` regardless of the
+  consecutive-already-seen streak — see `docs/adr/0010-force-refresh-threaded-through-all-connectors.md`.
+  NoFluffJobs has no equivalent checkpoint to bypass (no pagination loop at all, per BUG02/ADR0009
+  above), so `run_nofluffjobs_ingestion` accepts `force_refresh` for interface parity and documents
+  in-line why it's a deliberate no-op rather than continuing to swallow it silently one layer down.
 
 - **Non-blocking execution model — why job callables are plain `def`, not `async def`**: see
   `docs/adr/0005-scheduler-jobs-must-be-plain-sync-callables.md` for the full reasoning; summary

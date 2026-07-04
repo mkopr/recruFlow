@@ -21,7 +21,9 @@ async def test_successful_run_sets_source_last_fetched_at(
 
     before = datetime.now(UTC)
 
-    async def _fake(session: AsyncSession, source: Source) -> NoFluffJobsIngestionResult:
+    async def _fake(
+        session: AsyncSession, source: Source, *, force_refresh: bool = False
+    ) -> NoFluffJobsIngestionResult:
         return NoFluffJobsIngestionResult(ok=True, fetched=3, created=2)
 
     monkeypatch.setattr(nofluffjobs, "run_nofluffjobs_ingestion", _fake)
@@ -48,7 +50,7 @@ async def test_failed_run_does_not_set_source_last_fetched_at(
         .last_fetched_at
     )
 
-    async def _fake(session: AsyncSession, source: Source) -> None:
+    async def _fake(session: AsyncSession, source: Source, *, force_refresh: bool = False) -> None:
         raise RuntimeError("boom")
 
     monkeypatch.setattr(nofluffjobs, "run_nofluffjobs_ingestion", _fake)

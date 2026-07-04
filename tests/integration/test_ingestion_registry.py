@@ -2,10 +2,10 @@ from uuid import uuid4
 
 import pytest
 from app.config import get_settings
-from app.connectors import solid_jobs
+from app.connectors import justjoinit, nofluffjobs, solid_jobs
 from app.db.models import Source
 from app.ingestion import registry
-from app.ingestion.normalize import JUSTJOINIT, SOLID_JOBS
+from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
 from app.ingestion.registry import (
     SourceNotConfiguredError,
     UnknownConnectorError,
@@ -87,4 +87,54 @@ async def test_dispatch_ingestion_solid_jobs_passes_campaign_from_settings(
     result = await dispatch_ingestion(db_session, source)
 
     assert captured["campaign"] == get_settings().sjctl_campaign
+    assert result == IngestionResult(ok=True, fetched=0, created=0)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_dispatch_ingestion_threads_force_refresh_to_justjoinit(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = Source(name=f"justjoinit-{uuid4()}", connector=JUSTJOINIT, config_json={})
+    db_session.add(source)
+    await db_session.flush()
+
+    captured: dict[str, bool] = {}
+
+    async def _fake_run_justjoinit_ingestion(
+        session: AsyncSession, src: Source, *, force_refresh: bool = False
+    ) -> IngestionResult:
+        captured["force_refresh"] = force_refresh
+        return IngestionResult(ok=True, fetched=0, created=0)
+
+    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake_run_justjoinit_ingestion)
+
+    result = await dispatch_ingestion(db_session, source, force_refresh=True)
+
+    assert captured["force_refresh"] is True
+    assert result == IngestionResult(ok=True, fetched=0, created=0)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_dispatch_ingestion_threads_force_refresh_to_nofluffjobs(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = Source(name=f"nofluffjobs-{uuid4()}", connector=NOFLUFFJOBS, config_json={})
+    db_session.add(source)
+    await db_session.flush()
+
+    captured: dict[str, bool] = {}
+
+    async def _fake_run_nofluffjobs_ingestion(
+        session: AsyncSession, src: Source, *, force_refresh: bool = False
+    ) -> IngestionResult:
+        captured["force_refresh"] = force_refresh
+        return IngestionResult(ok=True, fetched=0, created=0)
+
+    monkeypatch.setattr(nofluffjobs, "run_nofluffjobs_ingestion", _fake_run_nofluffjobs_ingestion)
+
+    result = await dispatch_ingestion(db_session, source, force_refresh=True)
+
+    assert captured["force_refresh"] is True
     assert result == IngestionResult(ok=True, fetched=0, created=0)

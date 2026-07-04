@@ -210,6 +210,31 @@ async def test_run_nofluffjobs_ingestion_dedups_on_reingest(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_run_nofluffjobs_ingestion_accepts_force_refresh_as_a_no_op(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # NoFluffJobs has no incremental checkpoint to bypass (ADR 0009/0010): force_refresh must be
+    # accepted (interface parity with the other connectors) but must not change the single-fetch
+    # behavior or request params.
+    source = await _create_source(db_session)
+    offer = _raw_offer()
+    captured_params: list[dict[str, Any]] = []
+
+    def _fake_get(*a: Any, **kw: Any) -> _FakeResponse:
+        captured_params.append(dict(kw.get("params") or {}))
+        return _FakeResponse(json_data=_offers_payload([offer]))
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+
+    result = await run_nofluffjobs_ingestion(db_session, source, force_refresh=True)
+    await db_session.commit()
+
+    assert result == IngestionResult(ok=True, fetched=1, created=1)
+    assert len(captured_params) == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_run_nofluffjobs_ingestion_uses_page_size_from_config(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:

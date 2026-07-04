@@ -172,7 +172,9 @@ async def _persist_offers(
     return created_count, consecutive_already_seen
 
 
-async def run_justjoinit_ingestion(session: AsyncSession, source: Source) -> IngestionResult:
+async def run_justjoinit_ingestion(
+    session: AsyncSession, source: Source, *, force_refresh: bool = False
+) -> IngestionResult:
     config = source.config_json or {}
     url = config.get("endpoint_url", JUSTJOINIT_OFFERS_URL)
     page_size = int(config.get("page_size", 100))
@@ -204,7 +206,10 @@ async def run_justjoinit_ingestion(session: AsyncSession, source: Source) -> Ing
             session, source.id, offers, consecutive_already_seen
         )
         total_created += created_count
-        if consecutive_already_seen >= already_seen_stop_threshold:
+        # force_refresh bypasses the BUG02/ADR0009 incremental checkpoint: a caller explicitly
+        # asking for a fresh fetch wants the full catalog re-walked, not an early exit the moment
+        # it looks like we've caught up.
+        if not force_refresh and consecutive_already_seen >= already_seen_stop_threshold:
             logger.info(
                 "JustJoin.it pagination stopped early: caught up to %d already-seen offers",
                 consecutive_already_seen,

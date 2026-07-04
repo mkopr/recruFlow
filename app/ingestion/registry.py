@@ -39,13 +39,13 @@ async def _dispatch_solid_jobs(
 async def _dispatch_justjoinit(
     session: AsyncSession, source: Source, force_refresh: bool
 ) -> IngestionResult:
-    return await justjoinit.run_justjoinit_ingestion(session, source)
+    return await justjoinit.run_justjoinit_ingestion(session, source, force_refresh=force_refresh)
 
 
 async def _dispatch_nofluffjobs(
     session: AsyncSession, source: Source, force_refresh: bool
 ) -> IngestionResult:
-    return await nofluffjobs.run_nofluffjobs_ingestion(session, source)
+    return await nofluffjobs.run_nofluffjobs_ingestion(session, source, force_refresh=force_refresh)
 
 
 CONNECTOR_REGISTRY: dict[str, Connector] = {
