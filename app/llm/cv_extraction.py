@@ -41,15 +41,19 @@ def _build_chain() -> Runnable[list[BaseMessage], CVExtraction]:
     return llm.with_structured_output(CVExtraction, method="json_schema")  # type: ignore[return-value]
 
 
+def _describe(exc: Exception) -> str:
+    return str(exc) or exc.__class__.__name__
+
+
 async def _call_llm(cv_text: str) -> CVExtraction:
     try:
         return await _build_chain().ainvoke(_build_messages(cv_text))
     except (httpx.HTTPError, OSError) as exc:
         logger.error("CV extraction LLM call failed: %s", exc, exc_info=True)
-        raise CVExtractionError(f"CV extraction failed: {exc}") from exc
+        raise CVExtractionError(f"CV extraction failed: {_describe(exc)}") from exc
     except Exception as exc:
         logger.error("CV extraction LLM call failed unexpectedly: %s", exc, exc_info=True)
-        raise CVExtractionError(f"CV extraction failed: {exc}") from exc
+        raise CVExtractionError(f"CV extraction failed: {_describe(exc)}") from exc
 
 
 async def extract_profile_from_cv_text(cv_text: str) -> Profile:

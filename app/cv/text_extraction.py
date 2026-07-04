@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 
 import docx
-from pypdf import PdfReader
+import pdfplumber
 
 logger = logging.getLogger(__name__)
 
@@ -13,8 +13,8 @@ class UnsupportedFileTypeError(Exception):
 
 
 def _extract_pdf_text(content: bytes) -> str:
-    reader = PdfReader(io.BytesIO(content))
-    return "\n".join(page.extract_text() or "" for page in reader.pages)
+    with pdfplumber.open(io.BytesIO(content)) as pdf:
+        return "\n".join(page.extract_text() or "" for page in pdf.pages)
 
 
 def _extract_docx_text(content: bytes) -> str:

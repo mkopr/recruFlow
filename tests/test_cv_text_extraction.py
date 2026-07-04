@@ -3,6 +3,7 @@ import io
 import docx
 import pytest
 from app.cv.text_extraction import UnsupportedFileTypeError, extract_cv_text
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
 
 
@@ -18,6 +19,33 @@ def test_extract_cv_text_from_pdf_returns_text() -> None:
 
     assert "Python" in result
     assert "Rust" in result
+
+
+def _draw_char_by_char(c: canvas.Canvas, x: float, y: float, text: str, size: int = 12) -> None:
+    """Draw each glyph as its own positioned text-show operator.
+
+    Reproduces the per-glyph text-positioning some CV-builder exports use, which is
+    what caused pypdf's extract_text() to shred real CVs into single letters (BUG08).
+    """
+    cursor = x
+    for ch in text:
+        c.drawString(cursor, y, ch)
+        cursor += stringWidth(ch, "Helvetica", size)
+
+
+def test_extract_cv_text_from_pdf_with_per_glyph_positioning_does_not_shred_words() -> None:
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf)
+    _draw_char_by_char(c, 72, 720, "Python")
+    _draw_char_by_char(c, 72, 700, "Rust")
+    c.showPage()
+    c.save()
+
+    result = extract_cv_text("cv.pdf", buf.getvalue())
+
+    assert "Python" in result
+    assert "Rust" in result
+    assert "P y t h o n" not in result
 
 
 def test_extract_cv_text_from_docx_returns_text() -> None:

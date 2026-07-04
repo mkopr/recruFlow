@@ -40,6 +40,20 @@ async def test_extract_profile_from_cv_text_wraps_llm_failure(
         await extract_profile_from_cv_text("irrelevant text")
 
 
+@pytest.mark.asyncio
+async def test_extract_profile_from_cv_text_reports_timeout_class_when_str_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _TimingOutChain:
+        async def ainvoke(self, messages: list[BaseMessage]) -> CVExtraction:
+            raise httpx.ReadTimeout("")
+
+    monkeypatch.setattr("app.llm.cv_extraction._build_chain", lambda: _TimingOutChain())
+
+    with pytest.raises(CVExtractionError, match="CV extraction failed: ReadTimeout"):
+        await extract_profile_from_cv_text("irrelevant text")
+
+
 def test_build_messages_includes_facts_only_instruction() -> None:
     messages = _build_messages("some cv text")
 
