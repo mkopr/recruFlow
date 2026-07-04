@@ -672,7 +672,12 @@ export interface operations {
   };
   put_profile_profile_put: {
     parameters: {
-      query?: never;
+      query?: {
+        /** @description Target a specific profile row instead of the currently active one; required when editing a draft that is not yet active */
+        profile_id?: number | null;
+        /** @description Whether this save should also make the target profile the active one */
+        activate?: boolean;
+      };
       header?: never;
       path?: never;
       cookie?: never;

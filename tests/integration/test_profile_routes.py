@@ -144,3 +144,97 @@ async def test_put_profile_activating_second_profile_deactivates_first(
     )
     assert len(active_rows) == 1
     assert active_rows[0].id == row_a.id
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_put_profile_with_profile_id_and_activate_false_leaves_other_active_profile_unchanged(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await _reset_test_profiles(db_session)
+    active_row = ProfileModel(
+        name=DEFAULT_PROFILE_NAME,
+        status="active",
+        is_active=True,
+        data={"location_preference": "Warsaw"},
+    )
+    draft_row = ProfileModel(name="draft-under-test", status="draft", is_active=False, data={})
+    db_session.add_all([active_row, draft_row])
+    await db_session.commit()
+
+    response = await client.put(
+        "/profile",
+        params={"profile_id": draft_row.id, "activate": "false"},
+        json={"location_preference": "Krakow"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == draft_row.id
+    assert body["is_active"] is False
+    assert body["profile"]["location_preference"] == "Krakow"
+
+    get_response = await client.get("/profile")
+    assert get_response.json()["profile"]["location_preference"] == "Warsaw"
+
+    await db_session.execute(delete(ProfileModel).where(ProfileModel.name == "draft-under-test"))
+    await db_session.commit()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_put_profile_with_profile_id_and_activate_true_promotes_target_profile(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await _reset_test_profiles(db_session)
+    active_row = ProfileModel(
+        name=DEFAULT_PROFILE_NAME,
+        status="active",
+        is_active=True,
+        data={"location_preference": "Warsaw"},
+    )
+    draft_row = ProfileModel(name="draft-under-test", status="draft", is_active=False, data={})
+    db_session.add_all([active_row, draft_row])
+    await db_session.commit()
+
+    response = await client.put(
+        "/profile",
+        params={"profile_id": draft_row.id, "activate": "true"},
+        json={"location_preference": "Krakow"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["is_active"] is True
+
+    get_response = await client.get("/profile")
+    assert get_response.json()["profile"]["location_preference"] == "Krakow"
+
+    await db_session.execute(delete(ProfileModel).where(ProfileModel.name == "draft-under-test"))
+    await db_session.commit()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_put_profile_unknown_profile_id_returns_404(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await _reset_test_profiles(db_session)
+
+    response = await client.put(
+        "/profile", params={"profile_id": 999_999}, json={"location_preference": "Krakow"}
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_put_profile_default_params_still_activate_current_behavior(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await _reset_test_profiles(db_session)
+
+    response = await client.put("/profile", json={"location_preference": "Poznan"})
+
+    assert response.status_code == 200
+    assert response.json()["is_active"] is True

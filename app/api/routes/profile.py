@@ -1,11 +1,16 @@
 from typing import Annotated
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 from app.api.deps import SessionDep
 from app.cv.text_extraction import UnsupportedFileTypeError, extract_cv_text
 from app.db.models import Profile as ProfileModel
-from app.db.profile_repo import create_draft_profile, get_active_profile, upsert_active_profile
+from app.db.profile_repo import (
+    ProfileNotFoundError,
+    create_draft_profile,
+    get_active_profile,
+    upsert_profile,
+)
 from app.llm.cv_extraction import CVExtractionError, extract_profile_from_cv_text
 from app.schemas.profile import Profile, ProfileResponse
 
@@ -33,8 +38,25 @@ async def get_profile(session: SessionDep) -> ProfileResponse | None:
 
 
 @router.put("/profile")
-async def put_profile(payload: Profile, session: SessionDep) -> ProfileResponse:
-    row = await upsert_active_profile(session, payload)
+async def put_profile(
+    payload: Profile,
+    session: SessionDep,
+    profile_id: int | None = Query(
+        default=None,
+        description=(
+            "Target a specific profile row instead of the currently active one; "
+            "required when editing a draft that is not yet active"
+        ),
+    ),
+    activate: bool = Query(
+        default=True,
+        description="Whether this save should also make the target profile the active one",
+    ),
+) -> ProfileResponse:
+    try:
+        row = await upsert_profile(session, payload, profile_id=profile_id, activate=activate)
+    except ProfileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     await session.commit()
     return _profile_response(row)
 

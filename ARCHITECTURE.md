@@ -984,6 +984,30 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   is already active, it updates that row's `data` in place. This is necessary because this story
   ships no seed profile data, so a fresh database has zero profile rows, and `PUT /profile` must
   still work with no prior setup.
+- **`profile_id`/`activate` query parameters (added in P2US3)**: `PUT /profile` gained two
+  optional query parameters, `profile_id: int | None = None` and `activate: bool = True` — both
+  default to the exact values that reproduce this story's original always-edit-and-activate-the-
+  active-profile behavior, so every pre-existing caller and test is unaffected. They exist because
+  P2US3 (the profile editor page) needs to edit a freshly-uploaded, not-yet-active draft (a
+  separate row from whatever is currently active) without either force-activating it or clobbering
+  the real active profile — a case the original single-active-row-only upsert had no way to
+  express. `app/db/profile_repo.py`'s `upsert_profile(session, profile, *, profile_id, activate)`
+  is the underlying primitive: when `profile_id` is given, it loads that exact row (raising
+  `ProfileNotFoundError` — mapped to `404` in the route — if it doesn't exist) instead of looking
+  up "the" active profile; `activate` gates whether `row.status`/`is_active` are touched at all.
+  `activate=False` leaves every row's `is_active` flag completely untouched, which is what makes
+  "Save" a true no-side-effect-on-activation operation. `upsert_active_profile` (US18's original
+  entrypoint) is now a one-line wrapper — `upsert_profile(session, profile, profile_id=None,
+  activate=True)` — so its signature and behavior are unchanged for existing callers.
+- **Idempotent default-row lookup**: when `profile_id` is `None` and no profile is currently
+  active, `upsert_profile` now checks for an existing row named `DEFAULT_PROFILE_NAME` (not just
+  "is any row active") before creating a new one. Without this, two consecutive `activate=False`
+  saves with nothing yet active (e.g. a user clicking "Save" twice before ever clicking "Set as
+  active") would each try to `INSERT` a row named `"active-profile"` and the second would fail
+  `profiles.name`'s unique constraint — caught via manual browser testing of this story, not by
+  the initial test suite, since the repo/route tests each start from an explicitly seeded fixture
+  row rather than the "truly zero profile rows" state a fresh install and repeated unactivated
+  saves reach.
 - **No seed/default profile data**: this story removed `app/db/seed.py`'s previous stub-profile
   seeding (`SEED_PROFILE_NAME`, `_seed_profile`) — the acceptance criteria explicitly forbid
   shipping any seed/default profile content; a profile's content must always originate from a CV
@@ -1047,6 +1071,76 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
 - **No model-selection logic here**: the model name comes from `settings.ollama_model`
   (`app/config.py`), already resolved by ADR 0011 — this story adds no model-detection/fallback
   logic and no test targeting model choice.
+
+### Profile editor page (P2US3)
+
+- **Purpose**: closes Phase 2's CV-upload/edit loop end-to-end — until this story, US18/US19's
+  `GET`/`PUT /profile` and `POST /profile/upload` were API-only, with no way for a human to see or
+  edit a profile. `frontend/src/pages/ProfileEditorPage.tsx` composes a CV upload control with a
+  full `Profile`-field form (skills, past roles, education, certifications, languages,
+  preferences, deal-breakers) and Save/"Set as active" actions, mirroring the
+  page/component/hook/API-wrapper layering P1US8's `OfferListPage` established.
+- **localStorage-plus-`profile_id` draft-persistence design**: "Save" deliberately never activates
+  (see the `PUT /profile` `activate` parameter above), so a saved-but-not-active draft has no
+  `GET /profile`-reachable identity — a plain reload would otherwise lose track of which row was
+  just edited and fall back to whatever *is* active (or a blank form). `frontend/src/hooks/
+  useProfileEditor.ts` closes this gap by caching the full last-known `ProfileResponse` (`id`,
+  `is_active`, `profile`, ...) to `localStorage` (key `recruflow.profileEditor`) after every
+  successful save/activate/upload, and preferring that cached copy over a fresh `GET /profile` on
+  mount. This is why the hook does not call `fetchProfile()` at all when a cached response exists
+  — the cached copy already reflects the last save, which is the entire point of caching it. This
+  is a deliberate, documented complexity (not an accidental one): the alternative would have been
+  a new "get profile by id" GET endpoint plus a URL-based `?profileId=` scheme, rejected as
+  unnecessary API surface for what a client-side cache already solves for a single-user local tool.
+- **`frontend/src/api/profile.ts`**: mirrors `api/offers.ts`'s shape — `fetchProfile`,
+  `saveProfile(profile, { profileId, activate })`, `uploadCv(file)`, each collapsing
+  `openapi-fetch`'s `{data, error}` into a throw-on-error `Promise<T>`. `uploadCv` uses a custom
+  `bodySerializer` to build a `FormData` from the picked `File` (openapi-fetch's documented pattern
+  for a `multipart/form-data` operation) rather than JSON-encoding it. Error messages prefer the
+  backend's own `detail` string (e.g. the `415`/`503` messages `POST /profile/upload` raises) over
+  a generic fallback, falling back only when `detail` isn't a plain string (the `422` validation
+  error shape is a list, not a string, and isn't declared in the generated schema for the `415`/
+  `503` cases since FastAPI only documents responses it's told about via `responses=`).
+- **`frontend/src/hooks/useProfileEditor.ts`**: owns all state and persistence logic so
+  `ProfileEditorPage` only renders. `save()`/`activate()` set `attemptedSubmit=true` and run
+  `validateProfile` first; if `hasValidationErrors`, the API is never called — this is what makes
+  required-field validation actually block a save rather than merely visually warn. Initial
+  hydration reads the `localStorage` cache via a lazy `useState` initializer (not inside a
+  `useEffect` calling `setState` synchronously — `eslint-plugin-react-hooks`'s
+  `react-hooks/set-state-in-effect` rule rejects that pattern) so the cached branch never touches
+  the network at all; the effect only runs (and only calls `fetchProfile()`) when nothing was
+  cached.
+- **`frontend/src/lib/profileValidation.ts`**: pure functions, no I/O (mirrors
+  `app/ingestion/normalize.py`'s "small pure functions" style on the Python side).
+  `validateProfile(profile)` flags each list entry's required sub-field
+  (`Skill.name`/`PastRole.title`+`company`/`Education.institution`/`Certification.name`/
+  `Language.name` — the only "required fields" concept `Profile` has) as blank-after-trim;
+  `hasValidationErrors` reduces that to a single boolean gate.
+- **`frontend/src/lib/triStateBoolean.ts`**: extracted from `OfferFilters.tsx`'s previously
+  locally-defined `remoteToSelectValue`/`selectValueToRemote` now that `PreferencesFields`'s
+  `remote_preference: bool | null` needs the identical `'' | 'true' | 'false'` DOM-select mapping
+  — `boolToSelectValue` treats both `null` and `undefined` as `''` (the wire type is `bool | None`,
+  but the helper accepts either so it composes with `OfferListFilters.remote`'s `boolean |
+  undefined` too). `OfferFilters.tsx` was updated to import this instead of its own copy, since a
+  second real consumer existing is what justifies deduplicating now rather than pre-emptively.
+- **`frontend/src/components/profile/`**: one list-editor component per repeating `Profile` field
+  (`SkillsTable`, `RolesList`, `EducationList`, `CertificationsList`, `LanguagesList`,
+  `DealBreakersList`), each taking the current array plus an `onChange` and performing only
+  immutable updates (`map`/`filter`/spread, never in-place mutation), plus `PreferencesFields`
+  (the non-repeating preference fields) and `CvUploadControl` (a hidden `<input type="file"
+  accept=".pdf,.docx">` plus a visible button, self-contained loading/error state like
+  `FetchNowButton.tsx`). Required-field errors are passed in as parallel boolean (or, for
+  `RolesList`'s two required sub-fields, `{title, company}`) arrays rather than computed inside
+  each component, so `profileValidation.ts` remains the single source of truth for what "invalid"
+  means.
+- **No hardcoded/placeholder form content**: every field starts from either an uploaded draft, a
+  fetched active profile, or a genuinely empty value (`''`/`null`/`[]`) — there is no seed/sample
+  data anywhere in the editor, satisfying this story's own acceptance criterion the same way
+  P2US1 forbade seed profile data at the API layer.
+- **Routing/nav**: `App.tsx` gained a second route (`/profile` → `ProfileEditorPage`) and a small
+  `<nav>` with two links ("Offers"/"Profile") — `OfferListPage` previously had no navigation
+  anywhere else since it was the only page; this is the minimum needed to make two pages mutually
+  reachable, not a general navigation system built ahead of need.
 
 ### `frontend/` project
 

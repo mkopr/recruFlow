@@ -2,21 +2,11 @@ import type { ChangeEvent } from 'react';
 
 import type { OfferListFilters } from '../api/offers';
 import { KNOWN_SOURCES, SENIORITY_LEVELS } from '../constants';
+import { boolToSelectValue, selectValueToBool } from '../lib/triStateBoolean';
 
 interface OfferFiltersProps {
   filters: OfferListFilters;
   onChange: (next: OfferListFilters) => void;
-}
-
-function remoteToSelectValue(remote: boolean | undefined): '' | 'true' | 'false' {
-  if (remote === undefined) return '';
-  return remote ? 'true' : 'false';
-}
-
-function selectValueToRemote(value: string): boolean | undefined {
-  if (value === 'true') return true;
-  if (value === 'false') return false;
-  return undefined;
 }
 
 export function OfferFilters({ filters, onChange }: OfferFiltersProps) {
@@ -26,7 +16,7 @@ export function OfferFilters({ filters, onChange }: OfferFiltersProps) {
   };
 
   const handleRemoteChange = (event: ChangeEvent<HTMLSelectElement>) => {
-    onChange({ ...filters, remote: selectValueToRemote(event.target.value) });
+    onChange({ ...filters, remote: selectValueToBool(event.target.value) });
   };
 
   const handleSeniorityChange = (event: ChangeEvent<HTMLSelectElement>) => {
@@ -62,7 +52,7 @@ export function OfferFilters({ filters, onChange }: OfferFiltersProps) {
         Remote
         <select
           className="input"
-          value={remoteToSelectValue(filters.remote)}
+          value={boolToSelectValue(filters.remote)}
           onChange={handleRemoteChange}
         >
           <option value="">Any</option>

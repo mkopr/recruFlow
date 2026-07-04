@@ -9,11 +9,19 @@ from app.schemas.profile import Profile
 DEFAULT_PROFILE_NAME = "active-profile"
 
 
+class ProfileNotFoundError(Exception):
+    pass
+
+
 async def get_active_profile(session: AsyncSession) -> ProfileModel | None:
     row: ProfileModel | None = await session.scalar(
         select(ProfileModel).where(ProfileModel.is_active.is_(True))
     )
     return row
+
+
+async def get_profile_by_id(session: AsyncSession, profile_id: int) -> ProfileModel | None:
+    return await session.get(ProfileModel, profile_id)
 
 
 async def activate_profile(session: AsyncSession, profile_id: int) -> None:
@@ -25,19 +33,45 @@ async def activate_profile(session: AsyncSession, profile_id: int) -> None:
     )
 
 
-async def upsert_active_profile(session: AsyncSession, profile: Profile) -> ProfileModel:
-    row = await get_active_profile(session)
-    if row is None:
-        row = ProfileModel(name=DEFAULT_PROFILE_NAME, status="active", is_active=False, data={})
-        session.add(row)
-        await session.flush()
+async def upsert_profile(
+    session: AsyncSession,
+    profile: Profile,
+    *,
+    profile_id: int | None,
+    activate: bool,
+) -> ProfileModel:
+    if profile_id is not None:
+        row = await get_profile_by_id(session, profile_id)
+        if row is None:
+            raise ProfileNotFoundError(f"profile {profile_id} not found")
+    else:
+        row = await get_active_profile(session)
+        if row is None:
+            row = await session.scalar(
+                select(ProfileModel).where(ProfileModel.name == DEFAULT_PROFILE_NAME)
+            )
+        if row is None:
+            row = ProfileModel(
+                name=DEFAULT_PROFILE_NAME,
+                status="active" if activate else "draft",
+                is_active=False,
+                data={},
+            )
+            session.add(row)
+            await session.flush()
 
     row.data = profile.model_dump(mode="json")
-    row.status = "active"
+    if activate:
+        row.status = "active"
     await session.flush()
-    await activate_profile(session, row.id)
+    if activate:
+        await activate_profile(session, row.id)
     await session.refresh(row)
     return row
+
+
+async def upsert_active_profile(session: AsyncSession, profile: Profile) -> ProfileModel:
+    return await upsert_profile(session, profile, profile_id=None, activate=True)
 
 
 async def create_draft_profile(session: AsyncSession, profile: Profile) -> ProfileModel:

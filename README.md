@@ -87,6 +87,11 @@ TypeScript strict mode is enabled (`tsconfig.app.json` / `tsconfig.node.json`), 
 done exclusively with Tailwind CSS utility classes plus the shared theme tokens/component classes
 in `src/index.css`.
 
+Two routes are wired up in `App.tsx`: `/` (offer list) and `/profile` (the profile editor — see
+"Profile editor page" below), with a small `<nav>` linking between them. `/profile`'s API wiring
+lives in `frontend/src/api/profile.ts`, calling `GET /profile`, `PUT /profile`, and
+`POST /profile/upload` through the same shared `apiClient` the offer list page uses.
+
 `pnpm test` is also runnable as `make test-frontend` from the repo root. It is **not** part of
 `make test`/`make ci`/the GitHub Actions workflow yet — see
 [docs/adr/0007-vitest-introduced-but-not-wired-into-make-ci.md](docs/adr/0007-vitest-introduced-but-not-wired-into-make-ci.md).
@@ -554,3 +559,28 @@ Error cases:
 - If the local LLM call fails (Ollama unreachable, malformed output, timeout), the endpoint
   returns `503` with a `{"detail": "CV extraction failed: ..."}` body, and no profile row is
   created.
+
+## Profile editor page
+
+With `make up` running, open `http://localhost:5173/profile` to review a CV-upload draft or edit
+a profile by hand, without calling the API directly.
+
+- **CV upload** — a file picker (`.pdf`/`.docx`) calling `POST /profile/upload`; on success, the
+  form is replaced wholesale with the returned draft's fields. On failure (e.g. an unsupported
+  file type), the backend's own error message (`415`/`503` `detail`) is shown inline rather than a
+  generic failure string.
+- **Full `Profile` field coverage** — skills, past roles, education, certifications, languages
+  (each a list editor with add/remove/edit), contract type, salary range, location/remote
+  preference, and deal-breakers. Every field starts empty or from real uploaded/fetched data —
+  there is no sample/placeholder content anywhere in the form.
+- **Save vs. Set as active** — both persist the form's current values via `PUT /profile`, but
+  **Save** (`activate=false`) leaves whichever profile is currently active untouched, while
+  **Set as active** (`activate=true`) also makes the edited profile the one `GET /profile`
+  returns going forward. A small badge next to the buttons shows "Draft"/"Active" so the current
+  state is always visible. A saved-but-not-yet-active draft survives a page reload via a
+  `localStorage` cache of the last save/activate/upload response (see
+  [ARCHITECTURE.md](ARCHITECTURE.md)'s "Profile editor page (P2US3)" section for why this exists).
+- **Required-field validation** — `Skill.name`, `PastRole.title`/`company`, `Education.institution`,
+  `Certification.name`, and `Language.name` are the only required sub-fields `Profile` has. Leaving
+  one blank and clicking **Save** or **Set as active** highlights the offending field(s) in red and
+  blocks the request entirely — no network call is made until every required field is filled in.
