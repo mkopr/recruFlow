@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,4 +37,16 @@ async def upsert_active_profile(session: AsyncSession, profile: Profile) -> Prof
     await session.flush()
     await activate_profile(session, row.id)
     await session.refresh(row)
+    return row
+
+
+async def create_draft_profile(session: AsyncSession, profile: Profile) -> ProfileModel:
+    row = ProfileModel(
+        name=f"draft-{uuid4()}",
+        status="draft",
+        is_active=False,
+        data=profile.model_dump(mode="json"),
+    )
+    session.add(row)
+    await session.flush()
     return row

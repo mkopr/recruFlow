@@ -3,6 +3,7 @@ from app.db.models import Profile as ProfileModel
 from app.db.profile_repo import (
     DEFAULT_PROFILE_NAME,
     activate_profile,
+    create_draft_profile,
     get_active_profile,
     upsert_active_profile,
 )
@@ -102,3 +103,18 @@ async def test_activate_profile_deactivates_all_others(db_session: AsyncSession)
     assert refreshed_b is not None
     assert refreshed_a.is_active is False
     assert refreshed_b.is_active is True
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_create_draft_profile_creates_inactive_draft_row(db_session: AsyncSession) -> None:
+    row = await create_draft_profile(db_session, Profile(skills=[Skill(name="Rust")]))
+    await db_session.commit()
+
+    assert row.status == "draft"
+    assert row.is_active is False
+    assert row.data["skills"][0]["name"] == "Rust"
+    assert row.name.startswith("draft-")
+
+    await db_session.execute(delete(ProfileModel).where(ProfileModel.name == row.name))
+    await db_session.commit()

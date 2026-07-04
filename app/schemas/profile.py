@@ -46,6 +46,16 @@ class Language(BaseModel):
     proficiency: str | None = None
 
 
+class CVExtraction(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    skills: list[Skill] = Field(default_factory=list)
+    past_roles: list[PastRole] = Field(default_factory=list)
+    education: list[Education] = Field(default_factory=list)
+    certifications: list[Certification] = Field(default_factory=list)
+    languages: list[Language] = Field(default_factory=list)
+
+
 class Profile(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 

@@ -12,6 +12,8 @@ recruFlow/
 │   │   └── routes/
 │   │       ├── health.py     # GET /health, GET /health/db
 │   │       └── scheduler.py  # POST /scheduler/run/{source}, GET /scheduler/status (P1US6)
+│   ├── cv/         # CV file parsing: extract_cv_text() (PDF/DOCX -> plain text) (P2US2)
+│   ├── llm/        # LLM invocation: extract_profile_from_cv_text() (Ollama call boundary) (P2US2)
 │   ├── db/         # SQLAlchemy models, async engine/session, Alembic-shared base (P0US5)
 │   │   ├── base.py     # Declarative base, shared by models.py and alembic/env.py
 │   │   ├── models.py   # v1 schema + SchedulerRun (P1US6): Source, Offer, Profile, CVVersion, MatchScore, Application, SchedulerRun
@@ -57,11 +59,14 @@ recruFlow/
 
 - `main` — runtime dependencies of the FastAPI application: `fastapi`, `uvicorn`, the async
   SQLAlchemy stack (`sqlalchemy[asyncio]`, `asyncpg`), `alembic`, `pydantic`,
-  `pydantic-settings`, `httpx`, `apscheduler`. Later phases add further runtime deps here
-  incrementally (`langchain`/`langgraph`/`langchain-ollama` in P3US2, `playwright` in P5US6,
-  `weasyprint`/`python-docx` in P4US4/P6US4) as the story that needs them lands.
+  `pydantic-settings`, `httpx`, `apscheduler`, `langchain-ollama`, `langchain-core`, `pypdf`,
+  `python-docx`, `python-multipart` (the last five added in P2US2 for CV upload + LLM
+  extraction — see below). Later phases add further runtime deps here incrementally (full
+  `langchain`/`langgraph` orchestration in P3US2, `playwright` in P5US6) as the story that needs
+  them lands.
 - `dev` — local developer tooling: `ruff`, `mypy`, `pre-commit`.
-- `test` — test-only dependencies: `pytest`, `pytest-asyncio`, `pytest-cov`.
+- `test` — test-only dependencies: `pytest`, `pytest-asyncio`, `pytest-cov`, `reportlab` (added in
+  P2US2 solely to synthesize tiny real PDF fixtures in tests — never imported from `app/`).
 
 `httpx` moved from `test`-only to `main` in P1US3 (the JustJoin.it connector): it previously only
 backed FastAPI's `TestClient` in tests, but `app/connectors/justjoinit.py` is production code that
@@ -983,6 +988,65 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   seeding (`SEED_PROFILE_NAME`, `_seed_profile`) — the acceptance criteria explicitly forbid
   shipping any seed/default profile content; a profile's content must always originate from a CV
   upload (US19) or manual entry.
+
+### CV upload + LLM extraction (P2US2)
+
+- **Purpose**: `POST /profile/upload` turns an uploaded CV file (PDF or DOCX) directly into a
+  draft `Profile`, via a local LLM, so a candidate doesn't have to hand-retype their whole work
+  history. Request: multipart form upload, one `file` field. Response: `ProfileResponse` (the
+  same shape `GET`/`PUT /profile` return — `id`, `name`, `status`, `is_active`, `profile`,
+  `created_at`, `updated_at`), with `status: "draft"` and `is_active: false`.
+- **Two new packages, split by failure domain**: `app/cv/text_extraction.py` owns file-format
+  parsing (`extract_cv_text(filename, content) -> str`, dispatching on file extension to a
+  private `_extract_pdf_text`/`_extract_docx_text`); `app/llm/cv_extraction.py` owns LLM
+  invocation (`extract_profile_from_cv_text(cv_text) -> Profile`). These are separate failure
+  domains — a corrupt/unsupported file and an unreachable/misbehaving LLM are unrelated error
+  conditions with different causes, different remediations, and (per below) different HTTP status
+  codes, so keeping them in different modules keeps each one's error handling legible on its own.
+- **`CVExtraction` vs. `Profile`**: the LLM's structured-output target is `CVExtraction`
+  (`app/schemas/profile.py`), a schema containing only the five CV-derived list fields (`skills`,
+  `past_roles`, `education`, `certifications`, `languages`) — it deliberately omits `Profile`'s
+  preference fields (`contract_type_preference`, `salary_min`, `salary_target`,
+  `location_preference`, `remote_preference`, `deal_breakers`), because a CV's text has no basis
+  for those and the LLM must never be given a schema slot it could be tempted to fill with an
+  inference. `extract_profile_from_cv_text` maps `CVExtraction` into a full `Profile` via
+  `Profile(**extraction.model_dump())`, leaving every preference field at its own default (`None`
+  or `[]`).
+- **Facts-only enforcement**: there is no code-level guardrail beyond the system prompt and
+  `temperature=0` — `app/llm/cv_extraction.py`'s `_SYSTEM_PROMPT` instructs the model to extract
+  only what is explicitly present, never infer/embellish/guess, and leave absent sections as
+  empty lists; `ChatOllama(..., temperature=0)` removes sampling randomness for this
+  facts-extraction task. No automated test targets extraction *quality* (i.e. whether the model
+  actually stays facts-only on a real CV) — that is verified manually against the real Ollama
+  container, not asserted in CI, matching this story's own acceptance-criteria scope.
+- **The LLM-call boundary diverges from the connectors' pattern deliberately**: background
+  ingestion connectors (e.g. `app/connectors/solid_jobs.py`'s `_run_sjctl`) catch expected
+  failures and return `None`/`ok=False`, because nothing is waiting synchronously on them.
+  `POST /profile/upload` is a synchronous, user-waited request (why ADR 0011 picked an 8B model
+  over a 70B one), so its boundary function, `_call_llm`, instead catches every failure
+  (`httpx.HTTPError`/`OSError` for connectivity, a catch-all `Exception` for structured-output
+  parse failures or other client-library errors) and re-raises a typed `CVExtractionError` — the
+  route turns that into a clear HTTP error rather than an unhandled 500, mirroring
+  `GET /health/db`'s driver-exception-to-503 pattern.
+- **Status codes**: `415 Unsupported Media Type` for a file whose extension isn't `.pdf`/`.docx`
+  (raised as `UnsupportedFileTypeError`, caught in the route) — the precise standard code for "the
+  payload's format is one the server doesn't handle", distinct from FastAPI's own `422` for a
+  malformed request body. `503 Service Unavailable` for a `CVExtractionError` — mirrors
+  `GET /health/db`'s existing precedent for "a downstream dependency (here, Ollama) is unreachable
+  or failed", not an application bug.
+- **`create_draft_profile`** (`app/db/profile_repo.py`) always creates a new row —
+  `name=f"draft-{uuid4()}"`, `status="draft"`, `is_active=False` — and never activates it,
+  distinct from `PUT /profile`'s `upsert_active_profile`, which updates the single active row in
+  place. Every CV upload gets its own independent draft (since `profiles.name` is unique) rather
+  than clobbering a prior unreviewed one; the user reviews the draft (US20) before choosing to
+  activate it.
+- **Explicit LLM request timeout**: `ChatOllama` is constructed with
+  `client_kwargs={"timeout": 120}` (seconds) — every other external call in this codebase has an
+  explicit timeout (ADR 0005); 120s is generous for the 8B model ADR 0011 selected on this
+  machine's hardware.
+- **No model-selection logic here**: the model name comes from `settings.ollama_model`
+  (`app/config.py`), already resolved by ADR 0011 — this story adds no model-detection/fallback
+  logic and no test targeting model choice.
 
 ### `frontend/` project
 

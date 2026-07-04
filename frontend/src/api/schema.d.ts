@@ -4,512 +4,736 @@
  */
 
 export interface paths {
-    "/health": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Health */
-        get: operations["health_health_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+  '/health': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/health/db": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Health Db */
-        get: operations["health_db_health_db_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** Health */
+    get: operations['health_health_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/health/db': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/scheduler/run/{source}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Trigger Run */
-        post: operations["trigger_run_scheduler_run__source__post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** Health Db */
+    get: operations['health_db_health_db_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/scheduler/run/{source}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/scheduler/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Scheduler Status */
-        get: operations["scheduler_status_scheduler_status_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    /** Trigger Run */
+    post: operations['trigger_run_scheduler_run__source__post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/scheduler/status': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/ingest/{source}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Trigger Ingest Route */
-        post: operations["trigger_ingest_route_ingest__source__post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** Scheduler Status */
+    get: operations['scheduler_status_scheduler_status_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/ingest/{source}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/offers": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Offers */
-        get: operations["list_offers_offers_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    /** Trigger Ingest Route */
+    post: operations['trigger_ingest_route_ingest__source__post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/offers': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/offers/{offer_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Offer */
-        get: operations["get_offer_offers__offer_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** List Offers */
+    get: operations['list_offers_offers_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/offers/{offer_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
+    /** Get Offer */
+    get: operations['get_offer_offers__offer_id__get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/profile': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Profile */
+    get: operations['get_profile_profile_get'];
+    /** Put Profile */
+    put: operations['put_profile_profile_put'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/profile/upload': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Upload Cv */
+    post: operations['upload_cv_profile_upload_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
-    schemas: {
-        /** HTTPValidationError */
-        HTTPValidationError: {
-            /** Detail */
-            detail?: components["schemas"]["ValidationError"][];
-        };
-        /** IngestResponse */
-        IngestResponse: {
-            /** Source */
-            source: string;
-            /** Ok */
-            ok: boolean;
-            /** Fetched */
-            fetched: number;
-            /** Created */
-            created: number;
-            /** Error Message */
-            error_message?: string | null;
-        };
-        /** ManualRunResponse */
-        ManualRunResponse: {
-            /** Id */
-            id: number;
-            /** Source Id */
-            source_id: number;
-            /** Connector */
-            connector: string;
-            /** Trigger Type */
-            trigger_type: string;
-            /** Status */
-            status: string;
-            /** Fetched */
-            fetched: number | null;
-            /** Created */
-            created: number | null;
-            /** Warning */
-            warning: boolean;
-            /** Error Message */
-            error_message: string | null;
-            /**
-             * Started At
-             * Format: date-time
-             */
-            started_at: string;
-            /** Finished At */
-            finished_at: string | null;
-        };
-        /** OfferDetail */
-        OfferDetail: {
-            /** Id */
-            id: number;
-            /** Source */
-            source: string;
-            /** External Id */
-            external_id: string | null;
-            /** Canonical Url */
-            canonical_url: string | null;
-            /** Title */
-            title: string;
-            /** Company */
-            company: string;
-            /** Location */
-            location: string | null;
-            /** Remote */
-            remote: boolean;
-            /** Seniority */
-            seniority: string | null;
-            /** Salary Min */
-            salary_min: number | null;
-            /** Salary Max */
-            salary_max: number | null;
-            /** Salary Currency */
-            salary_currency: string | null;
-            /** Contract Type */
-            contract_type: string | null;
-            /** Posted At */
-            posted_at: string | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Description */
-            description: string | null;
-            /** Raw Payload */
-            raw_payload: {
-                [key: string]: unknown;
-            };
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-        };
-        /** OfferSummary */
-        OfferSummary: {
-            /** Id */
-            id: number;
-            /** Source */
-            source: string;
-            /** External Id */
-            external_id: string | null;
-            /** Canonical Url */
-            canonical_url: string | null;
-            /** Title */
-            title: string;
-            /** Company */
-            company: string;
-            /** Location */
-            location: string | null;
-            /** Remote */
-            remote: boolean;
-            /** Seniority */
-            seniority: string | null;
-            /** Salary Min */
-            salary_min: number | null;
-            /** Salary Max */
-            salary_max: number | null;
-            /** Salary Currency */
-            salary_currency: string | null;
-            /** Contract Type */
-            contract_type: string | null;
-            /** Posted At */
-            posted_at: string | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
-        /** SchedulerStatusResponse */
-        SchedulerStatusResponse: {
-            /** Sources */
-            sources: components["schemas"]["SourceStatus"][];
-        };
-        /** SourceStatus */
-        SourceStatus: {
-            /** Source Id */
-            source_id: number;
-            /** Connector */
-            connector: string;
-            /** Name */
-            name: string;
-            /** Schedule */
-            schedule: {
-                [key: string]: unknown;
-            };
-            /** Last Fetched At */
-            last_fetched_at: string | null;
-            /** Last Run Id */
-            last_run_id: number | null;
-            /** Last Run Started At */
-            last_run_started_at: string | null;
-            /** Last Run Finished At */
-            last_run_finished_at: string | null;
-            /** Last Run Status */
-            last_run_status: string | null;
-            /** Last Run Trigger Type */
-            last_run_trigger_type: string | null;
-            /** Last Run Fetched */
-            last_run_fetched: number | null;
-            /** Last Run Created */
-            last_run_created: number | null;
-            /** Last Run Warning */
-            last_run_warning: boolean;
-            /** Last Run Error Message */
-            last_run_error_message: string | null;
-        };
-        /** ValidationError */
-        ValidationError: {
-            /** Location */
-            loc: (string | number)[];
-            /** Message */
-            msg: string;
-            /** Error Type */
-            type: string;
-            /** Input */
-            input?: unknown;
-            /** Context */
-            ctx?: Record<string, never>;
-        };
+  schemas: {
+    /** Body_upload_cv_profile_upload_post */
+    Body_upload_cv_profile_upload_post: {
+      /** File */
+      file: string;
     };
-    responses: never;
-    parameters: never;
-    requestBodies: never;
-    headers: never;
-    pathItems: never;
+    /** Certification */
+    Certification: {
+      /** Name */
+      name: string;
+      /** Issuer */
+      issuer?: string | null;
+      /** Year */
+      year?: number | null;
+    };
+    /** Education */
+    Education: {
+      /** Institution */
+      institution: string;
+      /** Degree */
+      degree?: string | null;
+      /** Field Of Study */
+      field_of_study?: string | null;
+      /** Start Date */
+      start_date?: string | null;
+      /** End Date */
+      end_date?: string | null;
+    };
+    /** HTTPValidationError */
+    HTTPValidationError: {
+      /** Detail */
+      detail?: components['schemas']['ValidationError'][];
+    };
+    /** IngestResponse */
+    IngestResponse: {
+      /** Source */
+      source: string;
+      /** Ok */
+      ok: boolean;
+      /** Fetched */
+      fetched: number;
+      /** Created */
+      created: number;
+      /** Error Message */
+      error_message?: string | null;
+    };
+    /** Language */
+    Language: {
+      /** Name */
+      name: string;
+      /** Proficiency */
+      proficiency?: string | null;
+    };
+    /** ManualRunResponse */
+    ManualRunResponse: {
+      /** Id */
+      id: number;
+      /** Source Id */
+      source_id: number;
+      /** Connector */
+      connector: string;
+      /** Trigger Type */
+      trigger_type: string;
+      /** Status */
+      status: string;
+      /** Fetched */
+      fetched: number | null;
+      /** Created */
+      created: number | null;
+      /** Warning */
+      warning: boolean;
+      /** Error Message */
+      error_message: string | null;
+      /**
+       * Started At
+       * Format: date-time
+       */
+      started_at: string;
+      /** Finished At */
+      finished_at: string | null;
+    };
+    /** OfferDetail */
+    OfferDetail: {
+      /** Id */
+      id: number;
+      /** Source */
+      source: string;
+      /** External Id */
+      external_id: string | null;
+      /** Canonical Url */
+      canonical_url: string | null;
+      /** Title */
+      title: string;
+      /** Company */
+      company: string;
+      /** Location */
+      location: string | null;
+      /** Remote */
+      remote: boolean;
+      /** Seniority */
+      seniority: string | null;
+      /** Salary Min */
+      salary_min: number | null;
+      /** Salary Max */
+      salary_max: number | null;
+      /** Salary Currency */
+      salary_currency: string | null;
+      /** Contract Type */
+      contract_type: string | null;
+      /** Posted At */
+      posted_at: string | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Description */
+      description: string | null;
+      /** Raw Payload */
+      raw_payload: {
+        [key: string]: unknown;
+      };
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /** OfferSummary */
+    OfferSummary: {
+      /** Id */
+      id: number;
+      /** Source */
+      source: string;
+      /** External Id */
+      external_id: string | null;
+      /** Canonical Url */
+      canonical_url: string | null;
+      /** Title */
+      title: string;
+      /** Company */
+      company: string;
+      /** Location */
+      location: string | null;
+      /** Remote */
+      remote: boolean;
+      /** Seniority */
+      seniority: string | null;
+      /** Salary Min */
+      salary_min: number | null;
+      /** Salary Max */
+      salary_max: number | null;
+      /** Salary Currency */
+      salary_currency: string | null;
+      /** Contract Type */
+      contract_type: string | null;
+      /** Posted At */
+      posted_at: string | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+    };
+    /** PastRole */
+    PastRole: {
+      /** Title */
+      title: string;
+      /** Company */
+      company: string;
+      /** Start Date */
+      start_date?: string | null;
+      /** End Date */
+      end_date?: string | null;
+      /** Description */
+      description?: string | null;
+    };
+    /** Profile */
+    Profile: {
+      /** Skills */
+      skills?: components['schemas']['Skill'][];
+      /** Past Roles */
+      past_roles?: components['schemas']['PastRole'][];
+      /** Education */
+      education?: components['schemas']['Education'][];
+      /** Certifications */
+      certifications?: components['schemas']['Certification'][];
+      /** Languages */
+      languages?: components['schemas']['Language'][];
+      /** Contract Type Preference */
+      contract_type_preference?: string | null;
+      /** Salary Min */
+      salary_min?: number | null;
+      /** Salary Target */
+      salary_target?: number | null;
+      /** Location Preference */
+      location_preference?: string | null;
+      /** Remote Preference */
+      remote_preference?: boolean | null;
+      /** Deal Breakers */
+      deal_breakers?: string[];
+    };
+    /** ProfileResponse */
+    ProfileResponse: {
+      /** Id */
+      id: number;
+      /** Name */
+      name: string;
+      /** Status */
+      status: string;
+      /** Is Active */
+      is_active: boolean;
+      profile: components['schemas']['Profile'];
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /** SchedulerStatusResponse */
+    SchedulerStatusResponse: {
+      /** Sources */
+      sources: components['schemas']['SourceStatus'][];
+    };
+    /** Skill */
+    Skill: {
+      /** Name */
+      name: string;
+      /** Proficiency */
+      proficiency?: string | null;
+      /** Years */
+      years?: number | null;
+    };
+    /** SourceStatus */
+    SourceStatus: {
+      /** Source Id */
+      source_id: number;
+      /** Connector */
+      connector: string;
+      /** Name */
+      name: string;
+      /** Schedule */
+      schedule: {
+        [key: string]: unknown;
+      };
+      /** Last Fetched At */
+      last_fetched_at: string | null;
+      /** Last Run Id */
+      last_run_id: number | null;
+      /** Last Run Started At */
+      last_run_started_at: string | null;
+      /** Last Run Finished At */
+      last_run_finished_at: string | null;
+      /** Last Run Status */
+      last_run_status: string | null;
+      /** Last Run Trigger Type */
+      last_run_trigger_type: string | null;
+      /** Last Run Fetched */
+      last_run_fetched: number | null;
+      /** Last Run Created */
+      last_run_created: number | null;
+      /** Last Run Warning */
+      last_run_warning: boolean;
+      /** Last Run Error Message */
+      last_run_error_message: string | null;
+    };
+    /** ValidationError */
+    ValidationError: {
+      /** Location */
+      loc: (string | number)[];
+      /** Message */
+      msg: string;
+      /** Error Type */
+      type: string;
+      /** Input */
+      input?: unknown;
+      /** Context */
+      ctx?: Record<string, never>;
+    };
+  };
+  responses: never;
+  parameters: never;
+  requestBodies: never;
+  headers: never;
+  pathItems: never;
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    health_health_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
-                };
-            };
-        };
+  health_health_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    health_db_health_db_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
-                };
-            };
+        content: {
+          'application/json': {
+            [key: string]: string;
+          };
         };
+      };
     };
-    trigger_run_scheduler_run__source__post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                source: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ManualRunResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
+  };
+  health_db_health_db_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    scheduler_status_scheduler_status_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SchedulerStatusResponse"];
-                };
-            };
+        content: {
+          'application/json': {
+            [key: string]: string;
+          };
         };
+      };
     };
-    trigger_ingest_route_ingest__source__post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                source: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IngestResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
+  };
+  trigger_run_scheduler_run__source__post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        source: string;
+      };
+      cookie?: never;
     };
-    list_offers_offers_get: {
-        parameters: {
-            query?: {
-                /** @description Connector identity to filter by, e.g. justjoinit, solid_jobs, nofluffjobs */
-                source?: string | null;
-                remote?: boolean | null;
-                /** @description Canonical seniority level to filter by (junior/mid/senior/lead/expert); matches if the offer's seniority contains this value */
-                seniority?: string | null;
-                /** @description Minimum salary (PLN, monthly gross) an offer's range must meet or exceed */
-                min_salary?: number | null;
-                /** @description Single-letter match grade (A-F) to filter by; matches against any recorded MatchScore for the offer */
-                grade?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfferSummary"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
+        content: {
+          'application/json': components['schemas']['ManualRunResponse'];
         };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
     };
-    get_offer_offers__offer_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                offer_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfferDetail"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
+  };
+  scheduler_status_scheduler_status_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SchedulerStatusResponse'];
+        };
+      };
+    };
+  };
+  trigger_ingest_route_ingest__source__post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        source: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['IngestResponse'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  list_offers_offers_get: {
+    parameters: {
+      query?: {
+        /** @description Connector identity to filter by, e.g. justjoinit, solid_jobs, nofluffjobs */
+        source?: string | null;
+        remote?: boolean | null;
+        /** @description Canonical seniority level to filter by (junior/mid/senior/lead/expert); matches if the offer's seniority contains this value */
+        seniority?: string | null;
+        /** @description Minimum salary (PLN, monthly gross) an offer's range must meet or exceed */
+        min_salary?: number | null;
+        /** @description Single-letter match grade (A-F) to filter by; matches against any recorded MatchScore for the offer */
+        grade?: string | null;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['OfferSummary'][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  get_offer_offers__offer_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        offer_id: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['OfferDetail'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  get_profile_profile_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ProfileResponse'] | null;
+        };
+      };
+    };
+  };
+  put_profile_profile_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['Profile'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ProfileResponse'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  upload_cv_profile_upload_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'multipart/form-data': components['schemas']['Body_upload_cv_profile_upload_post'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ProfileResponse'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
 }

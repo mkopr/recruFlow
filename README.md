@@ -509,3 +509,48 @@ the API directly.
   table is replaced with a short message instead of rendering an empty grid.
 - Offers are sorted newest-first by posted date on the client, since `GET /offers` itself applies
   no ordering.
+
+## CV upload
+
+`POST /profile/upload` accepts a PDF or DOCX CV, extracts its text, and runs it through a local
+Ollama model (`llama3.1:8b` by default — see `docs/adr/0011-ollama-model-for-cv-extraction.md`)
+to produce a draft `Profile`: skills, past roles, education, certifications, and languages,
+extracted facts-only (nothing inferred or embellished). The result is stored as a new profile
+record with `status: "draft"` — it is **not** activated automatically, so `GET /profile` keeps
+returning whatever profile was already active.
+
+```bash
+curl -F "file=@cv.pdf" http://localhost:8000/profile/upload
+```
+
+```json
+{
+  "id": 7,
+  "name": "draft-3f9c2e1a-...",
+  "status": "draft",
+  "is_active": false,
+  "profile": {
+    "skills": [{ "name": "Python", "proficiency": null, "years": null }],
+    "past_roles": [],
+    "education": [],
+    "certifications": [],
+    "languages": [],
+    "contract_type_preference": null,
+    "salary_min": null,
+    "salary_target": null,
+    "location_preference": null,
+    "remote_preference": null,
+    "deal_breakers": []
+  },
+  "created_at": "2026-07-04T10:00:00Z",
+  "updated_at": "2026-07-04T10:00:00Z"
+}
+```
+
+Error cases:
+
+- An unsupported file type (anything other than `.pdf`/`.docx`) returns `415` with a
+  `{"detail": "unsupported file type: ..."}` body.
+- If the local LLM call fails (Ollama unreachable, malformed output, timeout), the endpoint
+  returns `503` with a `{"detail": "CV extraction failed: ..."}` body, and no profile row is
+  created.
