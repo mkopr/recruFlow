@@ -176,7 +176,8 @@ repeated foundational migration:
 `make migrate` runs `docker compose exec api alembic upgrade head` (mirrors the `sjctl-version`
 pattern — `DATABASE_URL`'s `db` hostname only resolves inside the Compose network, not from the
 host). `make seed` runs `docker compose exec api python -m app.db.seed`, loading three sample
-offers and one active stub profile; both targets are idempotent.
+offers; both targets are idempotent. (P2US1 removed this seed's previous stub-profile row — see
+"Profile data model (P2US1)" below.)
 
 A second migration (`aa3fa339111b`, chained after `df5297add8cb`) makes `offers.canonical_url`
 nullable and adds `offers.description` (nullable `Text`). Both changes were deferred from the
@@ -929,6 +930,59 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   `pnpm test` (`vitest run`) and `make test-frontend` exist but are **not** wired into
   `make test`/`make ci`/the GitHub Actions workflow — a deliberate, temporary gap recorded in ADR
   0007, not an oversight.
+
+### Profile data model (P2US1)
+
+- **Purpose**: the first Phase 2 story. Defines `app/schemas/profile.py`'s `Profile`, the
+  canonical, source-agnostic candidate-facts document that US19's LLM extraction, US20's frontend
+  editor, and this story's own `PUT /profile` all validate against. No new migration is needed —
+  the `profiles` table's existing `data` JSONB column (P0US5) already satisfies "profiles DB table
+  stores these fields plus an `is_active` boolean flag"; the structured fields live inside `data`,
+  validated at the application layer, the same ELT-adjacent split `offers.raw_payload` already
+  uses.
+- **Field list**: `skills` (`Skill`: `name`, `proficiency`, `years`), `past_roles` (`PastRole`:
+  `title`, `company`, `start_date`, `end_date`, `description`), `education` (`Education`:
+  `institution`, `degree`, `field_of_study`, `start_date`, `end_date`), `certifications`
+  (`Certification`: `name`, `issuer`, `year`), `languages` (`Language`: `name`, `proficiency`),
+  `contract_type_preference`, `salary_min`, `salary_target`, `location_preference`,
+  `remote_preference`, `deal_breakers` (`list[str]`).
+- **Three deliberate looseness decisions**, required by the acceptance criteria's "no fixed/
+  hardcoded values ... every list-type field accepts an arbitrary number of arbitrary entries":
+  - `PastRole`/`Education` dates (`start_date`/`end_date`) are free-form strings (e.g. `"2019"`,
+    `"Jan 2021"`, `"present"`), not a strict date type — CVs report dates in inconsistent, often
+    partial formats, and a strict date type would make US19's LLM extraction fail on any CV using
+    a non-ISO date phrase.
+  - `Skill`/`Language` `proficiency` is a free string, not a `Literal`/enum — same reasoning, no
+    fixed vocabulary is allowed for list-type field content.
+  - Salary preference is modelled as `salary_min`/`salary_target` (not `salary_min`/`salary_max`
+    as `Offer` uses) — "target" is the candidate's aspirational figure, not necessarily an upper
+    bound, so `salary_max` would be the wrong name. A `model_validator` still checks
+    `salary_target >= salary_min` when both are present, mirroring `Offer`'s own
+    `_check_salary_range` pattern, because a target below the floor is a real, catchable input
+    error, not a legitimate edge case.
+- **Single-active-profile invariant**: exactly one `profiles` row may have `is_active=true` at a
+  time — this is **Open Decision OD-3** from `user stories/000 high level guide.md` ("Profile:
+  single active vs named profiles"), resolved as "one active Profile at a time, matching sjctl's
+  own default behaviour". Enforced by `app/db/profile_repo.py`'s `activate_profile(session,
+  profile_id)`: two `UPDATE` statements in the caller's existing transaction — clear every other
+  row's flag first, then set the target row's flag — ordered this way so a crash between the two
+  statements never leaves two rows simultaneously active, only ever zero or one. This is a
+  reusable primitive, not `PUT /profile`-specific: it's the same function US19's CV-upload
+  activation flow and US20's "Set as active" button will call later.
+- **`GET /profile`** returns HTTP 200 with a JSON `null` body (`ProfileResponse | None`) when no
+  profile is active, not a 404 — a 404 means "you asked for something identifiable that isn't
+  there", but "no active profile yet" is an expected, normal steady state for a fresh install,
+  mirroring `GET /offers`'s empty-list convention rather than an error.
+- **`PUT /profile`** is an upsert: if no profile is currently active, it creates the first one
+  (`name` defaults to `DEFAULT_PROFILE_NAME = "active-profile"`, an internal bookkeeping key, not
+  "profile data" in the sense the no-seed acceptance criterion forbids) and activates it; if one
+  is already active, it updates that row's `data` in place. This is necessary because this story
+  ships no seed profile data, so a fresh database has zero profile rows, and `PUT /profile` must
+  still work with no prior setup.
+- **No seed/default profile data**: this story removed `app/db/seed.py`'s previous stub-profile
+  seeding (`SEED_PROFILE_NAME`, `_seed_profile`) — the acceptance criteria explicitly forbid
+  shipping any seed/default profile content; a profile's content must always originate from a CV
+  upload (US19) or manual entry.
 
 ### `frontend/` project
 

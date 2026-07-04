@@ -65,8 +65,8 @@ make seed      # docker compose exec api python -m app.db.seed
 
 `make migrate` applies all Alembic migrations, creating the six v1 tables (`sources`, `offers`,
 `profiles`, `cv_versions`, `match_scores`, `applications`) — see [ARCHITECTURE.md](ARCHITECTURE.md)
-for the full schema. `make seed` loads a handful of sample offers and a stub profile; both
-commands are safe to re-run.
+for the full schema. `make seed` loads a handful of sample offers; both commands are safe to
+re-run.
 
 ## Frontend
 

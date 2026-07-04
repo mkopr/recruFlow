@@ -10,6 +10,7 @@ from app import __version__
 from app.api.routes.health import router as health_router
 from app.api.routes.ingestion import router as ingestion_router
 from app.api.routes.offers import router as offers_router
+from app.api.routes.profile import router as profile_router
 from app.api.routes.scheduler import router as scheduler_router
 from app.config import get_settings
 from app.db.session import get_engine, get_sessionmaker
@@ -60,3 +61,4 @@ app.include_router(health_router)
 app.include_router(scheduler_router)
 app.include_router(ingestion_router)
 app.include_router(offers_router)
+app.include_router(profile_router)

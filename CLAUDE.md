@@ -37,7 +37,7 @@ make test-integration # integration tests only
 make typecheck        # mypy + tsc --noEmit
 make ci               # format + lint + typecheck + full test suite (must be zero failures)
 make migrate          # alembic upgrade head
-make seed             # load sample offers + stub profile into DB
+make seed             # load sample offers into DB
 make generate-types   # generate TypeScript types from FastAPI /openapi.json
 make clean            # remove build artefacts, __pycache__, .mypy_cache, dist/
 make sjctl-version    # print installed sjctl binary version

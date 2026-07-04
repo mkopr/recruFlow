@@ -4,7 +4,7 @@ from typing import Any
 import pytest
 from alembic import command
 from app.db.models import Offer, Profile
-from app.db.seed import SEED_PROFILE_NAME, _seed_offers, run_seed
+from app.db.seed import _seed_offers, run_seed
 from app.db.session import get_engine
 from sqlalchemy import inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -70,19 +70,19 @@ def test_migration_upgrade_head_is_idempotent() -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_seed_loads_sample_offers_and_stub_profile(db_session: AsyncSession) -> None:
+async def test_seed_loads_sample_offers_and_creates_no_profile_rows(
+    db_session: AsyncSession,
+) -> None:
+    profile_count_before = len((await db_session.execute(select(Profile))).scalars().all())
+
     await run_seed(db_session)
     await db_session.commit()
 
     offers = (await db_session.execute(select(Offer))).scalars().all()
-    profile = (
-        (await db_session.execute(select(Profile).where(Profile.name == SEED_PROFILE_NAME)))
-        .scalars()
-        .one()
-    )
+    profile_count_after = len((await db_session.execute(select(Profile))).scalars().all())
 
     assert len(offers) >= 3
-    assert profile.is_active is True
+    assert profile_count_after == profile_count_before
 
 
 @pytest.mark.integration
@@ -91,15 +91,12 @@ async def test_seed_is_idempotent_on_rerun(db_session: AsyncSession) -> None:
     await run_seed(db_session)
     await db_session.commit()
     offer_count_1 = len((await db_session.execute(select(Offer))).scalars().all())
-    profile_count_1 = len((await db_session.execute(select(Profile))).scalars().all())
 
     await run_seed(db_session)
     await db_session.commit()
     offer_count_2 = len((await db_session.execute(select(Offer))).scalars().all())
-    profile_count_2 = len((await db_session.execute(select(Profile))).scalars().all())
 
     assert offer_count_1 == offer_count_2
-    assert profile_count_1 == profile_count_2
 
 
 @pytest.mark.integration
