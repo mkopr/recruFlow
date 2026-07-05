@@ -42,14 +42,14 @@ recruFlow/
 │   ├── vite.config.ts
 │   └── eslint.config.js
 ├── tests/          # Unit tests (pure filesystem/import checks, no external services)
-│   └── integration/  # Tests requiring external services (DB, Ollama, sjctl, ...)
+│   └── integration/  # Tests requiring external services (DB, Ollama, ...)
 ├── pyproject.toml
 ├── uv.lock
 ├── Makefile
 ├── .pre-commit-config.yaml
 ├── .env.example
 ├── .gitignore
-├── Dockerfile            # multi-stage: builder (uv sync) -> runtime (uvicorn + sjctl)
+├── Dockerfile            # multi-stage: builder (uv sync) -> runtime (uvicorn)
 ├── Dockerfile.frontend   # multi-stage: dev (Vite dev server) -> build -> production (nginx)
 ├── .dockerignore
 └── docker-compose.yml    # api, frontend, db, ollama — each with a health check
@@ -106,7 +106,7 @@ they are FastAPI defaults, enabled automatically once the `FastAPI()` app object
 ### `app/config.py` (P0US6)
 
 `Settings(BaseSettings)` (Pydantic v2, `pydantic-settings`) — one field per backend-relevant key
-in `.env.example` (`database_url`, `ollama_base_url`, `ollama_model`, `smtp_*`, `sjctl_campaign`,
+in `.env.example` (`database_url`, `ollama_base_url`, `ollama_model`, `smtp_*`, `solid_jobs_campaign`,
 `app_env`, `log_level`, `api_host`, `api_port`). `model_config = SettingsConfigDict(env_file=".env",
 extra="ignore")`: `extra="ignore"` because `.env` also carries frontend-only (`VITE_API_BASE_URL`)
 and P5-only (`SWARM_*`, `SEND_QUEUE_*`, `FORM_FILL_*`) keys this model doesn't represent yet — those
@@ -178,9 +178,10 @@ repeated foundational migration:
 | `applications` | Record of intent/action to apply | FKs to `offers`/`profiles`/`cv_versions`; `status` one of `drafted`/`reviewed`/`sent`/`failed`/`interview`/`offer`/`rejected` (unconstrained string, not a DB enum) |
 | `scheduler_runs` (P1US6) | One row per ingestion run, automatic or manual — the scheduler's audit trail | FK to `sources`; index on `(source_id, started_at)` for cheap "latest row per source" lookups; `status` one of `running`/`ok`/`error` (unconstrained string, same no-DB-enum convention as `applications.status`); `fetched_count`/`created_count` nullable `Integer` (null only while `status="running"`); `warning` `Boolean` (zero-result flag, see below); see "Scheduler" below |
 
-`make migrate` runs `docker compose exec api alembic upgrade head` (mirrors the `sjctl-version`
-pattern — `DATABASE_URL`'s `db` hostname only resolves inside the Compose network, not from the
-host). `make seed` runs `docker compose exec api python -m app.db.seed`, loading three sample
+`make migrate` runs `docker compose exec api alembic upgrade head` (mirrors the pattern used by
+other `docker compose exec api ...` Make targets — `DATABASE_URL`'s `db` hostname only resolves
+inside the Compose network, not from the host). `make seed` runs
+`docker compose exec api python -m app.db.seed`, loading three sample
 offers; both targets are idempotent. (P2US1 removed this seed's previous stub-profile row — see
 "Profile data model (P2US1)" below.)
 
@@ -247,67 +248,74 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
     record (already logged inside `normalize_and_validate` — never logged twice), otherwise
     `persist_offer`'s `(row, created)` tuple.
 
-### SOLID.Jobs connector (P1US2)
+### SOLID.Jobs connector (P1US2, direct API since BUG10)
 
 - **`app/connectors/solid_jobs.py`** — the first of three sibling connectors
-  (P1US2–US4: SOLID.Jobs, JustJoin.it, NoFluffJobs), and the only one needing no scraping
-  investigation since sjctl already handles fetch/cache/rate-limiting. Exposes
+  (P1US2–US4: SOLID.Jobs, JustJoin.it, NoFluffJobs). Originally a subprocess wrapper around the
+  `sjctl` CLI; rewritten (BUG10, see
+  `docs/adr/0012-solid-jobs-direct-api-replaces-sjctl-subprocess.md`) to call SOLID.Jobs' own
+  public HTTP endpoint directly, once the vendor confirmed `sjctl` itself was just a thin wrapper
+  over that same endpoint. Exposes
   `run_solid_jobs_ingestion(session, source, *, campaign, force_refresh=False) -> IngestionResult`
-  as the single public entrypoint later stories (P1US6 scheduler, P1US7 ingestion API endpoint)
-  will call — it does not commit the session (same convention as `persist_offer`) and does not
-  create or seed a `Source` row itself.
-- **`sync` vs `search` subcommand selection drives cache behavior** (see
-  `docs/adr/0001-solid-jobs-sync-vs-search-cache-strategy.md`): sjctl has no single "bypass cache"
-  flag, so `force_refresh=False` (default) runs `sjctl sync` — which only reports offers not
-  already seen by sjctl's own saved watches, take no config-derived filters, and is what
-  satisfies "respects the local cache unless explicitly requested" — while `force_refresh=True`
-  runs `sjctl search` with filters read from the Source row's `config_json`, always hitting the
-  live API. These are not two variations of the same query: `sync` is scoped to whatever watches
-  were separately configured via `sjctl watch add`; `search` is scoped to `config_json` and does
-  not consult watches at all.
-- **`config_json` schema for a SOLID.Jobs Source row** (de facto until a later story formalises
-  it further): `division` (str, defaults to `"IT"`) → `-d`; `cities` (list[str]) → repeated
-  `--city`; `min_salary` (int) → `--min-salary`; `experience_levels` (list[str]) → repeated
-  `--experience`; `terms` (list[str]) → repeated `--term`, the technology/free-text filter (e.g.
-  `["python"]`). `build_search_args` does no validation of these — a malformed config value fails
-  loudly via `str()` coercion rather than being silently dropped, since `config_json` is
-  already-validated-at-write-time internal configuration, not user input.
-- **`--campaign` is a real, global sjctl flag** (confirmed against a live `sjctl v0.3.0` install,
-  not just the vendored skill docs), appended to every invocation from `Settings.sjctl_campaign`.
-- **The sjctl JSON contract was verified against a live binary, not trusted from the skill
-  docs** (see `docs/adr/0002-sjctl-contract-verified-against-live-binary.md`) — the vendored
-  `jobs-search`/`jobs-digest` `SKILL.md` prose names fields (`companyName`, flat `salaryFrom`,
-  `city`, `remote`, `publishedAt`) that do not match what sjctl v0.3.0 actually emits. Real shape,
-  as mapped by `map_sjctl_offer`:
-  - `search --json` wraps offers under `"jobs"` (not `"offers"`); an offer has `company` (not
-    `companyName`), an array `locations` (not a single `city`), a boolean `isRemote` plus a
-    separate `isHybrid` with no equivalent in `Offer`, a nested `salary: {from, to, currency,
-    employmentType}` (not flat `salaryFrom`/`salaryTo`/`salaryCurrency`), and `validFrom` (not
-    `publishedAt`).
-  - `sync --json` wraps each new offer as `{"watch": "<name>", "offer": {...}}` — a structural
-    difference the skill docs don't mention at all — and reports `"new": null` (not `[]`) when
-    there are no new offers, which `_extract_offers` treats as zero results, not a malformed
-    response.
-  - `_extract_offers(payload, list_key, *, item_key=None)` handles both shapes: `item_key=None`
-    for `search` (bare offer dicts under `"jobs"`), `item_key="offer"` for `sync` (unwraps the
-    `{watch, offer}` envelope under `"new"`) — so `map_sjctl_offer` only ever sees a bare offer
-    dict regardless of which subcommand produced it.
-  - `locations` (list) → `Offer.location` (single string): joined with `", "`. `isHybrid` is
-    dropped from the normalised field — `Offer.remote` is `isRemote` only, not `isRemote OR
-    isHybrid`, since folding hybrid into "remote" would misrepresent hybrid roles (raw `isHybrid`
-    is still preserved in `raw_payload`). `contract_type` maps from `salary.employmentType`
-    (`"UoP"`/`"B2B"`) rather than the top-level `contractTime` (`"full_time"`/`"part_time"`), since
-    "contract type" in this domain means employment form, not work-time schedule (see the
-    `Remote` and `Contract Type` glossary entries in `CLAUDE.md`). `description` is stored as the
-    raw HTML sjctl returns, unstripped — HTML-to-text is deferred to whichever later phase
-    actually needs plain text (CV tailoring).
-- **`_run_sjctl`** is the sole subprocess boundary and the only place that can fail without
-  crashing the caller: catches `OSError` (covers a missing binary and permission failures, wider
-  than just `FileNotFoundError`) and `subprocess.TimeoutExpired` around the `subprocess.run` call
-  itself, then separately checks `returncode != 0` and `json.JSONDecodeError` on the parsed
-  stdout — every one of these paths logs at `ERROR` and returns `None` rather than raising.
-  `run_solid_jobs_ingestion` turns a `None` from either `_run_sjctl` or `_extract_offers` into
-  `IngestionResult(ok=False, fetched=0, created=0)`.
+  as the single public entrypoint (unchanged signature) — it does not commit the session (same
+  convention as `persist_offer`) and does not create or seed a `Source` row itself.
+- **Endpoint**: `GET https://solid.jobs/public-api/offers/{division}` — `division` is a URL path
+  segment (`build_offer_url`, defaulting to `"IT"`), not a query param. No auth; `campaign` is a
+  required query param. `_fetch_solid_jobs_json` pins `X-Api-Version: 1.0` on every request (the
+  only one of the three connectors that pins an API version — the other two have no such header
+  to pin).
+- **`config_json` schema for a SOLID.Jobs Source row** (mirrors JustJoin.it's own config surface):
+  `division` (str, defaults to `"IT"`) → URL path segment; `cities` (list[str]) →
+  `search.cities` (comma-joined); `min_salary` (int) → `search.minimumSalary`; `experience_levels`
+  (list[str]) → `search.experiences` (comma-joined); `terms` (list[str]) → `search.searchTerm`
+  (comma-joined), the technology/free-text filter (e.g. `["python"]`); plus `page_size`,
+  `max_pages`, `already_seen_stop_threshold` (pagination config, same defaults and meaning as
+  JustJoin.it's). `build_offer_params` does no validation of these — a malformed config value
+  fails loudly via `str()` coercion rather than being silently dropped, since `config_json` is
+  already-validated-at-write-time internal configuration, not user input. **Known live-API
+  limitation** (see ADR 0012): `search.experiences` only accepts a single value in practice —
+  multi-value input (comma-joined or repeated) returns `400` from the live API — even though
+  `build_offer_params` will still comma-join more than one configured `experience_levels` entry;
+  fixing this is an open follow-up, not part of this story.
+- **Response envelope, confirmed live 2026-07-05** (see ADR 0012, resolving what was an open
+  question before this ticket had live access): `{"jobs": [...], "pageIndex", "pageSize",
+  "totalCount", "totalPages"}` — the same `"jobs"` key sjctl's own `search --json` used. `salary:
+  {from, to, currency, employmentType}`, `locations: string[]`, `isRemote`/`isHybrid`,
+  `experienceLevel`, `validFrom`, `description` all match the pre-BUG10 field shape almost
+  field-for-field.
+  - `_extract_offers(payload)` — single-arg now (no `list_key`/`item_key`; that was purely an
+    artifact of the old sync-vs-search envelope split, which no longer exists). Reads a bare list
+    directly, or the `"jobs"` key from a dict payload; anything else returns `None` so the caller
+    can distinguish "zero offers" from "the response shape changed".
+  - `map_solid_jobs_offer` (renamed from `map_sjctl_offer`, no field changes): `locations` (list) →
+    `Offer.location` (single string) joined with `", "`. `isHybrid` is dropped from the normalised
+    field — `Offer.remote` is `isRemote` only, not `isRemote OR isHybrid`, since folding hybrid
+    into "remote" would misrepresent hybrid roles (raw `isHybrid` is still preserved in
+    `raw_payload`). `contract_type` maps from `salary.employmentType` (`"UoP"`/`"B2B"`) rather than
+    the top-level `contractTime` (`"full_time"`/`"part_time"`), since "contract type" in this
+    domain means employment form, not work-time schedule (see the `Remote` and `Contract Type`
+    glossary entries in `CLAUDE.md`). `description` is stored as the raw HTML the API returns,
+    unstripped — HTML-to-text is deferred to whichever later phase actually needs plain text (CV
+    tailoring).
+- **Pagination and `force_refresh`, JustJoin.it's model, not NoFluffJobs' no-op** (BUG10): every
+  request sets `sortActive=validFrom&sortDirection=desc`, giving the same newest-first
+  precondition JustJoin.it's endpoint relies on (ADR 0009). `run_solid_jobs_ingestion` interleaves
+  fetch-then-persist per page (`pageIndex`/`pageSize`, no cursor field — "fewer offers returned
+  than `pageSize`" is the end-of-results signal) and stops early once
+  `already_seen_stop_threshold` consecutive already-seen offers accumulate, exactly mirroring
+  `run_justjoinit_ingestion`'s `_persist_offers` shape. `force_refresh=True` bypasses that
+  checkpoint (ADR 0010's model) instead of switching sjctl subcommands — the old sjctl
+  watch-scoped "sync" concept (ADR 0001) no longer exists in the direct API and has no
+  replacement, since a "watch" was never a resource the direct API exposed.
+- **`_fetch_solid_jobs_json`** is the sole HTTP boundary, structured identically to
+  `_fetch_justjoinit_json`/`_fetch_nofluffjobs_json`: delegates to the shared
+  `app.connectors.http.fetch_json`, which catches `httpx.HTTPError` (connection/timeout/non-2xx via
+  `raise_for_status()`) and `json.JSONDecodeError` on `response.json()`, logging at `ERROR` and
+  returning `None` in both cases — never raises. `run_solid_jobs_ingestion` turns a `None` from
+  either `_fetch_solid_jobs_json` or `_extract_offers` into
+  `IngestionResult(ok=False, fetched=0, created=0, error_message=...)` only when it happens on the
+  first page; a later-page failure logs a warning and returns whatever was already fetched, same
+  as JustJoin.it.
 
 ### JustJoin.it connector (P1US3)
 
@@ -327,7 +335,7 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   "verify against the live system" discipline).
 - **`app/connectors/justjoinit.py`** — the second of three sibling connectors (P1US2–US4). Exposes
   `run_justjoinit_ingestion(session, source) -> IngestionResult` as the single public entrypoint;
-  no `campaign` parameter (that's a SOLID.Jobs/sjctl-specific concept, not applicable here). Does
+  no `campaign` parameter (that's a SOLID.Jobs-specific concept, not applicable here). Does
   not commit the session and does not create or seed a `Source` row, matching `solid_jobs.py`'s
   conventions.
 - **Response shape, confirmed live**: `{"data": [...offer objects...], "meta": {"from",
@@ -370,10 +378,10 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   | `canonical_url` | `slug` | Built as `https://justjoin.it/job-offer/{slug}` (singular `job-offer`; confirmed by following the `/offers/{slug}` → `/job-offer/{slug}` redirect live) — the list endpoint has no direct URL field |
   | `title` | `title` | |
   | `company` | `companyName` | |
-  | `location` | `locations[].city` | Joined with `", "` (mirrors `map_sjctl_offer`'s location join); falls back to top-level `city` if `locations` is empty |
+  | `location` | `locations[].city` | Joined with `", "` (mirrors `map_solid_jobs_offer`'s location join); falls back to top-level `city` if `locations` is empty |
   | `remote` | `workplaceType` | JustJoin.it's own 3-value enum is `{"remote", "hybrid", "office"}` — mapped to a canonical `bool` via `app.ingestion.normalize.normalize_remote` (P1US5); this happens to already satisfy the `Remote` glossary rule that hybrid is not remote |
   | `seniority` | `experienceLevel` | Mapped to the shared canonical vocabulary via `app.ingestion.normalize.normalize_seniority` (P1US5) — see "Cross-connector schema consistency" below |
-  | `salary_min`/`salary_max`/`salary_currency`/`contract_type` | `employmentTypes[0].{from,to,currency,type,gross}` | **Known limitation**: a JustJoin.it offer can list several employment-type entries (e.g. both `b2b` and `permanent`, each further repeated per display currency); only the first/primary entry is mapped, matching the same simplification `map_sjctl_offer` was allowed for SOLID.Jobs's own multi-field shape. Salary values arrive as floats and are coerced to `int` for the `Integer` DB column; currency and the `gross` flag are passed through `normalize_salary` (P1US5), which logs (but does not fabricate a conversion for) non-`PLN` currencies and `gross: false` figures. `contract_type` remains a raw pass-through of `type` — permanently, not deferred — per the `Contract Type` glossary entry being explicitly out of scope for vocabulary unification |
+  | `salary_min`/`salary_max`/`salary_currency`/`contract_type` | `employmentTypes[0].{from,to,currency,type,gross}` | **Known limitation**: a JustJoin.it offer can list several employment-type entries (e.g. both `b2b` and `permanent`, each further repeated per display currency); only the first/primary entry is mapped, matching the same simplification `map_solid_jobs_offer` was allowed for SOLID.Jobs's own multi-field shape. Salary values arrive as floats and are coerced to `int` for the `Integer` DB column; currency and the `gross` flag are passed through `normalize_salary` (P1US5), which logs (but does not fabricate a conversion for) non-`PLN` currencies and `gross: false` figures. `contract_type` remains a raw pass-through of `type` — permanently, not deferred — per the `Contract Type` glossary entry being explicitly out of scope for vocabulary unification |
   | `posted_at` | `publishedAt` | ISO datetime string, parsed by `Offer`'s pydantic validation |
   | `description` | *(not mapped — always `None`)* | **Known limitation**: the list endpoint's offer objects do not include the job description body; only the per-offer detail endpoint (`GET /api/candidate-api/offers/{slug}`) has it, and fetching that per offer would multiply request volume for every ingestion run. `description` is nullable on `Offer`, so this is schema-compliant; a later story could add a bounded per-offer detail fetch if the description text becomes necessary (e.g. for CV tailoring) |
 
@@ -423,7 +431,7 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   returning `None` in both cases — never raises. `_extract_offer_list` requires the response to be
   a dict with a `"postings"` key (a bare list, which JustJoin.it's endpoint can return, is not a
   shape NoFluffJobs's endpoint ever produces, and is treated as unexpected here); `None` postings is
-  treated as zero offers, matching sjctl's `"new": null` handling.
+  treated as zero offers, the same "explicit null means empty, not malformed" convention `_extract_offers` applies for SOLID.Jobs.
 - **Field mapping** (`map_nofluffjobs_offer`), from the confirmed `postings[]` item shape:
 
   | `Offer` field | Source field(s) | Notes |
@@ -488,7 +496,7 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   | NoFluffJobs | `c-level` | `lead` |
 
   **Concrete discrepancies fixed by this table**: SOLID.Jobs' own request-filter vocabulary uses
-  `"Regular"` (confirmed live via `sjctl search`), previously passed straight into `Offer.seniority`
+  `"Regular"` (confirmed live), previously passed straight into `Offer.seniority`
   unchanged — now mapped to canonical `"mid"`. JustJoin.it's `"manager"`/`"c_level"` (confirmed live
   and via fixture), previously passed straight through, are now mapped to canonical `"lead"`.
 - **Remote-flag handling**: SOLID.Jobs' `isRemote` and NoFluffJobs' `location.fullyRemote` are
@@ -550,9 +558,8 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   tests and future endpoints can introspect `get_jobs()`/`running`. On shutdown, `scheduler.shutdown
   (wait=True)` runs before `engine.dispose()` — `wait=True` is APScheduler's default but is passed
   explicitly to document intent; it does not risk hanging indefinitely because every connector
-  already enforces its own request timeout (`sjctl`'s subprocess call and both HTTP connectors'
-  `httpx.get` calls all pass an explicit `timeout`), so an in-flight job always finishes or times
-  out within a bounded window.
+  already enforces its own request timeout (all three connectors' `httpx.get` calls pass an
+  explicit `timeout`), so an in-flight job always finishes or times out within a bounded window.
 - **Real behavioral change, documented deliberately**: before this story, FastAPI could start even
   with the DB down (only `/health/db` would fail per request). After this story, startup itself
   calls `ensure_sources_exist`/`register_jobs`, so the app now fails to start if the DB is
@@ -630,7 +637,7 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   not a name imported into `registry`'s own namespace) — a declared interface rather than an
   accident of import binding, and the reason tests now patch `app.connectors.<name>.run_*_ingestion`
   directly instead of `registry`'s copy of the name. `_dispatch_solid_jobs` is the odd one out — it
-  reads `campaign=get_settings().sjctl_campaign` internally so all three adapters present the same
+  reads `campaign=get_settings().solid_jobs_campaign` internally so all three adapters present the same
   `(session, source, force_refresh) -> IngestionResult` signature despite `solid_jobs` needing an
   extra keyword argument underneath. `resolve_source_by_connector(session, connector) -> Source`
   raises `UnknownConnectorError` if `connector` isn't a `CONNECTOR_REGISTRY` key at all,
@@ -657,8 +664,8 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   `docs/adr/0005-scheduler-jobs-must-be-plain-sync-callables.md` for the full reasoning; summary
   here. `AsyncIOScheduler` shares uvicorn's single event loop and only offloads a job to its thread
   pool when the registered callable is a plain function — an `async def` job runs directly on the
-  main loop instead. None of the three connectors are actually non-blocking on their own (`sjctl`
-  via blocking `subprocess.run`; the two HTTP connectors via synchronous `httpx.get`), so an
+  main loop instead. None of the three connectors are actually non-blocking on their own (all
+  three call synchronous `httpx.get`, since BUG10 removed SOLID.Jobs' subprocess call), so an
   `async def` scheduler job would block the *entire* API for the duration of every run.
   `app.scheduler.service.run_source_sync` is therefore a plain `def`: it builds its own throwaway
   `AsyncEngine`/sessionmaker (via `get_engine()`/`get_sessionmaker()` — never the request-scoped,
@@ -683,7 +690,7 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   is the actual source-breakage signal the acceptance criteria describes. When the warning
   condition is hit, a `WARNING` is logged via the module logger `app.scheduler.service` naming the
   connector, and `GET /scheduler/status`'s `last_run_warning` reflects it. Note that a connector's
-  own internally-handled failure (e.g. `sjctl` binary missing, an HTTP transport error) already
+  own internally-handled failure (e.g. an HTTP transport error, malformed JSON) already
   returns `IngestionResult(ok=False, fetched=0, ...)` rather than raising (established connector
   convention from P1US2–US4) — from the scheduler's perspective this is indistinguishable from a
   "genuinely zero offers available" run: both surface as `status="ok"`, `warning=True`.
@@ -1067,7 +1074,7 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   facts-only on a real CV) — that is verified manually against the real Ollama
   container, not asserted in CI, matching this story's own acceptance-criteria scope.
 - **The LLM-call boundary diverges from the connectors' pattern deliberately**: background
-  ingestion connectors (e.g. `app/connectors/solid_jobs.py`'s `_run_sjctl`) catch expected
+  ingestion connectors (e.g. `app/connectors/solid_jobs.py`'s `_fetch_solid_jobs_json`) catch expected
   failures and return `None`/`ok=False`, because nothing is waiting synchronously on them.
   `POST /profile/upload` is a synchronous, user-waited request (why ADR 0011 picked an 8B model
   over a 70B one), so its boundary function, `_call_llm`, instead catches every failure
@@ -1210,8 +1217,6 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
   `build`.
 - `up` — `docker compose up --build`; brings up all four Compose services with hot reload for
   `api` and `frontend` (P0US4).
-- `sjctl-version` — `docker compose exec api sjctl version`; prints the `sjctl` binary version
-  installed inside the `api` container (P0US4).
 - `migrate` — `docker compose exec api alembic upgrade head` (P0US5).
 - `seed` — `docker compose exec api python -m app.db.seed` (P0US5).
 - `generate-types` — `cd frontend && pnpm run generate-types`, which runs `openapi-typescript`
@@ -1262,12 +1267,11 @@ Notes:
   connections until Postgres is actually ready.
 - `db` and `ollama` persist state in named volumes (`pgdata`, `ollama_data`) so data survives
   `docker compose down` (but not `docker compose down -v`).
-- The `Dockerfile` multi-stage build installs `sjctl` (the SOLID.Jobs CLI) into the `runtime`
-  stage via its official install script
-  (`scripts/install-sjctl.sh` from `solid-company/solid-jobs-skills`), with cosign signature
-  verification skipped (`SJCTL_SKIP_COSIGN=1`, since `cosign` isn't installed in this image) —
-  the script still verifies the release asset's sha256 checksum. `make sjctl-version` runs
-  `sjctl version` inside the running `api` container.
+- The `Dockerfile` runtime stage installs `curl`/`ca-certificates` via `apt-get` — kept solely for
+  the `api` healthcheck above (`CMD curl -f http://localhost:8000/health`), not for anything
+  SOLID.Jobs-related anymore (BUG10 removed the sjctl installer that used to be this block's other
+  reason to exist; removing the block entirely broke the healthcheck, since nothing else in the
+  image provides `curl` — caught by this story's own manual end-to-end test, not by `make ci`).
 - `Dockerfile.frontend` has three stages: `dev` (Vite dev server, used by `docker-compose.yml`),
   `build` (`pnpm build`, produces `frontend/dist`), and `production` (nginx serving the built
   static assets via `frontend/nginx.conf`, an SPA fallback for client-side routing added in

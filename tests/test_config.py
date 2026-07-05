@@ -13,7 +13,7 @@ SMTP_PORT=2525
 SMTP_USERNAME=sentinel-user
 SMTP_PASSWORD=sentinel-pass
 SMTP_FROM_EMAIL=sentinel@sentinel.test
-SJCTL_CAMPAIGN=sentinel-campaign
+SOLID_JOBS_CAMPAIGN=sentinel-campaign
 APP_ENV=sentinel-env
 LOG_LEVEL=DEBUG
 API_HOST=127.0.0.1
@@ -37,7 +37,7 @@ ENV_KEYS = [
     "SMTP_USERNAME",
     "SMTP_PASSWORD",
     "SMTP_FROM_EMAIL",
-    "SJCTL_CAMPAIGN",
+    "SOLID_JOBS_CAMPAIGN",
     "APP_ENV",
     "LOG_LEVEL",
     "API_HOST",
@@ -76,7 +76,7 @@ def test_settings_loads_fields_from_env_file(
     assert settings.smtp_username == "sentinel-user"
     assert settings.smtp_password == "sentinel-pass"
     assert settings.smtp_from_email == "sentinel@sentinel.test"
-    assert settings.sjctl_campaign == "sentinel-campaign"
+    assert settings.solid_jobs_campaign == "sentinel-campaign"
     assert settings.app_env == "sentinel-env"
     assert settings.log_level == "DEBUG"
     assert settings.api_host == "127.0.0.1"
@@ -97,7 +97,7 @@ def test_settings_applies_defaults_when_optional_fields_absent(
     assert settings.log_level == "INFO"
     assert settings.api_host == "0.0.0.0"
     assert settings.api_port == 8000
-    assert settings.sjctl_campaign == "recruflow"
+    assert settings.solid_jobs_campaign == "recruflow"
     assert settings.cors_allow_origin == "http://localhost:5173"
 
 

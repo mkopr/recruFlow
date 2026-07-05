@@ -1,5 +1,3 @@
-import json
-import subprocess
 from typing import Any
 from uuid import uuid4
 
@@ -12,13 +10,6 @@ from app.db.models import Offer as OfferModel
 from app.db.models import Source
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-
-class _FakeCompletedProcess:
-    def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
-        self.returncode = returncode
-        self.stdout = stdout
-        self.stderr = stderr
 
 
 class _FakeResponse:
@@ -87,9 +78,14 @@ def _nofluffjobs_raw(**overrides: Any) -> dict[str, Any]:
     return offer
 
 
-def _sync_stdout(offers: list[dict[str, Any]]) -> str:
-    new = [{"watch": "my-watch", "offer": offer} for offer in offers] or None
-    return json.dumps({"watchesRun": 1, "totalSeen": len(offers), "new": new})
+def _solid_jobs_payload(offers: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "jobs": offers,
+        "pageIndex": 0,
+        "pageSize": 100,
+        "totalCount": len(offers),
+        "totalPages": 1,
+    }
 
 
 def _justjoinit_payload(offers: list[dict[str, Any]]) -> dict[str, Any]:
@@ -118,20 +114,18 @@ async def test_all_three_connectors_run_end_to_end_and_persist_valid_offers(
     nofluffjobs_source = await _create_source(db_session, "nofluffjobs")
 
     monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *a, **kw: _FakeCompletedProcess(
-            returncode=0, stdout=_sync_stdout([_solid_jobs_raw()])
-        ),
+        httpx,
+        "get",
+        lambda *a, **kw: _FakeResponse(json_data=_solid_jobs_payload([_solid_jobs_raw()])),
     )
+    solid_result = await run_solid_jobs_ingestion(db_session, solid_source, campaign="recruflow")
+    await db_session.commit()
+
     monkeypatch.setattr(
         httpx,
         "get",
         lambda *a, **kw: _FakeResponse(json_data=_justjoinit_payload([_justjoinit_raw()])),
     )
-
-    solid_result = await run_solid_jobs_ingestion(db_session, solid_source, campaign="recruflow")
-    await db_session.commit()
     justjoinit_result = await run_justjoinit_ingestion(db_session, justjoinit_source)
     await db_session.commit()
 
@@ -162,11 +156,9 @@ async def test_salary_normalised_to_pln_monthly_across_all_sources(
     nofluffjobs_source = await _create_source(db_session, "nofluffjobs")
 
     monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *a, **kw: _FakeCompletedProcess(
-            returncode=0, stdout=_sync_stdout([_solid_jobs_raw()])
-        ),
+        httpx,
+        "get",
+        lambda *a, **kw: _FakeResponse(json_data=_solid_jobs_payload([_solid_jobs_raw()])),
     )
     await run_solid_jobs_ingestion(db_session, solid_source, campaign="recruflow")
     await db_session.commit()
@@ -206,10 +198,10 @@ async def test_remote_flag_canonical_across_all_sources(
     nofluffjobs_source = await _create_source(db_session, "nofluffjobs")
 
     monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *a, **kw: _FakeCompletedProcess(
-            returncode=0, stdout=_sync_stdout([_solid_jobs_raw(isRemote=True)])
+        httpx,
+        "get",
+        lambda *a, **kw: _FakeResponse(
+            json_data=_solid_jobs_payload([_solid_jobs_raw(isRemote=True)])
         ),
     )
     await run_solid_jobs_ingestion(db_session, solid_source, campaign="recruflow")
@@ -246,10 +238,10 @@ async def test_remote_flag_canonical_across_all_sources(
     nofluffjobs_source2 = await _create_source(db_session, "nofluffjobs")
 
     monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *a, **kw: _FakeCompletedProcess(
-            returncode=0, stdout=_sync_stdout([_solid_jobs_raw(isRemote=False)])
+        httpx,
+        "get",
+        lambda *a, **kw: _FakeResponse(
+            json_data=_solid_jobs_payload([_solid_jobs_raw(isRemote=False)])
         ),
     )
     await run_solid_jobs_ingestion(db_session, solid_source2, campaign="recruflow")
@@ -296,10 +288,10 @@ async def test_seniority_canonical_across_all_sources(
     nofluffjobs_source = await _create_source(db_session, "nofluffjobs")
 
     monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *a, **kw: _FakeCompletedProcess(
-            returncode=0, stdout=_sync_stdout([_solid_jobs_raw(experienceLevel="Senior")])
+        httpx,
+        "get",
+        lambda *a, **kw: _FakeResponse(
+            json_data=_solid_jobs_payload([_solid_jobs_raw(experienceLevel="Senior")])
         ),
     )
     await run_solid_jobs_ingestion(db_session, solid_source, campaign="recruflow")

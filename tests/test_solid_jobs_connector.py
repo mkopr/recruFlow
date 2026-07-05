@@ -1,25 +1,42 @@
 import json
 import logging
-import subprocess
 from typing import Any
 
+import httpx
 import pytest
 from app.connectors import solid_jobs
 from app.connectors.solid_jobs import (
     _extract_offers,
-    _run_sjctl,
-    build_search_args,
-    build_sync_args,
-    map_sjctl_offer,
+    _fetch_solid_jobs_json,
+    build_offer_params,
+    build_offer_url,
+    map_solid_jobs_offer,
 )
 from app.ingestion.normalize import SOLID_JOBS
 
 
-class _FakeCompletedProcess:
-    def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
-        self.returncode = returncode
-        self.stdout = stdout
-        self.stderr = stderr
+class _FakeResponse:
+    def __init__(
+        self,
+        *,
+        json_data: Any = None,
+        text: str = "",
+        status_error: Exception | None = None,
+        json_error: Exception | None = None,
+    ) -> None:
+        self._json_data = json_data
+        self.text = text
+        self._status_error = status_error
+        self._json_error = json_error
+
+    def raise_for_status(self) -> None:
+        if self._status_error is not None:
+            raise self._status_error
+
+    def json(self) -> Any:
+        if self._json_error is not None:
+            raise self._json_error
+        return self._json_data
 
 
 def _enable_logger() -> None:
@@ -28,180 +45,152 @@ def _enable_logger() -> None:
     logging.getLogger("app.connectors.solid_jobs").disabled = False
 
 
-def test_build_search_args_applies_division_city_salary_experience_terms_from_config() -> None:
-    result = build_search_args(
+def test_build_offer_url_uses_division_from_config() -> None:
+    result = build_offer_url({"division": "Engineering"})
+
+    assert result == "https://solid.jobs/public-api/offers/Engineering"
+
+
+def test_build_offer_url_defaults_division_to_it_when_absent() -> None:
+    result = build_offer_url({})
+
+    assert result == "https://solid.jobs/public-api/offers/IT"
+
+
+def test_build_offer_params_always_sets_campaign_page_index_page_size_and_sort() -> None:
+    result = build_offer_params({}, campaign="recruflow", page_index=0, page_size=100)
+
+    assert result["campaign"] == "recruflow"
+    assert result["pageIndex"] == 0
+    assert result["pageSize"] == 100
+    assert result["sortActive"] == "validFrom"
+    assert result["sortDirection"] == "desc"
+
+
+def test_build_offer_params_applies_cities_experience_terms_min_salary_from_config() -> None:
+    result = build_offer_params(
         {
-            "division": "IT",
             "cities": ["Warsaw", "Krakow"],
-            "min_salary": 18000,
             "experience_levels": ["Senior", "Regular"],
             "terms": ["python"],
+            "min_salary": 18000,
         },
         campaign="recruflow",
+        page_index=0,
+        page_size=100,
     )
 
-    assert result == [
-        "search",
-        "-d",
-        "IT",
-        "--city",
-        "Warsaw",
-        "--city",
-        "Krakow",
-        "--min-salary",
-        "18000",
-        "--experience",
-        "Senior",
-        "--experience",
-        "Regular",
-        "--term",
-        "python",
-        "--campaign",
-        "recruflow",
-        "--json",
-    ]
+    assert result["search.cities"] == "Warsaw,Krakow"
+    assert result["search.experiences"] == "Senior,Regular"
+    assert result["search.searchTerm"] == "python"
+    assert result["search.minimumSalary"] == 18000
 
 
-def test_build_search_args_defaults_division_to_it_when_absent() -> None:
-    result = build_search_args({}, campaign="recruflow")
+def test_build_offer_params_omits_absent_filters() -> None:
+    result = build_offer_params({}, campaign="recruflow", page_index=0, page_size=100)
 
-    idx = result.index("-d")
-    assert result[idx + 1] == "IT"
-    assert "--city" not in result
-    assert "--min-salary" not in result
-    assert "--experience" not in result
-    assert "--term" not in result
+    assert "search.cities" not in result
+    assert "search.experiences" not in result
+    assert "search.searchTerm" not in result
+    assert "search.minimumSalary" not in result
 
 
-def test_build_search_args_always_sets_campaign() -> None:
-    result = build_search_args({}, campaign="recruflow")
-
-    idx = result.index("--campaign")
-    assert result[idx + 1] == "recruflow"
-    assert result[-1] == "--json"
-
-
-def test_build_sync_args_sets_campaign_and_no_filters() -> None:
-    result = build_sync_args(campaign="recruflow")
-
-    assert result == ["sync", "--campaign", "recruflow", "--json"]
-
-
-def test_run_sjctl_returns_none_and_logs_when_binary_missing(
+def test_fetch_solid_jobs_json_returns_none_and_logs_on_network_error(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     _enable_logger()
 
     def _raise(*args: Any, **kwargs: Any) -> None:
-        raise FileNotFoundError("sjctl not found")
+        raise httpx.ConnectError("connection failed")
 
-    monkeypatch.setattr(subprocess, "run", _raise)
+    monkeypatch.setattr(httpx, "get", _raise)
 
     with caplog.at_level(logging.ERROR, logger="app.connectors.solid_jobs"):
-        result = _run_sjctl(["search", "--json"])
+        result = _fetch_solid_jobs_json("https://solid.jobs/public-api/offers/IT", params={})
 
     assert result is None
     assert any(r.levelno == logging.ERROR for r in caplog.records)
 
 
-def test_run_sjctl_returns_none_and_logs_when_exit_code_nonzero(
+def test_fetch_solid_jobs_json_returns_none_and_logs_on_http_error_status(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     _enable_logger()
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *a, **kw: _FakeCompletedProcess(returncode=1, stderr="boom"),
+    request = httpx.Request("GET", "https://solid.jobs/public-api/offers/IT")
+    status_error = httpx.HTTPStatusError(
+        "server error", request=request, response=httpx.Response(500, request=request)
     )
+    monkeypatch.setattr(httpx, "get", lambda *a, **kw: _FakeResponse(status_error=status_error))
 
     with caplog.at_level(logging.ERROR, logger="app.connectors.solid_jobs"):
-        result = _run_sjctl(["sync", "--json"])
-
-    assert result is None
-    assert any("boom" in r.getMessage() for r in caplog.records)
-
-
-def test_run_sjctl_returns_none_and_logs_on_malformed_json(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    _enable_logger()
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *a, **kw: _FakeCompletedProcess(returncode=0, stdout="not json{{{"),
-    )
-
-    with caplog.at_level(logging.ERROR, logger="app.connectors.solid_jobs"):
-        result = _run_sjctl(["sync", "--json"])
+        result = _fetch_solid_jobs_json("https://solid.jobs/public-api/offers/IT", params={})
 
     assert result is None
     assert any(r.levelno == logging.ERROR for r in caplog.records)
 
 
-def test_run_sjctl_returns_parsed_json_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fetch_solid_jobs_json_returns_none_and_logs_on_malformed_json(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _enable_logger()
+    json_error = json.JSONDecodeError("Expecting value", "not json{{{", 0)
     monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *a, **kw: _FakeCompletedProcess(
-            returncode=0, stdout=json.dumps({"watchesRun": 1, "totalSeen": 0, "new": None})
-        ),
+        httpx,
+        "get",
+        lambda *a, **kw: _FakeResponse(text="not json{{{", json_error=json_error),
     )
 
-    result = _run_sjctl(["sync", "--json"])
+    with caplog.at_level(logging.ERROR, logger="app.connectors.solid_jobs"):
+        result = _fetch_solid_jobs_json("https://solid.jobs/public-api/offers/IT", params={})
 
-    assert result == {"watchesRun": 1, "totalSeen": 0, "new": None}
+    assert result is None
+    assert any(r.levelno == logging.ERROR for r in caplog.records)
 
 
-def test_extract_offers_reads_named_key_from_dict_payload() -> None:
-    result = _extract_offers({"jobs": [{"title": "a"}, {"title": "b"}]}, "jobs")
+def test_fetch_solid_jobs_json_pins_api_version_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
 
-    assert result == [{"title": "a"}, {"title": "b"}]
+    def _fake_get(url: str, **kwargs: Any) -> _FakeResponse:
+        captured.update(kwargs)
+        return _FakeResponse(json_data={"jobs": []})
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+
+    _fetch_solid_jobs_json("https://solid.jobs/public-api/offers/IT", params={})
+
+    assert captured["headers"]["X-Api-Version"] == "1.0"
+
+
+def test_fetch_solid_jobs_json_returns_parsed_payload_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {"jobs": [{"title": "a"}], "pageIndex": 0, "pageSize": 1, "totalCount": 1}
+    monkeypatch.setattr(httpx, "get", lambda *a, **kw: _FakeResponse(json_data=payload))
+
+    result = _fetch_solid_jobs_json("https://solid.jobs/public-api/offers/IT", params={})
+
+    assert result == payload
 
 
 def test_extract_offers_reads_bare_list_payload() -> None:
-    result = _extract_offers([{"title": "a"}], "jobs")
+    result = _extract_offers([{"title": "a"}])
+
+    assert result == [{"title": "a"}]
+
+
+def test_extract_offers_reads_results_key_from_dict_payload() -> None:
+    result = _extract_offers({"jobs": [{"title": "a"}], "totalCount": 1})
 
     assert result == [{"title": "a"}]
 
 
 def test_extract_offers_returns_none_for_unexpected_shape() -> None:
-    result = _extract_offers({"unexpected": "shape"}, "new")
+    result = _extract_offers({"unexpected": "shape"})
 
     assert result is None
 
 
-def test_extract_offers_treats_null_value_as_empty_list() -> None:
-    # real sjctl sync --json emits {"new": null} when there are no new offers --
-    # this is a valid "zero results" response, not a malformed one.
-    result = _extract_offers({"watchesRun": 1, "totalSeen": 0, "new": None}, "new")
-
-    assert result == []
-
-
-def test_extract_offers_unwraps_item_key_for_sync_envelopes() -> None:
-    # real sjctl sync --json wraps each new offer as {"watch": ..., "offer": {...}},
-    # not a bare offer object.
-    payload = {
-        "new": [
-            {"watch": "my-watch", "offer": {"jobOfferKey": "k1"}},
-            {"watch": "my-watch", "offer": {"jobOfferKey": "k2"}},
-        ]
-    }
-
-    result = _extract_offers(payload, "new", item_key="offer")
-
-    assert result == [{"jobOfferKey": "k1"}, {"jobOfferKey": "k2"}]
-
-
-def test_extract_offers_skips_envelopes_missing_item_key() -> None:
-    payload = {"new": [{"watch": "my-watch"}, {"watch": "my-watch", "offer": {"jobOfferKey": "k"}}]}
-
-    result = _extract_offers(payload, "new", item_key="offer")
-
-    assert result == [{"jobOfferKey": "k"}]
-
-
-def test_map_sjctl_offer_maps_all_known_fields() -> None:
+def test_map_solid_jobs_offer_maps_all_known_fields() -> None:
     raw = {
         "jobOfferKey": "abc123",
         "url": "https://solid.jobs/o/x",
@@ -217,7 +206,7 @@ def test_map_sjctl_offer_maps_all_known_fields() -> None:
         "description": "great role",
     }
 
-    result = map_sjctl_offer(1, raw)
+    result = map_solid_jobs_offer(1, raw)
 
     assert result == {
         "source_id": 1,
@@ -237,18 +226,18 @@ def test_map_sjctl_offer_maps_all_known_fields() -> None:
     }
 
 
-def test_map_sjctl_offer_does_not_treat_hybrid_as_remote() -> None:
+def test_map_solid_jobs_offer_does_not_treat_hybrid_as_remote() -> None:
     raw = {"title": "Backend Engineer", "company": "Acme", "isRemote": False, "isHybrid": True}
 
-    result = map_sjctl_offer(1, raw)
+    result = map_solid_jobs_offer(1, raw)
 
     assert result["remote"] is False
 
 
-def test_map_sjctl_offer_handles_missing_optional_fields() -> None:
+def test_map_solid_jobs_offer_handles_missing_optional_fields() -> None:
     raw = {"title": "Backend Engineer", "company": "Acme"}
 
-    result = map_sjctl_offer(1, raw)
+    result = map_solid_jobs_offer(1, raw)
 
     assert result["external_id"] is None
     assert result["canonical_url"] is None
@@ -263,7 +252,9 @@ def test_map_sjctl_offer_handles_missing_optional_fields() -> None:
     assert result["remote"] is False
 
 
-def test_map_sjctl_offer_calls_shared_normalize_functions(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_map_solid_jobs_offer_calls_shared_normalize_functions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: dict[str, tuple[Any, ...]] = {}
 
     def _record(name: str) -> Any:
@@ -288,7 +279,7 @@ def test_map_sjctl_offer_calls_shared_normalize_functions(monkeypatch: pytest.Mo
         "experienceLevel": "Senior",
         "salary": {"from": 18000, "to": 24000, "currency": "PLN"},
     }
-    map_sjctl_offer(1, raw)
+    map_solid_jobs_offer(1, raw)
 
     assert calls["normalize_remote"][0] == SOLID_JOBS
     assert calls["normalize_seniority"][0] == SOLID_JOBS

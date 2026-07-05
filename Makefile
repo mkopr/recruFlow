@@ -1,4 +1,4 @@
-.PHONY: install lint format test test-unit test-integration test-frontend typecheck ci clean up sjctl-version migrate seed generate-types
+.PHONY: install lint format test test-unit test-integration test-frontend typecheck ci clean up migrate seed generate-types
 
 install:
 	uv sync --all-groups
@@ -7,9 +7,6 @@ install:
 
 up:
 	docker compose up --build
-
-sjctl-version:
-	docker compose exec api sjctl version
 
 migrate:
 	docker compose exec api alembic upgrade head

@@ -1,10 +1,9 @@
-import json
 import logging
-import subprocess
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.connectors.http import fetch_json
 from app.db.models import Source
 from app.ingestion.normalize import (
     SOLID_JOBS,
@@ -15,71 +14,67 @@ from app.ingestion.normalize import (
 from app.ingestion.persist import ingest_offer
 from app.ingestion.types import IngestionResult
 
-SJCTL_BINARY = "sjctl"
+SOLID_JOBS_OFFERS_URL_TEMPLATE = "https://solid.jobs/public-api/offers/{division}"
 
 logger = logging.getLogger(__name__)
 
 
-def build_search_args(config: dict[str, Any], *, campaign: str) -> list[str]:
-    args: list[str] = ["search", "-d", str(config.get("division", "IT"))]
-    for city in config.get("cities", []):
-        args += ["--city", str(city)]
+def _fetch_solid_jobs_json(
+    url: str, *, params: dict[str, Any], timeout: float = 10.0
+) -> Any | None:
+    return fetch_json(
+        url,
+        source_name="SOLID.Jobs",
+        logger=logger,
+        params=params,
+        headers={"X-Api-Version": "1.0"},
+        timeout=timeout,
+    )
+
+
+def build_offer_url(config: dict[str, Any]) -> str:
+    return SOLID_JOBS_OFFERS_URL_TEMPLATE.format(division=str(config.get("division", "IT")))
+
+
+def build_offer_params(
+    config: dict[str, Any], *, campaign: str, page_index: int, page_size: int
+) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "campaign": campaign,
+        "pageIndex": page_index,
+        "pageSize": page_size,
+        "sortActive": "validFrom",
+        "sortDirection": "desc",
+    }
+
+    cities = config.get("cities")
+    if cities:
+        params["search.cities"] = ",".join(str(city) for city in cities)
+
+    experience_levels = config.get("experience_levels")
+    if experience_levels:
+        params["search.experiences"] = ",".join(str(level) for level in experience_levels)
+
+    terms = config.get("terms")
+    if terms:
+        params["search.searchTerm"] = ",".join(str(term) for term in terms)
+
     min_salary = config.get("min_salary")
     if min_salary is not None:
-        args += ["--min-salary", str(min_salary)]
-    for level in config.get("experience_levels", []):
-        args += ["--experience", str(level)]
-    for term in config.get("terms", []):
-        args += ["--term", str(term)]
-    args += ["--campaign", campaign, "--json"]
-    return args
+        params["search.minimumSalary"] = min_salary
+
+    return params
 
 
-def build_sync_args(*, campaign: str) -> list[str]:
-    return ["sync", "--campaign", campaign, "--json"]
-
-
-def _run_sjctl(args: list[str], *, timeout: float = 30.0) -> Any | None:
-    try:
-        result = subprocess.run(
-            [SJCTL_BINARY, *args], capture_output=True, text=True, timeout=timeout
-        )
-    except OSError:
-        logger.error("failed to invoke sjctl binary: args=%r", args, exc_info=True)
-        return None
-    except subprocess.TimeoutExpired:
-        logger.error("sjctl invocation timed out: args=%r timeout=%s", args, timeout)
-        return None
-
-    if result.returncode != 0:
-        logger.error(
-            "sjctl exited non-zero: args=%r returncode=%d stderr=%s",
-            args,
-            result.returncode,
-            result.stderr.strip(),
-        )
-        return None
-
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError:
-        logger.error(
-            "sjctl returned malformed JSON: args=%r stdout=%r",
-            args,
-            result.stdout[:500],
-        )
-        return None
-
-
-def _extract_offers(
-    payload: Any, list_key: str, *, item_key: str | None = None
-) -> list[dict[str, Any]] | None:
+def _extract_offers(payload: Any) -> list[dict[str, Any]] | None:
+    # Confirmed live 2026-07-05 (see ADR 0012): the direct API wraps offers under "jobs",
+    # the same envelope key sjctl's own "search" subcommand used -- not "results"/"data".
     if isinstance(payload, list):
         items: list[Any] = payload
     elif isinstance(payload, dict):
-        if list_key not in payload:
+        if "jobs" not in payload:
             return None
-        raw_items = payload[list_key]
+        raw_items = payload["jobs"]
         if raw_items is None:
             items = []
         elif isinstance(raw_items, list):
@@ -89,13 +84,10 @@ def _extract_offers(
     else:
         return None
 
-    offers = [item for item in items if isinstance(item, dict)]
-    if item_key is None:
-        return offers
-    return [item[item_key] for item in offers if isinstance(item.get(item_key), dict)]
+    return [item for item in items if isinstance(item, dict)]
 
 
-def map_sjctl_offer(source_id: int, raw: dict[str, Any]) -> dict[str, Any]:
+def map_solid_jobs_offer(source_id: int, raw: dict[str, Any]) -> dict[str, Any]:
     raw_salary = raw.get("salary")
     salary: dict[str, Any] = raw_salary if isinstance(raw_salary, dict) else {}
 
@@ -128,33 +120,94 @@ def map_sjctl_offer(source_id: int, raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def _persist_offers(
+    session: AsyncSession,
+    source_id: int,
+    offers: list[dict[str, Any]],
+    consecutive_already_seen: int,
+) -> tuple[int, int]:
+    """Persist offers, returning (created_count, updated consecutive-already-seen streak).
+
+    The streak carries in and out across page boundaries so the caller can early-stop
+    pagination once it crosses a threshold — see `run_solid_jobs_ingestion`. An offer that
+    fails validation (`ingest_offer` returns `None`) is neither new nor already-seen, so it
+    leaves the streak unchanged rather than resetting or extending it.
+    """
+    created_count = 0
+    for raw in offers:
+        mapped = map_solid_jobs_offer(source_id, raw)
+        result = await ingest_offer(session, mapped, raw_payload=raw)
+        if result is None:
+            continue
+        _, created = result
+        if created:
+            created_count += 1
+            consecutive_already_seen = 0
+        else:
+            consecutive_already_seen += 1
+    return created_count, consecutive_already_seen
+
+
 async def run_solid_jobs_ingestion(
     session: AsyncSession, source: Source, *, campaign: str, force_refresh: bool = False
 ) -> IngestionResult:
-    if force_refresh:
-        args = build_search_args(source.config_json, campaign=campaign)
-        list_key, item_key = "jobs", None
-    else:
-        args = build_sync_args(campaign=campaign)
-        list_key, item_key = "new", "offer"
+    config = source.config_json or {}
+    url = build_offer_url(config)
+    page_size = int(config.get("page_size", 100))
+    max_pages = int(config.get("max_pages", 100))
+    already_seen_stop_threshold = int(config.get("already_seen_stop_threshold", 20))
 
-    payload = _run_sjctl(args)
-    if payload is None:
-        logger.warning("SOLID.Jobs ingestion aborted: sjctl call failed, see prior error")
-        return IngestionResult(ok=False, fetched=0, created=0, error_message="sjctl call failed")
-
-    offers = _extract_offers(payload, list_key, item_key=item_key)
-    if offers is None:
-        logger.error("sjctl returned unexpected JSON shape: args=%r", args)
-        return IngestionResult(
-            ok=False, fetched=0, created=0, error_message="sjctl returned unexpected JSON shape"
+    total_fetched = 0
+    total_created = 0
+    consecutive_already_seen = 0
+    for page_index in range(max_pages):
+        params = build_offer_params(
+            config, campaign=campaign, page_index=page_index, page_size=page_size
         )
+        payload = _fetch_solid_jobs_json(url, params=params)
+        if payload is None:
+            if page_index == 0:
+                return IngestionResult(
+                    ok=False,
+                    fetched=0,
+                    created=0,
+                    error_message="failed to fetch SOLID.Jobs offers",
+                )
+            logger.warning("SOLID.Jobs pagination stopped early after %d page(s)", page_index)
+            break
 
-    created_count = 0
-    for raw in offers:
-        mapped = map_sjctl_offer(source.id, raw)
-        result = await ingest_offer(session, mapped, raw_payload=raw)
-        if result is not None and result[1] is True:
-            created_count += 1
+        offers = _extract_offers(payload)
+        if offers is None:
+            logger.error(
+                "SOLID.Jobs returned unexpected JSON shape: url=%r page_index=%d", url, page_index
+            )
+            if page_index == 0:
+                return IngestionResult(
+                    ok=False,
+                    fetched=0,
+                    created=0,
+                    error_message="SOLID.Jobs returned unexpected JSON shape",
+                )
+            logger.warning("SOLID.Jobs pagination stopped early after %d page(s)", page_index)
+            break
 
-    return IngestionResult(ok=True, fetched=len(offers), created=created_count)
+        total_fetched += len(offers)
+        created_count, consecutive_already_seen = await _persist_offers(
+            session, source.id, offers, consecutive_already_seen
+        )
+        total_created += created_count
+
+        if len(offers) < page_size:
+            break
+
+        # force_refresh bypasses the BUG02/ADR0009 incremental checkpoint: a caller explicitly
+        # asking for a fresh fetch wants the full catalog re-walked, not an early exit the moment
+        # it looks like we've caught up.
+        if not force_refresh and consecutive_already_seen >= already_seen_stop_threshold:
+            logger.info(
+                "SOLID.Jobs pagination stopped early: caught up to %d already-seen offers",
+                consecutive_already_seen,
+            )
+            break
+
+    return IngestionResult(ok=True, fetched=total_fetched, created=total_created)

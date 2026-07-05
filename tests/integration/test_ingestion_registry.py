@@ -86,7 +86,7 @@ async def test_dispatch_ingestion_solid_jobs_passes_campaign_from_settings(
 
     result = await dispatch_ingestion(db_session, source)
 
-    assert captured["campaign"] == get_settings().sjctl_campaign
+    assert captured["campaign"] == get_settings().solid_jobs_campaign
     assert result == IngestionResult(ok=True, fetched=0, created=0)
 
 

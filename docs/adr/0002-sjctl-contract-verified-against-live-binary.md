@@ -1,3 +1,8 @@
+> Superseded 2026-07-05 by [ADR 0012](0012-solid-jobs-direct-api-replaces-sjctl-subprocess.md) —
+> kept for history; the sjctl v0.3.0 field mapping described below no longer reflects current
+> behavior (the connector now calls the direct HTTP API, whose field shape was separately
+> re-verified live and matches almost field-for-field).
+
 # sjctl's JSON contract is pinned to a verified live install, not the vendored skill docs
 
 US11's original field-mapping plan for the SOLID.Jobs connector was inferred from `.claude/skills/jobs-search/SKILL.md` and `jobs-digest/SKILL.md` prose (e.g. `companyName`, flat `salaryFrom`/`salaryTo`, `city`, `remote`, `publishedAt`). Installing sjctl v0.3.0 and hitting the real API during design showed the actual shape differs on nearly every field: the offer object uses `company`, a nested `salary: {from, to, currency, employmentType}`, an array `locations`, a boolean `isRemote` (plus a separate `isHybrid` with no equivalent in the skill docs), and `validFrom` instead of `publishedAt`. The `search` response wraps offers under `"jobs"`, not `"offers"`. The `sync` response wraps each new offer in `{"watch": ..., "offer": {...}}`, not a bare offer object — a structural difference the skill docs don't mention at all.

@@ -17,7 +17,6 @@ The `recruFlow/` directory is the application root (currently bootstrapping). Al
 | AI | Ollama (local LLM) · LangChain · LangGraph |
 | Database | PostgreSQL |
 | Scheduling | APScheduler (inside FastAPI lifespan) |
-| SOLID.Jobs tooling | `sjctl` CLI (subprocess) |
 | Package manager (Python) | `uv` |
 | Package manager (Node) | `pnpm` |
 | Linter/formatter | `ruff` (Python) · ESLint + Prettier (TypeScript) |
@@ -40,7 +39,6 @@ make migrate          # alembic upgrade head
 make seed             # load sample offers into DB
 make generate-types   # generate TypeScript types from FastAPI /openapi.json
 make clean            # remove build artefacts, __pycache__, .mypy_cache, dist/
-make sjctl-version    # print installed sjctl binary version
 ```
 
 Single test: `uv run pytest tests/path/to/test_file.py::test_function_name`
@@ -50,7 +48,7 @@ Single test: `uv run pytest tests/path/to/test_file.py::test_function_name`
 The system is structured around these phases (see `user stories/000 high level guide.md` for full scope):
 
 - **Phase 0** — Foundations: project scaffold, Docker Compose, DB bootstrap, FastAPI skeleton, CI
-- **Phase 1** — Ingestion: connectors for SOLID.Jobs (`sjctl` subprocess), JustJoin.it, NoFluffJobs; APScheduler; offer list UI
+- **Phase 1** — Ingestion: connectors for SOLID.Jobs, JustJoin.it, NoFluffJobs (all direct HTTP APIs); APScheduler; offer list UI
 - **Phase 2** — Profile: candidate profile schema, CV upload + LLM extraction, profile editor UI, sjctl sync
 - **Phase 3** — Matching: unified `MatchScore` schema, LangChain Matcher (JustJoin.it/NoFluffJobs), `sjctl evaluate` wrapper (SOLID.Jobs), batch scoring job
 - **Phase 4** — Application: CV tailoring chain, cover letter generation, review UI, SMTP send, status tracking
@@ -61,7 +59,6 @@ Key architectural constraints:
 - **ELT pattern**: raw API payload always stored before normalisation
 - **Dedup**: hash on canonical URL; fallback hash on title + company + location
 - **No auto-send**: Applications are never created or sent without explicit user approval
-- **sjctl is subprocess-only**: never read its SQLite file directly (OD-1); always use `--json` flag
 - **Unified MatchScore**: both LangChain Matcher and `sjctl evaluate` write to the same schema/table; `engine` field distinguishes them
 - **SSE for swarm progress**: not WebSocket (OD-8)
 - **Send queue**: rate-limited, daily cap enforced as a hard block (OD-5)
@@ -83,8 +80,6 @@ Use these terms consistently in code, schemas, and PR descriptions:
 | **Swarm** | Batch-send operation with mandatory dry-run review gate |
 | **Dry Run** | Swarm execution that generates all drafts for review but does not send |
 | **Matcher** | LangChain chain scoring an Offer against a Profile (used for JustJoin.it and NoFluffJobs) |
-| **sjctl** | Go CLI wrapping SOLID.Jobs API; runs as subprocess inside the API container |
-| **Watch** | A saved `sjctl` search synced periodically for new Offers |
 | **Digest** | Scheduled job surfacing new high-grade Offers since last run |
 | **Send Queue** | Rate-limited, retry-aware worker dispatching Applications one at a time |
 | **Campaign ID** | `recruflow` — passed as `campaign` parameter in all direct SOLID.Jobs API calls |
@@ -112,12 +107,11 @@ User stories live in `user stories/000 high level guide.md`. When implementing a
 ## SOLID.Jobs Integration
 
 ```python
-# Canonical subprocess pattern for sjctl
-result = subprocess.run(
-    ["sjctl", "sync", "--json"],
-    capture_output=True, text=True, check=True
+# Canonical direct-HTTP pattern for SOLID.Jobs (app/connectors/solid_jobs.py)
+payload = fetch_json(
+    url, source_name="SOLID.Jobs", logger=logger, params=params, headers={"X-Api-Version": "1.0"}
 )
-offers = json.loads(result.stdout)["new"]
+offers = payload["jobs"]
 ```
 
-Pass `campaign=recruflow` in all direct SOLID.Jobs REST API calls (sjctl manages its own campaign internally). The `sjctl` binary is installed inside the API Docker container via its install script.
+recruFlow itself manages `campaign=recruflow` directly now (`Settings.solid_jobs_campaign`), passed as a required query param on every SOLID.Jobs API call.

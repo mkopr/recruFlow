@@ -12,19 +12,12 @@ RUN uv sync --frozen --all-groups
 
 FROM python:3.12-slim AS runtime
 
+# curl is required by docker-compose.yml's api healthcheck (CMD curl -f .../health), not by
+# anything sjctl-related -- keep this even though BUG10 removed the sjctl installer that used
+# to justify it.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
-# Pin via SJCTL_VERSION for reproducibility if needed; cosign isn't installed in
-# this image, so signature verification is skipped in favor of the sha256 check
-# the installer always performs. The script is downloaded first (rather than
-# piped straight into bash) so SJCTL_BIN_DIR/SJCTL_SKIP_COSIGN reach the script's
-# own shell instead of only the curl process on the left side of a pipe.
-RUN curl -fsSL -o /tmp/install-sjctl.sh \
-    https://raw.githubusercontent.com/solid-company/solid-jobs-skills/main/scripts/install-sjctl.sh \
-    && SJCTL_BIN_DIR=/usr/local/bin SJCTL_SKIP_COSIGN=1 bash /tmp/install-sjctl.sh \
-    && rm /tmp/install-sjctl.sh
 
 COPY --from=builder /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"

@@ -1,3 +1,7 @@
+> Superseded 2026-07-05 by [ADR 0012](0012-solid-jobs-direct-api-replaces-sjctl-subprocess.md) —
+> kept for history; the sync/search subcommand split described below no longer reflects current
+> behavior.
+
 # SOLID.Jobs connector: subcommand choice drives cache behavior, not a flag
 
 The SOLID.Jobs connector (US11) needs to satisfy "respect sjctl's local cache unless a re-fetch is explicitly requested." sjctl exposes no single "bypass cache" flag — instead it has two structurally different subcommands: `sync` (runs sjctl's own saved watches, returns only offers not seen before, no filter flags) and `search` (runs an ad hoc filtered query, always hits the live API, ignores watches entirely).

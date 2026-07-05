@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     smtp_username: str = ""
     smtp_password: str = ""
     smtp_from_email: str = ""
-    sjctl_campaign: str = "recruflow"
+    solid_jobs_campaign: str = "recruflow"
     app_env: str = "development"
     log_level: str = "INFO"
     api_host: str = "0.0.0.0"

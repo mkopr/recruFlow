@@ -48,12 +48,6 @@ This starts four services, each with a health check:
 Both `api` and `frontend` hot-reload on source changes since their directories are bind-mounted
 into the containers. Check status with `docker compose ps`.
 
-To confirm the `sjctl` binary installed inside the `api` container:
-
-```bash
-make sjctl-version   # docker compose exec api sjctl version
-```
-
 ## Database
 
 With `make up` running (the `api` container must exist for `docker compose exec` to work):
@@ -169,7 +163,7 @@ requires is documented here, grouped by concern.
 | `SMTP_USERNAME` | SMTP auth username. |
 | `SMTP_PASSWORD` | SMTP auth password. |
 | `SMTP_FROM_EMAIL` | From-address used on outgoing application emails. |
-| `SJCTL_CAMPAIGN` | Campaign ID passed to `sjctl` / the SOLID.Jobs API (`recruflow`). |
+| `SOLID_JOBS_CAMPAIGN` | Campaign ID passed as a required query param on every SOLID.Jobs API call (`recruflow`). |
 | `APP_ENV` | Application environment name (e.g. `development`). |
 | `LOG_LEVEL` | Root log level (e.g. `INFO`). |
 | `API_HOST` | Host the FastAPI server binds to. |
@@ -211,38 +205,40 @@ npx skills@latest add solid-company/solid-jobs-skills
 
 ## SOLID.Jobs connector
 
-`app/connectors/solid_jobs.py` ingests offers from SOLID.Jobs via the `sjctl` subprocess into the
-canonical `offers` table. It does not create, schedule, or expose itself over HTTP — that's left to
-later stories (a scheduler and an ingestion API endpoint). Call it directly with an already-resolved
-`Source` row:
+`app/connectors/solid_jobs.py` ingests offers from SOLID.Jobs' own direct, key-less public HTTP
+API (`GET https://solid.jobs/public-api/offers/{division}` — see
+`docs/adr/0012-solid-jobs-direct-api-replaces-sjctl-subprocess.md`) into the canonical `offers`
+table. It does not create, schedule, or expose itself over HTTP — that's left to later stories (a
+scheduler and an ingestion API endpoint). Call it directly with an already-resolved `Source` row:
 
 ```python
 from app.connectors.solid_jobs import run_solid_jobs_ingestion
 
-result = await run_solid_jobs_ingestion(session, source, campaign=settings.sjctl_campaign)
+result = await run_solid_jobs_ingestion(session, source, campaign=settings.solid_jobs_campaign)
 # IngestionResult(ok=True, fetched=3, created=2)
 await session.commit()
 ```
 
-`campaign` always comes from `Settings.sjctl_campaign` (`SJCTL_CAMPAIGN` env var, default
-`recruflow`) and is passed as `--campaign` on every `sjctl` invocation.
+`campaign` always comes from `Settings.solid_jobs_campaign` (`SOLID_JOBS_CAMPAIGN` env var, default
+`recruflow`) and is passed as a required query param on every request.
 
-By default (`force_refresh=False`) the connector runs `sjctl sync`, which only reports offers not
-already seen by sjctl's own saved watches — no filters, cache-respecting. Pass `force_refresh=True`
-to instead run `sjctl search` with filters read from the Source row's `config_json`, bypassing the
-cache:
+The connector paginates by `pageIndex`/`pageSize`, newest-first, stopping early once
+`already_seen_stop_threshold` consecutive already-seen offers accumulate (mirrors the JustJoin.it
+connector's model — see ARCHITECTURE.md). Pass `force_refresh=True` to bypass that checkpoint and
+re-walk pagination up to `max_pages`. Filters are read from the Source row's `config_json` and
+applied on every request, regardless of `force_refresh`:
 
-| `config_json` key | sjctl flag | Notes |
+| `config_json` key | Query param | Notes |
 | --- | --- | --- |
-| `division` | `-d` | Defaults to `IT` if absent |
-| `cities` (list) | `--city` (repeated) | |
-| `min_salary` | `--min-salary` | |
-| `experience_levels` (list) | `--experience` (repeated) | |
-| `terms` (list) | `--term` (repeated) | Free-text/technology filter, e.g. `["python"]` |
+| `division` | URL path segment | Defaults to `IT` if absent |
+| `cities` (list) | `search.cities` | Comma-joined |
+| `min_salary` | `search.minimumSalary` | |
+| `experience_levels` (list) | `search.experiences` | Comma-joined |
+| `terms` (list) | `search.searchTerm` | Comma-joined; free-text/technology filter, e.g. `["python"]` |
 
-If the `sjctl` binary is missing, exits non-zero, or returns malformed JSON, the connector logs the
-failure and returns `IngestionResult(ok=False, fetched=0, created=0)` rather than raising — it never
-crashes the calling ingestion process.
+If the HTTP request fails or returns malformed/unexpected JSON, the connector logs the failure and
+returns `IngestionResult(ok=False, fetched=0, created=0)` rather than raising — it never crashes
+the calling ingestion process.
 
 ## JustJoin.it connector
 

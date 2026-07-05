@@ -11,11 +11,15 @@ def fetch_json(
     source_name: str,
     logger: logging.Logger,
     params: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
     timeout: float = 10.0,
 ) -> Any | None:
     try:
         response = httpx.get(
-            url, params=params, timeout=timeout, headers={"User-Agent": "recruFlow/0.1"}
+            url,
+            params=params,
+            timeout=timeout,
+            headers={"User-Agent": "recruFlow/0.1", **(headers or {})},
         )
         response.raise_for_status()
     except httpx.HTTPError:

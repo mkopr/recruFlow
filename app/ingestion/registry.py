@@ -32,7 +32,7 @@ async def _dispatch_solid_jobs(
     session: AsyncSession, source: Source, force_refresh: bool
 ) -> IngestionResult:
     return await solid_jobs.run_solid_jobs_ingestion(
-        session, source, campaign=get_settings().sjctl_campaign, force_refresh=force_refresh
+        session, source, campaign=get_settings().solid_jobs_campaign, force_refresh=force_refresh
     )
 
 
