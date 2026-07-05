@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from dataclasses import asdict
 from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,13 +30,7 @@ async def _trigger_ingest_async(source: str) -> IngestResponse:
         return IngestResponse(source=source, ok=False, fetched=0, created=0, error_message=str(exc))
 
     assert result is not None
-    return IngestResponse(
-        source=source,
-        ok=result.ok,
-        fetched=result.fetched,
-        created=result.created,
-        error_message=result.error_message,
-    )
+    return IngestResponse(source=source, **asdict(result))
 
 
 def _trigger_ingest_sync(source: str) -> IngestResponse:

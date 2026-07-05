@@ -1,5 +1,3 @@
-from dataclasses import asdict
-
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
@@ -19,7 +17,7 @@ async def trigger_run(source: str) -> ManualRunResponse:
         record = await run_source(source, trigger_type="manual")
     except SchedulerLookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return ManualRunResponse(**asdict(record))
+    return ManualRunResponse.model_validate(record)
 
 
 @router.get("/scheduler/status")
