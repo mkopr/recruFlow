@@ -69,6 +69,31 @@ def test_extract_cv_text_rejects_missing_extension() -> None:
         extract_cv_text("cv", b"...")
 
 
+def test_extract_cv_text_from_pdf_with_two_column_layout_keeps_columns_intact() -> None:
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf)
+    sidebar_lines = ["Skills:", "Python, Bash", "Django, Flask"]
+    body_lines = ["Nov 2020 - NOW", "Senior Engineer", "Built things at Acme"]
+    y = 700
+    for sidebar_line, body_line in zip(sidebar_lines, body_lines, strict=True):
+        c.drawString(50, y, sidebar_line)
+        c.drawString(300, y, body_line)
+        y -= 20
+    c.showPage()
+    c.save()
+
+    result = extract_cv_text("cv.pdf", buf.getvalue())
+    lines = [line for line in result.split("\n") if line.strip()]
+
+    for sidebar_line in sidebar_lines:
+        assert sidebar_line in lines
+    for body_line in body_lines:
+        assert body_line in lines
+    for sidebar_line, body_line in zip(sidebar_lines, body_lines, strict=True):
+        assert f"{sidebar_line} {body_line}" not in result
+        assert f"{body_line} {sidebar_line}" not in result
+
+
 def test_extract_cv_text_pdf_with_no_text_returns_empty_string_not_error() -> None:
     buf = io.BytesIO()
     c = canvas.Canvas(buf)

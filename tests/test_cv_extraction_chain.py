@@ -126,6 +126,15 @@ def test_build_messages_includes_core_facts_only_instruction() -> None:
     assert human_message.content == "some cv text"
 
 
+def test_core_system_prompt_instructs_whole_document_skill_mining() -> None:
+    system_text = _CORE_SYSTEM_PROMPT.lower()
+
+    assert "entire" in system_text or "whole" in system_text
+    assert "role" in system_text or "project" in system_text
+    assert "summary" in system_text or "headline" in system_text
+    assert "collapse" in system_text or "single skill entry" in system_text
+
+
 def test_build_messages_includes_contact_facts_instruction() -> None:
     messages = _build_messages(_CONTACT_SYSTEM_PROMPT, "some cv text")
 
