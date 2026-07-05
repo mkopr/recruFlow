@@ -945,12 +945,17 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   stores these fields plus an `is_active` boolean flag"; the structured fields live inside `data`,
   validated at the application layer, the same ELT-adjacent split `offers.raw_payload` already
   uses.
-- **Field list**: `skills` (`Skill`: `name`, `proficiency`, `years`), `past_roles` (`PastRole`:
-  `title`, `company`, `start_date`, `end_date`, `description`), `education` (`Education`:
-  `institution`, `degree`, `field_of_study`, `start_date`, `end_date`), `certifications`
-  (`Certification`: `name`, `issuer`, `year`), `languages` (`Language`: `name`, `proficiency`),
-  `contract_type_preference`, `salary_min`, `salary_target`, `location_preference`,
-  `remote_preference`, `deal_breakers` (`list[str]`).
+- **Field list**: `skills` (`Skill`: `name`, `proficiency`, `years`, `category`), `past_roles`
+  (`PastRole`: `title`, `company`, `start_date`, `end_date`, `description`), `education`
+  (`Education`: `institution`, `degree`, `field_of_study`, `start_date`, `end_date`),
+  `certifications` (`Certification`: `name`, `issuer`, `year`), `languages` (`Language`: `name`,
+  `proficiency`), `projects` (`Project`: `name`, `description`, `tech_stack`, `client`,
+  `team_size` — distinct from `past_roles`, for a CV's own "Selected Projects"-style section),
+  `industry_tags` (`list[str]`), `headline`, `summary`, `email`, `phone`, `location`, `links`
+  (`list[str]`), `contract_type_preference`, `salary_min`, `salary_target`,
+  `location_preference`, `remote_preference`, `deal_breakers` (`list[str]`). `industry_tags` also
+  exists on `Offer`/`OfferSummary` (`app/schemas/offer.py`, `offers.industry_tags` JSONB column)
+  so postings can carry the same domain tags for future matching (BUG09).
 - **Three deliberate looseness decisions**, required by the acceptance criteria's "no fixed/
   hardcoded values ... every list-type field accepts an arbitrary number of arbitrary entries":
   - `PastRole`/`Education` dates (`start_date`/`end_date`) are free-form strings (e.g. `"2019"`,
@@ -1028,20 +1033,38 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   conditions with different causes, different remediations, and (per below) different HTTP status
   codes, so keeping them in different modules keeps each one's error handling legible on its own.
 - **`CVExtraction` vs. `Profile`**: the LLM's structured-output target is `CVExtraction`
-  (`app/schemas/profile.py`), a schema containing only the five CV-derived list fields (`skills`,
-  `past_roles`, `education`, `certifications`, `languages`) — it deliberately omits `Profile`'s
+  (`app/schemas/profile.py`), a schema containing only the CV-derived fields (`skills`,
+  `past_roles`, `education`, `certifications`, `languages`, `projects`, `industry_tags`,
+  `headline`, `summary`, `email`, `phone`, `location`, `links`) — it deliberately omits `Profile`'s
   preference fields (`contract_type_preference`, `salary_min`, `salary_target`,
   `location_preference`, `remote_preference`, `deal_breakers`), because a CV's text has no basis
   for those and the LLM must never be given a schema slot it could be tempted to fill with an
   inference. `extract_profile_from_cv_text` maps `CVExtraction` into a full `Profile` via
   `Profile(**extraction.model_dump())`, leaving every preference field at its own default (`None`
   or `[]`).
-- **Facts-only enforcement**: there is no code-level guardrail beyond the system prompt and
-  `temperature=0` — `app/llm/cv_extraction.py`'s `_SYSTEM_PROMPT` instructs the model to extract
-  only what is explicitly present, never infer/embellish/guess, and leave absent sections as
-  empty lists; `ChatOllama(..., temperature=0)` removes sampling randomness for this
-  facts-extraction task. No automated test targets extraction *quality* (i.e. whether the model
-  actually stays facts-only on a real CV) — that is verified manually against the real Ollama
+- **Three-way split LLM call (BUG09)**: `_call_llm` no longer asks the model to fill all of
+  `CVExtraction` in a single structured-output call. Manual testing against a real two-page CV
+  (`user stories/CV.pdf`) showed that once the schema grew to cover projects/industry
+  tags/contact/headline on top of the original five list fields, the local 8B model
+  (`llama3.1:8b`) silently returned empty lists for whatever didn't fit in its context budget,
+  rather than erroring — first dropping everything but the header fields, then (after trimming
+  to a two-way split) still dropping `projects`/`industry_tags` specifically. Raising Ollama's
+  `num_ctx` to compensate was tried and rejected: it triggered a hard `CUDA error: unspecified
+  launch failure` that crashed the model server mid-request. The fix instead runs three small,
+  focused calls sequentially against the *same* CV text — `_build_core_chain`
+  (skills/past_roles/education/certifications/languages, the original proven schema),
+  `_build_contact_chain` (headline/summary/email/phone/location/links), and
+  `_build_projects_chain` (projects/industry_tags) — then merges the three results into one
+  `CVExtraction`. Each call's schema and expected output stay small enough for the model to fill
+  reliably at the default context window, at the cost of three sequential LLM round-trips instead
+  of one.
+- **Facts-only enforcement**: there is no code-level guardrail beyond each call's system prompt
+  and `temperature=0` — `app/llm/cv_extraction.py`'s `_CORE_SYSTEM_PROMPT` /
+  `_CONTACT_SYSTEM_PROMPT` / `_PROJECTS_SYSTEM_PROMPT` each instruct the model to extract only
+  what is explicitly present, never infer/embellish/guess, and leave absent sections as empty
+  lists; `ChatOllama(..., temperature=0)` removes sampling randomness for this facts-extraction
+  task. No automated test targets extraction *quality* (i.e. whether the model actually stays
+  facts-only on a real CV) — that is verified manually against the real Ollama
   container, not asserted in CI, matching this story's own acceptance-criteria scope.
 - **The LLM-call boundary diverges from the connectors' pattern deliberately**: background
   ingestion connectors (e.g. `app/connectors/solid_jobs.py`'s `_run_sjctl`) catch expected

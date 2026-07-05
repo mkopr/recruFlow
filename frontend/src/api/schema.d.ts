@@ -272,6 +272,8 @@ export interface components {
       contract_type: string | null;
       /** Posted At */
       posted_at: string | null;
+      /** Industry Tags */
+      industry_tags: string[];
       /**
        * Created At
        * Format: date-time
@@ -319,6 +321,8 @@ export interface components {
       contract_type: string | null;
       /** Posted At */
       posted_at: string | null;
+      /** Industry Tags */
+      industry_tags: string[];
       /**
        * Created At
        * Format: date-time
@@ -350,6 +354,22 @@ export interface components {
       certifications?: components['schemas']['Certification'][];
       /** Languages */
       languages?: components['schemas']['Language'][];
+      /** Projects */
+      projects?: components['schemas']['Project'][];
+      /** Industry Tags */
+      industry_tags?: string[];
+      /** Headline */
+      headline?: string | null;
+      /** Summary */
+      summary?: string | null;
+      /** Email */
+      email?: string | null;
+      /** Phone */
+      phone?: string | null;
+      /** Location */
+      location?: string | null;
+      /** Links */
+      links?: string[];
       /** Contract Type Preference */
       contract_type_preference?: string | null;
       /** Salary Min */
@@ -385,6 +405,19 @@ export interface components {
        */
       updated_at: string;
     };
+    /** Project */
+    Project: {
+      /** Name */
+      name: string;
+      /** Description */
+      description?: string | null;
+      /** Tech Stack */
+      tech_stack?: string[];
+      /** Client */
+      client?: string | null;
+      /** Team Size */
+      team_size?: number | null;
+    };
     /** SchedulerStatusResponse */
     SchedulerStatusResponse: {
       /** Sources */
@@ -398,6 +431,8 @@ export interface components {
       proficiency?: string | null;
       /** Years */
       years?: number | null;
+      /** Category */
+      category?: string | null;
     };
     /** SourceStatus */
     SourceStatus: {

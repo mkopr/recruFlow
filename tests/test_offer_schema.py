@@ -22,6 +22,7 @@ def test_offer_accepts_valid_payload_with_all_fields() -> None:
         contract_type="b2b",
         posted_at=posted_at,
         description="Great role",
+        industry_tags=["fintech", "backend"],
     )
 
     dumped = offer.model_dump()
@@ -38,6 +39,7 @@ def test_offer_accepts_valid_payload_with_all_fields() -> None:
     assert dumped["contract_type"] == "b2b"
     assert dumped["posted_at"] == posted_at
     assert dumped["description"] == "Great role"
+    assert dumped["industry_tags"] == ["fintech", "backend"]
 
 
 def test_offer_accepts_minimal_payload_and_applies_defaults() -> None:
@@ -47,6 +49,7 @@ def test_offer_accepts_minimal_payload_and_applies_defaults() -> None:
     assert offer.salary_currency == "PLN"
     assert offer.canonical_url is None
     assert offer.description is None
+    assert offer.industry_tags == []
 
 
 def test_offer_rejects_missing_title() -> None:

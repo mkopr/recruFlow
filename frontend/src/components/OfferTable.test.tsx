@@ -20,6 +20,7 @@ function makeOffer(overrides: Partial<OfferSummary> = {}): OfferSummary {
     salary_currency: 'PLN',
     contract_type: 'B2B',
     posted_at: '2026-06-01T00:00:00Z',
+    industry_tags: [],
     created_at: '2026-06-01T00:00:00Z',
     ...overrides,
   };

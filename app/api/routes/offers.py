@@ -25,6 +25,7 @@ def _offer_summary(offer: OfferModel, source: str) -> OfferSummary:
         salary_currency=offer.salary_currency,
         contract_type=offer.contract_type,
         posted_at=offer.posted_at,
+        industry_tags=offer.industry_tags or [],
         created_at=offer.created_at,
     )
 

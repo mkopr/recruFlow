@@ -9,6 +9,7 @@ class Skill(BaseModel):
     name: str = Field(min_length=1)
     proficiency: str | None = None
     years: float | None = Field(default=None, ge=0)
+    category: str | None = None
 
 
 class PastRole(BaseModel):
@@ -19,6 +20,16 @@ class PastRole(BaseModel):
     start_date: str | None = None
     end_date: str | None = None
     description: str | None = None
+
+
+class Project(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(min_length=1)
+    description: str | None = None
+    tech_stack: list[str] = Field(default_factory=list)
+    client: str | None = None
+    team_size: int | None = Field(default=None, ge=0)
 
 
 class Education(BaseModel):
@@ -54,6 +65,14 @@ class CVExtraction(BaseModel):
     education: list[Education] = Field(default_factory=list)
     certifications: list[Certification] = Field(default_factory=list)
     languages: list[Language] = Field(default_factory=list)
+    projects: list[Project] = Field(default_factory=list)
+    industry_tags: list[str] = Field(default_factory=list)
+    headline: str | None = None
+    summary: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    location: str | None = None
+    links: list[str] = Field(default_factory=list)
 
 
 class Profile(BaseModel):
@@ -64,6 +83,14 @@ class Profile(BaseModel):
     education: list[Education] = Field(default_factory=list)
     certifications: list[Certification] = Field(default_factory=list)
     languages: list[Language] = Field(default_factory=list)
+    projects: list[Project] = Field(default_factory=list)
+    industry_tags: list[str] = Field(default_factory=list)
+    headline: str | None = None
+    summary: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    location: str | None = None
+    links: list[str] = Field(default_factory=list)
     contract_type_preference: str | None = None
     salary_min: int | None = Field(default=None, ge=0)
     salary_target: int | None = Field(default=None, ge=0)

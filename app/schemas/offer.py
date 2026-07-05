@@ -21,6 +21,7 @@ class Offer(BaseModel):
     contract_type: str | None = Field(default=None, max_length=50)
     posted_at: datetime | None = None
     description: str | None = None
+    industry_tags: list[str] = Field(default_factory=list)
 
     @field_validator("canonical_url", mode="after")
     @classmethod
@@ -55,6 +56,7 @@ class OfferSummary(BaseModel):
     salary_currency: str | None
     contract_type: str | None
     posted_at: datetime | None
+    industry_tags: list[str]
     created_at: datetime
 
 

@@ -24,6 +24,7 @@ def test_offer_summary_maps_all_scalar_fields() -> None:
         contract_type="B2B",
         description="some text",
         posted_at=posted_at,
+        industry_tags=["fintech"],
         raw_payload={},
         created_at=created_at,
     )
@@ -44,6 +45,7 @@ def test_offer_summary_maps_all_scalar_fields() -> None:
     assert result.salary_currency == "PLN"
     assert result.contract_type == "B2B"
     assert result.posted_at == posted_at
+    assert result.industry_tags == ["fintech"]
     assert result.created_at == created_at
 
 
@@ -67,6 +69,7 @@ def test_offer_summary_uses_given_source_label_verbatim() -> None:
     assert result.salary_max is None
     assert result.contract_type is None
     assert result.posted_at is None
+    assert result.industry_tags == []
 
 
 def test_offer_detail_includes_description_and_raw_payload() -> None:
