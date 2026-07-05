@@ -1,20 +1,18 @@
+import { useEditableList } from '../../hooks/useEditableList';
+
 interface DealBreakersListProps {
   dealBreakers: string[];
   onChange: (next: string[]) => void;
 }
 
+const emptyDealBreaker = (): string => '';
+
 export function DealBreakersList({ dealBreakers, onChange }: DealBreakersListProps) {
-  const updateEntry = (index: number, value: string) => {
-    onChange(dealBreakers.map((entry, i) => (i === index ? value : entry)));
-  };
-
-  const removeEntry = (index: number) => {
-    onChange(dealBreakers.filter((_, i) => i !== index));
-  };
-
-  const addEntry = () => {
-    onChange([...dealBreakers, '']);
-  };
+  const { updateEntry, removeEntry, addEntry } = useEditableList(
+    dealBreakers,
+    onChange,
+    emptyDealBreaker,
+  );
 
   return (
     <div className="card p-4">

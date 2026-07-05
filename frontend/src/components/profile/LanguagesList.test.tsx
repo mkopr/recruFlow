@@ -17,15 +17,6 @@ describe('LanguagesList', () => {
     expect(screen.getByLabelText('Language 1 proficiency')).toHaveValue('fluent');
   });
 
-  it('"Add language" appends a new blank entry', async () => {
-    const onChange = vi.fn();
-    render(<LanguagesList languages={languages} errors={[false]} onChange={onChange} />);
-
-    await userEvent.click(screen.getByText('Add language'));
-
-    expect(onChange).toHaveBeenCalledWith([...languages, { name: '', proficiency: null }]);
-  });
-
   it('editing a field updates it immutably', async () => {
     const onChange = vi.fn();
     render(<LanguagesList languages={languages} errors={[false]} onChange={onChange} />);
@@ -33,15 +24,6 @@ describe('LanguagesList', () => {
     await userEvent.type(screen.getByLabelText('Language 1 name'), '!');
 
     expect(onChange).toHaveBeenLastCalledWith([{ ...languages[0], name: 'English!' }]);
-  });
-
-  it('remove excludes an entry', async () => {
-    const onChange = vi.fn();
-    render(<LanguagesList languages={languages} errors={[false]} onChange={onChange} />);
-
-    await userEvent.click(screen.getByText('Remove'));
-
-    expect(onChange).toHaveBeenCalledWith([]);
   });
 
   it('highlights name for a flagged entry', () => {

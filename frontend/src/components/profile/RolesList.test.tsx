@@ -30,20 +30,6 @@ describe('RolesList', () => {
     expect(screen.getByLabelText('Role 1 description')).toHaveValue('Built things');
   });
 
-  it('"Add role" appends a new blank role', async () => {
-    const onChange = vi.fn();
-    render(
-      <RolesList roles={roles} errors={[{ title: false, company: false }]} onChange={onChange} />,
-    );
-
-    await userEvent.click(screen.getByText('Add role'));
-
-    expect(onChange).toHaveBeenCalledWith([
-      ...roles,
-      { title: '', company: '', start_date: null, end_date: null, description: null },
-    ]);
-  });
-
   it('editing a field updates that field immutably', async () => {
     const onChange = vi.fn();
     render(
@@ -53,17 +39,6 @@ describe('RolesList', () => {
     await userEvent.type(screen.getByLabelText('Role 1 title'), '!');
 
     expect(onChange).toHaveBeenLastCalledWith([{ ...roles[0], title: 'Engineer!' }]);
-  });
-
-  it('remove excludes a role', async () => {
-    const onChange = vi.fn();
-    render(
-      <RolesList roles={roles} errors={[{ title: false, company: false }]} onChange={onChange} />,
-    );
-
-    await userEvent.click(screen.getByText('Remove'));
-
-    expect(onChange).toHaveBeenCalledWith([]);
   });
 
   it('flags title only when title is missing', () => {

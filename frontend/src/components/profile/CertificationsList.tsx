@@ -1,4 +1,5 @@
 import type { components } from '../../api/schema';
+import { useEditableList } from '../../hooks/useEditableList';
 
 type Certification = components['schemas']['Certification'];
 
@@ -8,18 +9,14 @@ interface CertificationsListProps {
   onChange: (next: Certification[]) => void;
 }
 
+const emptyCertification = (): Certification => ({ name: '', issuer: null, year: null });
+
 export function CertificationsList({ certifications, errors, onChange }: CertificationsListProps) {
-  const updateEntry = (index: number, patch: Partial<Certification>) => {
-    onChange(certifications.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)));
-  };
-
-  const removeEntry = (index: number) => {
-    onChange(certifications.filter((_, i) => i !== index));
-  };
-
-  const addEntry = () => {
-    onChange([...certifications, { name: '', issuer: null, year: null }]);
-  };
+  const { updateEntry, removeEntry, addEntry } = useEditableList(
+    certifications,
+    onChange,
+    emptyCertification,
+  );
 
   return (
     <div className="card p-4">
@@ -32,14 +29,14 @@ export function CertificationsList({ certifications, errors, onChange }: Certifi
               aria-label={`Certification ${index + 1} name`}
               placeholder="Name"
               value={entry.name}
-              onChange={(e) => updateEntry(index, { name: e.target.value })}
+              onChange={(e) => updateEntry(index, { ...entry, name: e.target.value })}
             />
             <input
               className="input flex-1"
               aria-label={`Certification ${index + 1} issuer`}
               placeholder="Issuer"
               value={entry.issuer ?? ''}
-              onChange={(e) => updateEntry(index, { issuer: e.target.value || null })}
+              onChange={(e) => updateEntry(index, { ...entry, issuer: e.target.value || null })}
             />
             <input
               className="input w-28"
@@ -48,7 +45,10 @@ export function CertificationsList({ certifications, errors, onChange }: Certifi
               placeholder="Year"
               value={entry.year ?? ''}
               onChange={(e) =>
-                updateEntry(index, { year: e.target.value === '' ? null : Number(e.target.value) })
+                updateEntry(index, {
+                  ...entry,
+                  year: e.target.value === '' ? null : Number(e.target.value),
+                })
               }
             />
             <button

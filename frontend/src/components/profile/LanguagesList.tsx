@@ -1,4 +1,5 @@
 import type { components } from '../../api/schema';
+import { useEditableList } from '../../hooks/useEditableList';
 
 type Language = components['schemas']['Language'];
 
@@ -8,18 +9,14 @@ interface LanguagesListProps {
   onChange: (next: Language[]) => void;
 }
 
+const emptyLanguage = (): Language => ({ name: '', proficiency: null });
+
 export function LanguagesList({ languages, errors, onChange }: LanguagesListProps) {
-  const updateEntry = (index: number, patch: Partial<Language>) => {
-    onChange(languages.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)));
-  };
-
-  const removeEntry = (index: number) => {
-    onChange(languages.filter((_, i) => i !== index));
-  };
-
-  const addEntry = () => {
-    onChange([...languages, { name: '', proficiency: null }]);
-  };
+  const { updateEntry, removeEntry, addEntry } = useEditableList(
+    languages,
+    onChange,
+    emptyLanguage,
+  );
 
   return (
     <div className="card p-4">
@@ -32,14 +29,16 @@ export function LanguagesList({ languages, errors, onChange }: LanguagesListProp
               aria-label={`Language ${index + 1} name`}
               placeholder="Name"
               value={entry.name}
-              onChange={(e) => updateEntry(index, { name: e.target.value })}
+              onChange={(e) => updateEntry(index, { ...entry, name: e.target.value })}
             />
             <input
               className="input flex-1"
               aria-label={`Language ${index + 1} proficiency`}
               placeholder="Proficiency"
               value={entry.proficiency ?? ''}
-              onChange={(e) => updateEntry(index, { proficiency: e.target.value || null })}
+              onChange={(e) =>
+                updateEntry(index, { ...entry, proficiency: e.target.value || null })
+              }
             />
             <button
               type="button"

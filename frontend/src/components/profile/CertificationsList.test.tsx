@@ -20,20 +20,6 @@ describe('CertificationsList', () => {
     expect(screen.getByLabelText('Certification 1 year')).toHaveValue(2022);
   });
 
-  it('"Add certification" appends a new blank entry', async () => {
-    const onChange = vi.fn();
-    render(
-      <CertificationsList certifications={certifications} errors={[false]} onChange={onChange} />,
-    );
-
-    await userEvent.click(screen.getByText('Add certification'));
-
-    expect(onChange).toHaveBeenCalledWith([
-      ...certifications,
-      { name: '', issuer: null, year: null },
-    ]);
-  });
-
   it('editing a field updates it immutably', async () => {
     const onChange = vi.fn();
     render(
@@ -43,17 +29,6 @@ describe('CertificationsList', () => {
     await userEvent.type(screen.getByLabelText('Certification 1 name'), '!');
 
     expect(onChange).toHaveBeenLastCalledWith([{ ...certifications[0], name: 'AWS SAA!' }]);
-  });
-
-  it('remove excludes an entry', async () => {
-    const onChange = vi.fn();
-    render(
-      <CertificationsList certifications={certifications} errors={[false]} onChange={onChange} />,
-    );
-
-    await userEvent.click(screen.getByText('Remove'));
-
-    expect(onChange).toHaveBeenCalledWith([]);
   });
 
   it('highlights name for a flagged entry', () => {

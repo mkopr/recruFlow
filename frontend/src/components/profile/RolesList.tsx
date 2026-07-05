@@ -1,4 +1,5 @@
 import type { components } from '../../api/schema';
+import { useEditableList } from '../../hooks/useEditableList';
 
 type PastRole = components['schemas']['PastRole'];
 
@@ -13,21 +14,20 @@ interface RolesListProps {
   onChange: (next: PastRole[]) => void;
 }
 
+const emptyRole = (): PastRole => ({
+  title: '',
+  company: '',
+  start_date: null,
+  end_date: null,
+  description: null,
+});
+
 export function RolesList({ roles, errors, onChange }: RolesListProps) {
-  const updateRole = (index: number, patch: Partial<PastRole>) => {
-    onChange(roles.map((role, i) => (i === index ? { ...role, ...patch } : role)));
-  };
-
-  const removeRole = (index: number) => {
-    onChange(roles.filter((_, i) => i !== index));
-  };
-
-  const addRole = () => {
-    onChange([
-      ...roles,
-      { title: '', company: '', start_date: null, end_date: null, description: null },
-    ]);
-  };
+  const {
+    updateEntry: updateRole,
+    removeEntry: removeRole,
+    addEntry: addRole,
+  } = useEditableList(roles, onChange, emptyRole);
 
   return (
     <div className="card p-4">
@@ -46,14 +46,14 @@ export function RolesList({ roles, errors, onChange }: RolesListProps) {
                   aria-label={`Role ${index + 1} title`}
                   placeholder="Title"
                   value={role.title}
-                  onChange={(e) => updateRole(index, { title: e.target.value })}
+                  onChange={(e) => updateRole(index, { ...role, title: e.target.value })}
                 />
                 <input
                   className={`input flex-1 ${error.company ? 'border-[var(--color-danger)]' : ''}`}
                   aria-label={`Role ${index + 1} company`}
                   placeholder="Company"
                   value={role.company}
-                  onChange={(e) => updateRole(index, { company: e.target.value })}
+                  onChange={(e) => updateRole(index, { ...role, company: e.target.value })}
                 />
               </div>
               <div className="flex flex-wrap gap-2">
@@ -62,14 +62,16 @@ export function RolesList({ roles, errors, onChange }: RolesListProps) {
                   aria-label={`Role ${index + 1} start date`}
                   placeholder="Start date"
                   value={role.start_date ?? ''}
-                  onChange={(e) => updateRole(index, { start_date: e.target.value || null })}
+                  onChange={(e) =>
+                    updateRole(index, { ...role, start_date: e.target.value || null })
+                  }
                 />
                 <input
                   className="input flex-1"
                   aria-label={`Role ${index + 1} end date`}
                   placeholder="End date"
                   value={role.end_date ?? ''}
-                  onChange={(e) => updateRole(index, { end_date: e.target.value || null })}
+                  onChange={(e) => updateRole(index, { ...role, end_date: e.target.value || null })}
                 />
               </div>
               <textarea
@@ -77,7 +79,9 @@ export function RolesList({ roles, errors, onChange }: RolesListProps) {
                 aria-label={`Role ${index + 1} description`}
                 placeholder="Description"
                 value={role.description ?? ''}
-                onChange={(e) => updateRole(index, { description: e.target.value || null })}
+                onChange={(e) =>
+                  updateRole(index, { ...role, description: e.target.value || null })
+                }
               />
               <button
                 type="button"

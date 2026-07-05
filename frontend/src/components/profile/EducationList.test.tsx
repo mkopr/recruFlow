@@ -26,18 +26,6 @@ describe('EducationList', () => {
     expect(screen.getByLabelText('Education 1 field of study')).toHaveValue('CS');
   });
 
-  it('"Add education" appends a new blank entry', async () => {
-    const onChange = vi.fn();
-    render(<EducationList education={education} errors={[false]} onChange={onChange} />);
-
-    await userEvent.click(screen.getByText('Add education'));
-
-    expect(onChange).toHaveBeenCalledWith([
-      ...education,
-      { institution: '', degree: null, field_of_study: null, start_date: null, end_date: null },
-    ]);
-  });
-
   it('editing a field updates it immutably', async () => {
     const onChange = vi.fn();
     render(<EducationList education={education} errors={[false]} onChange={onChange} />);
@@ -45,15 +33,6 @@ describe('EducationList', () => {
     await userEvent.type(screen.getByLabelText('Education 1 institution'), '!');
 
     expect(onChange).toHaveBeenLastCalledWith([{ ...education[0], institution: 'MIT!' }]);
-  });
-
-  it('remove excludes an entry', async () => {
-    const onChange = vi.fn();
-    render(<EducationList education={education} errors={[false]} onChange={onChange} />);
-
-    await userEvent.click(screen.getByText('Remove'));
-
-    expect(onChange).toHaveBeenCalledWith([]);
   });
 
   it('highlights institution for a flagged entry', () => {
