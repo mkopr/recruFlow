@@ -2,8 +2,11 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import and_, or_, select
 
 from app.api.deps import SessionDep
-from app.db.models import MatchScore, Source
+from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
+from app.db.models import Source
+from app.db.profile_repo import get_active_profile
+from app.schemas.match_score import MatchScoreResponse
 from app.schemas.offer import OfferDetail, OfferSummary
 
 router = APIRouter()
@@ -36,6 +39,19 @@ def _offer_detail(offer: OfferModel, source: str) -> OfferDetail:
         description=offer.description,
         raw_payload=offer.raw_payload,
         updated_at=offer.updated_at,
+    )
+
+
+def _match_score_response(row: MatchScoreModel) -> MatchScoreResponse:
+    return MatchScoreResponse(
+        id=row.id,
+        offer_id=row.offer_id,
+        profile_id=row.profile_id,
+        engine=row.engine,
+        grade=row.grade,
+        dimensions=row.dimensions,
+        rationale=row.rationale,
+        created_at=row.created_at,
     )
 
 
@@ -88,7 +104,9 @@ async def list_offers(
         )
     if grade is not None:
         stmt = stmt.where(
-            OfferModel.id.in_(select(MatchScore.offer_id).where(MatchScore.grade == grade))
+            OfferModel.id.in_(
+                select(MatchScoreModel.offer_id).where(MatchScoreModel.grade == grade)
+            )
         )
 
     rows = (await session.execute(stmt)).all()
@@ -108,3 +126,28 @@ async def get_offer(offer_id: int, session: SessionDep) -> OfferDetail:
 
     offer, connector, name = row
     return _offer_detail(offer, connector or name)
+
+
+@router.get("/offers/{offer_id}/score")
+async def get_offer_score(offer_id: int, session: SessionDep) -> MatchScoreResponse | None:
+    offer = await session.get(OfferModel, offer_id)
+    if offer is None:
+        raise HTTPException(status_code=404, detail=f"offer {offer_id} not found")
+
+    active_profile = await get_active_profile(session)
+    if active_profile is None:
+        return None
+
+    stmt = (
+        select(MatchScoreModel)
+        .where(
+            MatchScoreModel.offer_id == offer_id,
+            MatchScoreModel.profile_id == active_profile.id,
+        )
+        .order_by(MatchScoreModel.created_at.desc())
+        .limit(1)
+    )
+    row = await session.scalar(stmt)
+    if row is None:
+        return None
+    return _match_score_response(row)

@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
-from app.api.routes.offers import _offer_detail, _offer_summary
+from app.api.routes.offers import _match_score_response, _offer_detail, _offer_summary
+from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
 
 
@@ -107,3 +108,45 @@ def test_offer_detail_raw_payload_defaults_are_not_silently_dropped() -> None:
     result = _offer_detail(offer, "justjoinit")
 
     assert result.raw_payload == {}
+
+
+def test_match_score_response_maps_all_fields() -> None:
+    created_at = datetime(2026, 6, 2, tzinfo=UTC)
+    row = MatchScoreModel(
+        id=1,
+        offer_id=2,
+        profile_id=3,
+        engine="sjctl",
+        grade="C",
+        dimensions={"salary_fit": 0.6},
+        rationale="text",
+        created_at=created_at,
+    )
+
+    result = _match_score_response(row)
+
+    assert result.id == 1
+    assert result.offer_id == 2
+    assert result.profile_id == 3
+    assert result.engine == "sjctl"
+    assert result.grade == "C"
+    assert result.dimensions == {"salary_fit": 0.6}
+    assert result.rationale == "text"
+    assert result.created_at == created_at
+
+
+def test_match_score_response_allows_null_rationale() -> None:
+    row = MatchScoreModel(
+        id=1,
+        offer_id=2,
+        profile_id=3,
+        engine="langchain",
+        grade="A",
+        dimensions={},
+        rationale=None,
+        created_at=datetime(2026, 6, 2, tzinfo=UTC),
+    )
+
+    result = _match_score_response(row)
+
+    assert result.rationale is None

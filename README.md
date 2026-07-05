@@ -493,6 +493,32 @@ stored at ingest time), and `updated_at`. Returns `404` with a clear message for
 {"detail": "offer 999999999 not found"}
 ```
 
+### `GET /offers/{offer_id}/score`
+
+Returns the most recent `MatchScore` for this offer against whichever `Profile` is currently
+active, regardless of which engine (`langchain` or `sjctl`) produced it.
+
+```bash
+curl http://localhost:8000/offers/42/score
+```
+
+```json
+{
+  "id": 7,
+  "offer_id": 42,
+  "profile_id": 1,
+  "engine": "langchain",
+  "grade": "B",
+  "dimensions": {"skill_match": 0.8, "salary_fit": 0.6},
+  "rationale": "Strong skill overlap, salary slightly below target.",
+  "created_at": "2026-06-21T08:00:00Z"
+}
+```
+
+Returns `404` only when `{offer_id}` itself doesn't exist. Returns `200` with a JSON `null` body
+when there's no active profile, or an active profile exists but this offer has no score yet — never
+an error for either "nothing scored yet" case.
+
 ## Offer list page
 
 With `make up` running, open `http://localhost:5173` to browse ingested offers without calling

@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import httpx
@@ -7,7 +8,7 @@ import pytest_asyncio
 from app.db.models import MatchScore, Profile, Source
 from app.db.models import Offer as OfferModel
 from app.ingestion.persist import ingest_offer
-from sqlalchemy import delete
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -255,3 +256,146 @@ async def test_get_offer_unknown_id_returns_404(client: httpx.AsyncClient) -> No
 
     assert response.status_code == 404
     assert "999999999" in response.json()["detail"]
+
+
+async def _deactivate_all_profiles(session: AsyncSession) -> None:
+    # Deactivating (rather than deleting) avoids tripping match_scores' profile_id
+    # FK constraint on profiles owned by unrelated tests.
+    await session.execute(update(Profile).values(is_active=False))
+    await session.commit()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_get_offer_score_returns_most_recent_score_for_active_profile(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await _deactivate_all_profiles(db_session)
+    source_id = await _create_source(db_session)
+    offer_id = await _create_offer(db_session, source_id)
+    profile = Profile(name=f"profile-{uuid4()}", is_active=True, data={})
+    db_session.add(profile)
+    await db_session.flush()
+
+    earlier = MatchScore(
+        offer_id=offer_id,
+        profile_id=profile.id,
+        engine="langchain",
+        grade="C",
+        dimensions={},
+        rationale="earlier",
+        created_at=datetime(2026, 6, 1, tzinfo=UTC),
+    )
+    later = MatchScore(
+        offer_id=offer_id,
+        profile_id=profile.id,
+        engine="langchain",
+        grade="A",
+        dimensions={},
+        rationale="later",
+        created_at=datetime(2026, 6, 2, tzinfo=UTC),
+    )
+    db_session.add_all([earlier, later])
+    await db_session.commit()
+
+    response = await client.get(f"/offers/{offer_id}/score")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == later.id
+    assert body["grade"] == "A"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_get_offer_score_returns_null_when_offer_has_no_score(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await _deactivate_all_profiles(db_session)
+    source_id = await _create_source(db_session)
+    offer_id = await _create_offer(db_session, source_id)
+    profile = Profile(name=f"profile-{uuid4()}", is_active=True, data={})
+    db_session.add(profile)
+    await db_session.commit()
+
+    response = await client.get(f"/offers/{offer_id}/score")
+
+    assert response.status_code == 200
+    assert response.json() is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_get_offer_score_returns_null_when_no_active_profile(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await _deactivate_all_profiles(db_session)
+    source_id = await _create_source(db_session)
+    offer_id = await _create_offer(db_session, source_id)
+    await db_session.commit()
+
+    response = await client.get(f"/offers/{offer_id}/score")
+
+    assert response.status_code == 200
+    assert response.json() is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_get_offer_score_unknown_offer_id_returns_404(client: httpx.AsyncClient) -> None:
+    response = await client.get("/offers/999999999/score")
+
+    assert response.status_code == 404
+    assert "999999999" in response.json()["detail"]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_rescoring_offer_inserts_new_row_without_overwriting_existing(
+    db_session: AsyncSession,
+) -> None:
+    await _deactivate_all_profiles(db_session)
+    source_id = await _create_source(db_session)
+    offer_id = await _create_offer(db_session, source_id)
+    profile = Profile(name=f"profile-{uuid4()}", is_active=True, data={})
+    db_session.add(profile)
+    await db_session.flush()
+
+    db_session.add(
+        MatchScore(
+            offer_id=offer_id,
+            profile_id=profile.id,
+            engine="langchain",
+            grade="B",
+            dimensions={},
+            rationale="first",
+            created_at=datetime(2026, 6, 1, tzinfo=UTC),
+        )
+    )
+    await db_session.commit()
+
+    db_session.add(
+        MatchScore(
+            offer_id=offer_id,
+            profile_id=profile.id,
+            engine="langchain",
+            grade="A",
+            dimensions={},
+            rationale="second",
+            created_at=datetime(2026, 6, 1, tzinfo=UTC) + timedelta(hours=1),
+        )
+    )
+    await db_session.commit()
+
+    rows = (
+        (
+            await db_session.execute(
+                select(MatchScore).where(
+                    MatchScore.offer_id == offer_id, MatchScore.profile_id == profile.id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 2

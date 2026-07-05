@@ -1172,6 +1172,46 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   anywhere else since it was the only page; this is the minimum needed to make two pages mutually
   reachable, not a general navigation system built ahead of need.
 
+### Unified Match Score schema (P3US21)
+
+- **Purpose**: the foundational Phase 3 story. Every other Phase 3 story (US22's LangChain Matcher,
+  US23's `sjctl evaluate` wrapper, US24's cross-engine consistency checks, US25's batch scoring job,
+  US26's frontend score display) constructs or reads a `MatchScore` row against this schema, so the
+  schema, the read endpoint, and the insert-never-overwrite invariant had to be locked in first. No
+  new migration is needed — `match_scores` has existed since the original P0US5 migration but was
+  never written to or read from until this story.
+- **`MatchScore`/`MatchScoreResponse` split (`app/schemas/match_score.py`)**: mirrors `Offer`/
+  `OfferSummary` exactly — `MatchScore` is the domain-input model an engine constructs before
+  persistence (no `id`, since the DB assigns it on insert), `MatchScoreResponse`
+  (`from_attributes=True`) is the plain, already-validated read model `GET /offers/{id}/score`
+  returns straight off an ORM row (`engine`/`grade` as plain `str`, no re-validation on the way out).
+- **`grade` is `Literal["A", "B", "C", "D", "F"]`, not A–F inclusive of E** — matches the five
+  letters actually used elsewhere in this codebase's own user stories (US22's "D or F"/"A or B"
+  outcomes, US26's badge colours: A=green, B=teal, C=yellow, D=orange, F=red, no E). `engine` is
+  `Literal["langchain", "sjctl"]`. Both use `Literal` rather than a bare `str` plus a hand-rolled
+  validator specifically so an out-of-vocabulary value is rejected by the type system itself,
+  mirroring this codebase's existing preference for validators/types doing the rejecting (e.g.
+  `Offer`'s `_check_salary_range`).
+- **`dimensions: dict[str, float]` is an open dict by design** — no fixed key set, so either
+  scoring engine can populate whatever per-dimension breakdown it produces without a schema change
+  or migration, satisfying the acceptance criterion directly.
+- **`GET /offers/{offer_id}/score`** (`app/api/routes/offers.py`) returns the single most recent
+  `MatchScore` for the offer against whichever `Profile` is currently active
+  (`app/db/profile_repo.py`'s existing `get_active_profile`, reused rather than duplicated),
+  ordered by `created_at` descending — this is the one place recency is enforced, since no write
+  path exists yet to enforce it on insert. Status/body contract: `404` only when `offer_id` itself
+  doesn't exist (identical wording to the existing `GET /offers/{offer_id}` 404); `200` with a JSON
+  `null` body when there is no active profile at all, or an active profile exists but this offer has
+  no `MatchScore` row for it yet (mirrors `GET /profile`'s existing 200-with-null convention rather
+  than treating either as an error); `200` with the row's fields otherwise.
+- **No MatchScore-writing/persistence helper exists yet** — this story is schema-plus-read-endpoint
+  only, per its own acceptance criteria; US22/US23 will each need an insert path once they exist and
+  can share one if warranted then. Introducing one now would have been speculative code with no
+  caller.
+- **No uniqueness constraint on `(offer_id, profile_id)`** — deliberately left alone; the
+  acceptance criteria require multiple `MatchScore` rows per offer over time (re-scores, or scores
+  against different profiles), so a new score is always inserted, never overwritten.
+
 ### `frontend/` project
 
 React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
