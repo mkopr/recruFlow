@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     database_url: str
     ollama_base_url: str
     ollama_model: str
+    matcher_ollama_model: str
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_username: str = ""

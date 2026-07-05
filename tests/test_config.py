@@ -8,6 +8,7 @@ FULL_ENV = """\
 DATABASE_URL=postgresql+asyncpg://sentinel:sentinel@sentinel-host:5432/sentinel
 OLLAMA_BASE_URL=http://sentinel-ollama:11434
 OLLAMA_MODEL=sentinel-model
+MATCHER_OLLAMA_MODEL=sentinel-matcher-model
 SMTP_HOST=smtp.sentinel.test
 SMTP_PORT=2525
 SMTP_USERNAME=sentinel-user
@@ -25,6 +26,7 @@ MINIMAL_ENV = """\
 DATABASE_URL=postgresql+asyncpg://x:x@localhost:5432/x
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=llama3.3:70b
+MATCHER_OLLAMA_MODEL=llama3.3:70b
 """
 
 
@@ -32,6 +34,7 @@ ENV_KEYS = [
     "DATABASE_URL",
     "OLLAMA_BASE_URL",
     "OLLAMA_MODEL",
+    "MATCHER_OLLAMA_MODEL",
     "SMTP_HOST",
     "SMTP_PORT",
     "SMTP_USERNAME",
@@ -71,6 +74,7 @@ def test_settings_loads_fields_from_env_file(
     )
     assert settings.ollama_base_url == "http://sentinel-ollama:11434"
     assert settings.ollama_model == "sentinel-model"
+    assert settings.matcher_ollama_model == "sentinel-matcher-model"
     assert settings.smtp_host == "smtp.sentinel.test"
     assert settings.smtp_port == 2525
     assert settings.smtp_username == "sentinel-user"
@@ -117,6 +121,7 @@ def test_get_settings_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://x:x@localhost:5432/x")
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434")
     monkeypatch.setenv("OLLAMA_MODEL", "llama3.3:70b")
+    monkeypatch.setenv("MATCHER_OLLAMA_MODEL", "llama3.3:70b")
     get_settings.cache_clear()
 
     assert get_settings() is get_settings()

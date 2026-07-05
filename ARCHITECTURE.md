@@ -1212,6 +1212,73 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   acceptance criteria require multiple `MatchScore` rows per offer over time (re-scores, or scores
   against different profiles), so a new score is always inserted, never overwritten.
 
+### LangChain Matcher (P3US22)
+
+- **Purpose**: the first of Phase 3's two scoring engines, built directly on P3US21's schema and
+  read endpoint. Scores JustJoin.it and NoFluffJobs offers against the active `Profile` and writes
+  `MatchScore` rows; `sjctl evaluate` (US23) covers SOLID.Jobs offers via a different mechanism, and
+  US25's batch job is the entry point that will call both.
+- **Module**: `app/llm/matcher.py`, structured like `app/llm/cv_extraction.py` (private
+  `_build_llm`/`_build_chain`, a typed `MatcherError` wrapping `httpx.HTTPError`/`OSError` plus a
+  catch-all, a module logger, a `_describe(exc)` helper). Unlike `cv_extraction.py`, this chain stays
+  a **single** structured-output call: `cv_extraction.py` splits into three calls because open-ended
+  list fields silently dropped items under combined input/schema/output size pressure on this local
+  8B model, but `_MatcherOutput` has no list fields — six fixed floats plus one string, always
+  exactly seven fields, so there's no cardinality for the model to shortcut.
+- **Model**: `Settings.matcher_ollama_model`, independent of `Settings.ollama_model` (CV extraction's
+  setting) so the two chains can diverge without touching each other's config. Set to `llama3.1:8b`,
+  reusing CV extraction's model — see `docs/adr/0013-ollama-model-for-langchain-matcher.md`, which
+  resolves OD-2 for this chain specifically rather than repeating ADR 0011's hardware reasoning: a
+  looser (batch, not synchronous-request) latency budget doesn't raise the 8GB VRAM ceiling, so the
+  same 7-8B-class model tier applies regardless.
+- **`_MatcherOutput`** is the LLM's structured-output target: `skill_match`, `salary_fit`,
+  `seniority_fit`, `work_mode_location`, `contract_type`, `red_flags` (each `float`, `0`-`1`) plus
+  `rationale: str`. Field names deliberately match `DIMENSION_WEIGHTS` keys 1:1 so
+  `_weighted_total`/dimension-dict-building iterate one source of truth instead of a hand-maintained
+  mapping.
+- **Dimension weights** (`DIMENSION_WEIGHTS`, mirrors `sjctl`'s rubric): skill match 30%, salary fit
+  25%, seniority fit 15%, work mode/location 15%, contract type 10%, red flags 5%.
+- **`GradeScale`** (not a bare threshold tuple) pairs the weighted-total-to-grade cutoffs with the
+  `grade_for(weighted_total)` method that applies them: `>= 0.85` → A, `>= 0.70` → B, `>= 0.55` → C,
+  `>= 0.40` → D, else F. This is a deliberate seam: P3US27 (configurable grade thresholds) will
+  construct a `GradeScale` from a persisted, user-editable `scoring_config` singleton and pass it
+  into `score_offer_with_langchain`/`score_offers_with_langchain`, which default to the module-level
+  `_DEFAULT_GRADE_SCALE` today. `DIMENSION_WEIGHTS` stays a plain dict, not a similarly-wrapped
+  object — no story currently needs configurable weights, and wrapping it now would be an
+  abstraction with no consumer.
+- **Deal-breaker cap, enforced in code, not left to the LLM**: any `Profile.deal_breakers` entry
+  matched in the offer's text caps the grade at D (`_cap_grade_for_deal_breaker`, only ever lowers,
+  never raises — F stays F). This is the fact US24's cross-engine consistency comparison needs to
+  treat as "verified in code" rather than model-dependent.
+- **Deal-breaker detection is itself deterministic, never an LLM-judged field** — see
+  `docs/adr/0014-deal-breaker-detection-deterministic-not-llm.md`. Folding detection into
+  `_MatcherOutput` was considered and rejected: `Offer.description`/`title`/`company` are adversarial
+  third-party text, and a listing could manipulate the model into denying a real deal-breaker match,
+  defeating the cap's entire purpose. `_deal_breaker_hit` instead tokenizes the deal-breaker phrase
+  (lowercase, split on hyphen/underscore/slash/whitespace) and matches with an *optional* separator
+  between tokens, so `"on-site only"` matches `"on-site only"`, `"onsite only"`, and `"on site only"`
+  alike, while a single-token deal-breaker like `"Java"` keeps plain word-boundary anchors and so
+  never matches inside `"JavaScript"`.
+- **Missing-field conservatism is a code-level backstop, not prompt-only** —
+  `_apply_missing_salary_conservatism` clamps `salary_fit` to `<= 0.5` and appends a note to the
+  rationale whenever `Profile.salary_min` and `Profile.salary_target` are both absent, regardless of
+  what the (mocked-in-tests, non-deterministic-in-production) LLM output claims. This is scoped to
+  salary only, per this story's acceptance criteria; `seniority_fit` has no backing `Profile` field
+  at all to be conservative about, and `work_mode_location`/`contract_type` don't get an equivalent
+  backstop yet — tracked as **OD-9** in `user stories/000 high level guide.md`.
+- **Routing**: `LANGCHAIN_SOURCES = frozenset({JUSTJOINIT, NOFLUFFJOBS})` and the pure predicate
+  `is_langchain_source(connector)` decide which offers this chain scores; SOLID.Jobs offers are
+  silently skipped (routing, not an error — no log noise for "not my job").
+  **`score_offers_with_langchain(session, profile_row, offers)`** is the batch entry point US25 will
+  call by name: it filters to langchain-routed offers, scores each, `session.add()`s the resulting
+  `MatchScore` rows, and returns them — never committing (the caller controls the transaction
+  boundary, matching `app.ingestion.persist` and `app.db.profile_repo`'s convention). A single
+  offer's `MatcherError` is logged at WARNING and skipped; it never aborts the rest of the batch.
+- **Prompt-injection defense**: the system prompt treats `Offer.title`/`description`/`company` as
+  untrusted third-party data, never as instructions, mirroring the `jobs-evaluate` skill's rubric —
+  a listing that tries to instruct the model to change its scoring behavior is itself scored as a
+  red flag rather than obeyed.
+
 ### `frontend/` project
 
 React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
