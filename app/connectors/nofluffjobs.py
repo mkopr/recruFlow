@@ -13,7 +13,7 @@ from app.ingestion.normalize import (
     normalize_seniority,
     to_int,
 )
-from app.ingestion.persist import ingest_offer
+from app.ingestion.runner import run_paginated_ingestion
 from app.ingestion.types import IngestionResult
 
 NOFLUFFJOBS_OFFERS_URL = "https://nofluffjobs.com/api/joboffers/main"
@@ -91,18 +91,6 @@ def map_nofluffjobs_offer(source_id: int, raw: dict[str, Any]) -> dict[str, Any]
     }
 
 
-async def _persist_offers(
-    session: AsyncSession, source_id: int, offers: list[dict[str, Any]]
-) -> int:
-    created_count = 0
-    for raw in offers:
-        mapped = map_nofluffjobs_offer(source_id, raw)
-        result = await ingest_offer(session, mapped, raw_payload=raw)
-        if result is not None and result[1] is True:
-            created_count += 1
-    return created_count
-
-
 async def run_nofluffjobs_ingestion(
     session: AsyncSession, source: Source, *, force_refresh: bool = False
 ) -> IngestionResult:
@@ -113,23 +101,32 @@ async def run_nofluffjobs_ingestion(
     url = config.get("endpoint_url", NOFLUFFJOBS_OFFERS_URL)
     page_size = int(config.get("page_size", 100))
 
-    payload = _fetch_nofluffjobs_json(
-        url, params={"pageSize": page_size, "salaryCurrency": "PLN", "salaryPeriod": "month"}
+    def fetch_page(cursor: int, page_size: int) -> tuple[list[dict[str, Any]], int | None] | None:
+        payload = _fetch_nofluffjobs_json(
+            url, params={"pageSize": page_size, "salaryCurrency": "PLN", "salaryPeriod": "month"}
+        )
+        if payload is None:
+            return None
+
+        offers = _extract_offer_list(payload)
+        if offers is None:
+            logger.error("NoFluffJobs returned unexpected JSON shape: url=%r", url)
+            return None
+
+        # NoFluffJobs has no pagination loop (ADR 0009 -- the feed isn't offset-stable): a
+        # `next_cursor` of `None` after this one call is the shared runner's no-op case.
+        return offers, None
+
+    return await run_paginated_ingestion(
+        session,
+        source.id,
+        source_name="NoFluffJobs",
+        fetch_page=fetch_page,
+        map_offer=map_nofluffjobs_offer,
+        initial_cursor=0,
+        page_size=page_size,
+        max_pages=1,
+        already_seen_stop_threshold=1,
+        force_refresh=force_refresh,
+        logger=logger,
     )
-    if payload is None:
-        return IngestionResult(
-            ok=False, fetched=0, created=0, error_message="failed to fetch NoFluffJobs offers"
-        )
-
-    offers = _extract_offer_list(payload)
-    if offers is None:
-        logger.error("NoFluffJobs returned unexpected JSON shape: url=%r", url)
-        return IngestionResult(
-            ok=False,
-            fetched=0,
-            created=0,
-            error_message="NoFluffJobs returned unexpected JSON shape",
-        )
-
-    created_count = await _persist_offers(session, source.id, offers)
-    return IngestionResult(ok=True, fetched=len(offers), created=created_count)

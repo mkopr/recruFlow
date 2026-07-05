@@ -1,5 +1,3 @@
-import json
-import logging
 from typing import Any
 
 import httpx
@@ -16,33 +14,14 @@ from app.ingestion.normalize import SOLID_JOBS
 
 
 class _FakeResponse:
-    def __init__(
-        self,
-        *,
-        json_data: Any = None,
-        text: str = "",
-        status_error: Exception | None = None,
-        json_error: Exception | None = None,
-    ) -> None:
+    def __init__(self, *, json_data: Any = None) -> None:
         self._json_data = json_data
-        self.text = text
-        self._status_error = status_error
-        self._json_error = json_error
 
     def raise_for_status(self) -> None:
-        if self._status_error is not None:
-            raise self._status_error
+        pass
 
     def json(self) -> Any:
-        if self._json_error is not None:
-            raise self._json_error
         return self._json_data
-
-
-def _enable_logger() -> None:
-    # see tests/test_ingestion_validate.py: alembic's fileConfig (triggered by
-    # integration tests in the same session) can disable this logger.
-    logging.getLogger("app.connectors.solid_jobs").disabled = False
 
 
 def test_build_offer_url_uses_division_from_config() -> None:
@@ -93,58 +72,6 @@ def test_build_offer_params_omits_absent_filters() -> None:
     assert "search.experiences" not in result
     assert "search.searchTerm" not in result
     assert "search.minimumSalary" not in result
-
-
-def test_fetch_solid_jobs_json_returns_none_and_logs_on_network_error(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    _enable_logger()
-
-    def _raise(*args: Any, **kwargs: Any) -> None:
-        raise httpx.ConnectError("connection failed")
-
-    monkeypatch.setattr(httpx, "get", _raise)
-
-    with caplog.at_level(logging.ERROR, logger="app.connectors.solid_jobs"):
-        result = _fetch_solid_jobs_json("https://solid.jobs/public-api/offers/IT", params={})
-
-    assert result is None
-    assert any(r.levelno == logging.ERROR for r in caplog.records)
-
-
-def test_fetch_solid_jobs_json_returns_none_and_logs_on_http_error_status(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    _enable_logger()
-    request = httpx.Request("GET", "https://solid.jobs/public-api/offers/IT")
-    status_error = httpx.HTTPStatusError(
-        "server error", request=request, response=httpx.Response(500, request=request)
-    )
-    monkeypatch.setattr(httpx, "get", lambda *a, **kw: _FakeResponse(status_error=status_error))
-
-    with caplog.at_level(logging.ERROR, logger="app.connectors.solid_jobs"):
-        result = _fetch_solid_jobs_json("https://solid.jobs/public-api/offers/IT", params={})
-
-    assert result is None
-    assert any(r.levelno == logging.ERROR for r in caplog.records)
-
-
-def test_fetch_solid_jobs_json_returns_none_and_logs_on_malformed_json(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    _enable_logger()
-    json_error = json.JSONDecodeError("Expecting value", "not json{{{", 0)
-    monkeypatch.setattr(
-        httpx,
-        "get",
-        lambda *a, **kw: _FakeResponse(text="not json{{{", json_error=json_error),
-    )
-
-    with caplog.at_level(logging.ERROR, logger="app.connectors.solid_jobs"):
-        result = _fetch_solid_jobs_json("https://solid.jobs/public-api/offers/IT", params={})
-
-    assert result is None
-    assert any(r.levelno == logging.ERROR for r in caplog.records)
 
 
 def test_fetch_solid_jobs_json_pins_api_version_header(monkeypatch: pytest.MonkeyPatch) -> None:

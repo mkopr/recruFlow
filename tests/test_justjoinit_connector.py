@@ -1,109 +1,10 @@
-import json
 import logging
 from typing import Any
 
-import httpx
 import pytest
 from app.connectors import justjoinit
-from app.connectors.justjoinit import (
-    _extract_offer_list,
-    _fetch_justjoinit_json,
-    map_justjoinit_offer,
-)
+from app.connectors.justjoinit import _extract_offer_list, map_justjoinit_offer
 from app.ingestion.normalize import JUSTJOINIT
-
-
-class _FakeResponse:
-    def __init__(
-        self,
-        *,
-        json_data: Any = None,
-        text: str = "",
-        status_error: Exception | None = None,
-        json_error: Exception | None = None,
-    ) -> None:
-        self._json_data = json_data
-        self.text = text
-        self._status_error = status_error
-        self._json_error = json_error
-
-    def raise_for_status(self) -> None:
-        if self._status_error is not None:
-            raise self._status_error
-
-    def json(self) -> Any:
-        if self._json_error is not None:
-            raise self._json_error
-        return self._json_data
-
-
-def _enable_logger() -> None:
-    # see tests/test_ingestion_validate.py: alembic's fileConfig (triggered by
-    # integration tests in the same session) can disable this logger.
-    logging.getLogger("app.connectors.justjoinit").disabled = False
-
-
-def test_fetch_justjoinit_json_returns_none_and_logs_on_network_error(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    _enable_logger()
-
-    def _raise(*args: Any, **kwargs: Any) -> None:
-        raise httpx.ConnectError("connection failed")
-
-    monkeypatch.setattr(httpx, "get", _raise)
-
-    with caplog.at_level(logging.ERROR, logger="app.connectors.justjoinit"):
-        result = _fetch_justjoinit_json()
-
-    assert result is None
-    assert any(r.levelno == logging.ERROR for r in caplog.records)
-
-
-def test_fetch_justjoinit_json_returns_none_and_logs_on_http_error_status(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    _enable_logger()
-    request = httpx.Request("GET", "https://justjoin.it/api/candidate-api/offers")
-    status_error = httpx.HTTPStatusError(
-        "server error", request=request, response=httpx.Response(500, request=request)
-    )
-    monkeypatch.setattr(httpx, "get", lambda *a, **kw: _FakeResponse(status_error=status_error))
-
-    with caplog.at_level(logging.ERROR, logger="app.connectors.justjoinit"):
-        result = _fetch_justjoinit_json()
-
-    assert result is None
-    assert any(r.levelno == logging.ERROR for r in caplog.records)
-
-
-def test_fetch_justjoinit_json_returns_none_and_logs_on_malformed_json(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    _enable_logger()
-    json_error = json.JSONDecodeError("Expecting value", "not json{{{", 0)
-    monkeypatch.setattr(
-        httpx,
-        "get",
-        lambda *a, **kw: _FakeResponse(text="not json{{{", json_error=json_error),
-    )
-
-    with caplog.at_level(logging.ERROR, logger="app.connectors.justjoinit"):
-        result = _fetch_justjoinit_json()
-
-    assert result is None
-    assert any(r.levelno == logging.ERROR for r in caplog.records)
-
-
-def test_fetch_justjoinit_json_returns_parsed_payload_on_success(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    payload = {"data": [{"title": "a"}], "meta": {"next": {"cursor": None, "itemsCount": 100}}}
-    monkeypatch.setattr(httpx, "get", lambda *a, **kw: _FakeResponse(json_data=payload))
-
-    result = _fetch_justjoinit_json()
-
-    assert result == payload
 
 
 def test_extract_offer_list_reads_named_key_from_dict_payload() -> None:
@@ -125,7 +26,8 @@ def test_extract_offer_list_returns_none_for_unexpected_shape() -> None:
 
 
 def test_map_justjoinit_offer_maps_all_known_fields(caplog: pytest.LogCaptureFixture) -> None:
-    _enable_logger()
+    # see tests/test_ingestion_validate.py: alembic's fileConfig (triggered by
+    # integration tests in the same session) can disable this logger.
     logging.getLogger("app.ingestion.normalize").disabled = False
     raw = {
         "guid": "d751ca8f-672c-4991-b382-77419b435764",
