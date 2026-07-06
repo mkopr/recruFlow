@@ -519,6 +519,30 @@ Returns `404` only when `{offer_id}` itself doesn't exist. Returns `200` with a 
 when there's no active profile, or an active profile exists but this offer has no score yet — never
 an error for either "nothing scored yet" case.
 
+### `POST /score/batch`
+
+Scores every Offer that has no `MatchScore` yet for the currently active Profile, via the
+LangChain Matcher, regardless of source. The same logic also runs automatically immediately after
+every ingestion cycle (`POST /scheduler/run/{source}` and the scheduler's own automatic runs); this
+endpoint triggers it on demand, independent of that schedule.
+
+```bash
+curl -X POST http://localhost:8000/score/batch
+```
+
+```json
+{"scored": 3, "skipped": 1, "failed": 0}
+```
+
+Always returns `200`; there is no per-source routing to fail on, so there's no `404`/`ok:false`
+concept the way `POST /ingest/{source}` has. `scored` is offer+active-profile pairs newly scored
+this run, `skipped` is pairs that already had a `MatchScore` row (never re-scored), `failed` is
+offers where the Matcher itself raised (logged at WARNING per offer; never aborts the rest of the
+batch). Returns `{"scored": 0, "skipped": 0, "failed": 0}` when there's no active profile — the
+same "steady state, not an error" convention as `GET /profile` and `GET /offers/{offer_id}/score`.
+If the active Profile changes, offers already scored against the previous Profile are picked up
+for scoring against the new one on the next run; their old `MatchScore` rows are never deleted.
+
 ## Offer list page
 
 With `make up` running, open `http://localhost:5173` to browse ingested offers without calling

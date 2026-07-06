@@ -1303,6 +1303,76 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   field is missing" instruction apply exactly as they do for the other two sources — no
   SOLID.Jobs-specific handling exists or is needed anywhere in the scoring path.
 
+### Batch scoring job (P3US25)
+
+- **Purpose**: US21-US24 left a schema, a read endpoint, and a fully working
+  source-agnostic scoring function (`score_offers_with_langchain`), but nothing called it
+  automatically, on demand, or queried which offers actually need scoring. This story is a
+  pure caller/orchestration layer on top — it does not touch `app/llm/matcher.py`'s scoring
+  logic at all.
+- **`app/scoring/batch.py`**: `run_batch_scoring(session) -> BatchScoringSummary` is the single
+  entrypoint both the scheduler hook and `POST /score/batch` call. `BatchScoringSummary` is a
+  frozen dataclass (`scored`, `skipped`, `failed`). Logic: look up the active Profile
+  (`app.db.profile_repo.get_active_profile`); if none, log at INFO and return an all-zero
+  summary (mirrors `GET /profile`'s and `GET /offers/{id}/score`'s "no active profile is a
+  normal steady state" convention). Otherwise, `_fetch_unscored_offers` and
+  `_count_already_scored` both filter on `Source.connector.in_(LANGCHAIN_SOURCES)` (imported
+  from `app.llm.matcher`, not re-derived) — this makes "eligible" and "what
+  `score_offers_with_langchain` will actually attempt" the same set by construction, so
+  `failed = len(unscored) - len(results)` never miscounts a connector-filtered offer as a
+  failure. `run_batch_scoring` never commits — same convention as
+  `score_offers_with_langchain` and `app.ingestion.persist`; the caller controls the
+  transaction boundary. A single-line INFO log (`"batch scoring run complete: scored=%d
+  skipped=%d failed=%d"`) is the per-run summary the acceptance criteria require.
+- **Re-scoring on Profile change**: because `_fetch_unscored_offers` filters on
+  `MatchScore.profile_id`, not a global "has this offer ever been scored" flag, switching the
+  active Profile automatically makes every previously-scored Offer "unscored" again for the new
+  Profile on the next run — no explicit re-scoring logic exists or is needed; it falls out of
+  the query shape. Old `MatchScore` rows against the previous Profile are never deleted (US21's
+  original "always insert, never overwrite" design).
+- **`POST /score/batch`** (`app/api/routes/scoring.py`, `app/schemas/scoring.py`'s flat
+  `BatchScoringResponse`): calls `run_batch_scoring`, commits, returns the counts. Always `200`
+  — there's no per-connector routing to 404 on the way `POST /ingest/{source}` has, and
+  `run_batch_scoring` never raises (mirrors `score_offers_with_langchain`'s own
+  never-raise-out-of-a-batch convention).
+- **Automatic post-ingestion trigger** (`app/scheduler/service.py`): a new
+  `_trigger_batch_scoring_after_ingestion()` builds its own throwaway engine/sessionmaker
+  (matching `run_with_lifecycle`'s and `app.scheduler.service`'s existing "engine per
+  operation" convention) and is called unconditionally from the end of `_run_source_async` —
+  after `run_with_lifecycle` returns, regardless of whether the ingestion cycle itself
+  succeeded or errored, since `run_with_lifecycle` never raises out of `_run_source_async`
+  either way. `_run_source_async` is the one shared code path both automatic scheduled runs
+  and `POST /scheduler/run/{source}` funnel through (ADR 0005), so this one hook covers both;
+  it deliberately does **not** run after `POST /ingest/{source}` (US16/ADR 0006's separate,
+  scheduler-bookkeeping-bypassing on-demand trigger), since only US15 (the Scheduler) is named
+  in this story's acceptance criteria. The hook's own exceptions are caught and logged
+  (`logger.exception`), never propagated — a bug in batch scoring must never make an
+  already-completed ingestion run report failure for a connector that actually succeeded. The
+  module imports `app.scoring.batch` qualified (`from app.scoring import batch`, not `from
+  app.scoring.batch import run_batch_scoring`) specifically so tests can monkeypatch
+  `batch.run_batch_scoring` and have the scheduler pick up the patched version — a name-bound
+  `from x import y` import resolves once, at import time, and would not observe a later
+  `monkeypatch.setattr(x, "y", ...)`.
+- **Test isolation from the dev database**: this repo's local Postgres is a long-lived,
+  real recruFlow instance — the live scheduler has already ingested thousands of real offers
+  under the real `justjoinit`/`nofluffjobs`/`solid_jobs` connectors by the time any test runs.
+  A brand-new, never-scored Profile would otherwise see every historical Offer as "unscored",
+  making `scored`/`skipped`/`failed` counts nondeterministic and, worse, triggering a real
+  Matcher call per historical offer. `tests/integration/test_batch_scoring.py` sidesteps this
+  by monkeypatching `LANGCHAIN_SOURCES` in both `app.llm.matcher` and `app.scoring.batch` to a
+  unique fake per-test connector identity, scoping each test to only the Source/Offer rows it
+  creates itself, and cleans up those fake-connector Source/Offer/MatchScore rows in a
+  `finally` block afterward (mirroring `test_offers_routes.py`'s own
+  `_delete_sources_with_offers`, since `test_scheduler_ensure_sources.py` asserts an exact set
+  of non-null connectors). `tests/integration/conftest.py` also has an autouse fixture stubbing
+  `batch.run_batch_scoring` to a no-op for every other integration test (predating this story),
+  so an ingestion-focused test's scheduler run never triggers a real batch-scoring pass against
+  whatever Profile another test happened to leave active; `conftest.py` eagerly imports
+  `app.main` at collection time (before any monkeypatch fixture can run) so
+  `app/api/routes/scoring.py`'s own name-bound `run_batch_scoring` import resolves against the
+  real function once, permanently, rather than capturing whichever stub happened to be current
+  the first time any test lazily imported `app.main`.
+
 React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
 
 - **TypeScript project references**: `tsconfig.json` is a references-only root (`files: []`)
