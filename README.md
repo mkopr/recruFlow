@@ -84,7 +84,9 @@ in `src/index.css`.
 Two routes are wired up in `App.tsx`: `/` (offer list) and `/profile` (the profile editor — see
 "Profile editor page" below), with a small `<nav>` linking between them. `/profile`'s API wiring
 lives in `frontend/src/api/profile.ts`, calling `GET /profile`, `PUT /profile`, and
-`POST /profile/upload` through the same shared `apiClient` the offer list page uses.
+`POST /profile/upload` through the same shared `apiClient` the offer list page uses. The offer
+list's score badges/drawer call `GET /offers/{id}/score` through `frontend/src/api/offerScore.ts`,
+also through the same shared `apiClient`.
 
 `pnpm test` is also runnable as `make test-frontend` from the repo root. It is **not** part of
 `make test`/`make ci`/the GitHub Actions workflow yet — see
@@ -560,6 +562,24 @@ the API directly.
   table is replaced with a short message instead of rendering an empty grid.
 - Offers are sorted newest-first by posted date on the client, since `GET /offers` itself applies
   no ordering.
+
+## Offer list with scores
+
+Every offer row in the offer list page (above) also shows a **Grade** column, one call to
+`GET /offers/{id}/score` per visible offer against the active profile:
+
+- **Grade badge** — colour-coded by letter grade: A green, B teal, C yellow, D orange, F red. An
+  offer with no `MatchScore` yet (not yet processed by the batch scoring job) shows a neutral grey
+  "Not yet scored" badge instead of a blank cell or an error.
+- **Score drawer** — clicking a scored badge opens a right-anchored drawer with that offer's
+  per-dimension breakdown and rationale text. It closes on Escape or by clicking the backdrop. The
+  "not yet scored" badge is not clickable.
+- **Sort by grade** — clicking the Grade column header sorts the table by grade client-side
+  (ascending, then descending on the next click); offers with no score yet always sort last
+  regardless of direction.
+- **Minimum grade filter** — a separate "Minimum grade" control hides offers below the chosen
+  grade. While active, it also hides not-yet-scored offers; clearing it back to "Any" brings both
+  back.
 
 ## CV upload
 

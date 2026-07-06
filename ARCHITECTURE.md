@@ -1373,6 +1373,72 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   real function once, permanently, rather than capturing whichever stub happened to be current
   the first time any test lazily imported `app.main`.
 
+### Offer list with scores (P3US26)
+
+- **Purpose**: purely additive on the existing US17 offer list page — zero backend changes.
+  Every piece a frontend score display needs (`MatchScoreResponse` schema, the per-offer
+  `GET /offers/{offer_id}/score` read endpoint, an engine that populates rows, and an automatic
+  post-ingestion trigger that keeps populating them) already existed as of P3US21-P3US25; this
+  story only surfaces it.
+- **`frontend/src/api/schema.d.ts` regeneration**: the file was stale relative to the backend —
+  no story since P3US21 had regenerated it, so it predated the score endpoint/type entirely. This
+  story ran `make generate-types` against a live API before writing any code that imports
+  `MatchScoreResponse` or calls the score endpoint.
+- **`frontend/src/lib/grade.ts`**: pure, React-free single source of truth for grade
+  ordering/colour, shared by `GradeBadge`/`OfferTable`/`GradeFilter` so none of them duplicate it.
+  `GRADE_ORDER` is `['A', 'B', 'C', 'D', 'F']` (index 0 = best); `isGrade` is the system-boundary
+  type guard validating the widened `grade: str` that `MatchScoreResponse` returns (the write path
+  validates a `Literal`, the read path does not); `gradeRank`/`meetsMinimumGrade` back both the
+  sort and the minimum-grade filter.
+- **`frontend/src/api/offerScore.ts`**: mirrors `offers.ts`'s shape exactly —
+  `fetchOfferScore(offerId): Promise<MatchScoreResponse | null>` collapses `openapi-fetch`'s
+  `{data, error}` into throw-on-error, but a `null` body (no active Profile, or no MatchScore yet)
+  is returned as-is, not thrown, matching the endpoint's own "`null` is a normal state" contract.
+- **`frontend/src/hooks/useOfferScores.ts`**: `useOfferScores(offerIds): { scores, loading }`,
+  structured like `useOffers.ts`'s inline-effect convention (`react-hooks/set-state-in-effect`).
+  Keyed on `offerIds.join(',')` rather than the array reference itself, since a new `offerIds`
+  array is created on every parent re-render. Uses `Promise.allSettled`, not `Promise.all` —
+  mirrors `score_offers_with_langchain`'s own "one failure never aborts the batch" convention — so
+  one offer's rejected fetch degrades that offer to `null` (the same neutral "not yet scored"
+  state `GradeBadge` already renders for a missing score) without discarding any other offer's
+  already-resolved score.
+- **`frontend/src/components/GradeBadge.tsx`**: renders the neutral "Not yet scored" state for
+  `null`/`undefined`/any string that fails `isGrade` (defensive against the widened `grade: str`),
+  otherwise a coloured badge — a `<button>` when the caller passes `onClick` (a scored offer), a
+  non-interactive `<span>` otherwise (used standalone inside `ScoreDrawer`).
+- **`frontend/src/components/ScoreDrawer.tsx`**: the first drawer/modal in this codebase, built
+  with no new npm dependency — a fixed backdrop (click closes) plus a right-anchored `.card`
+  panel (`role="dialog" aria-modal="true"`), an `Escape`-key listener via a `window` `keydown`
+  effect, the offer title, a non-clickable `GradeBadge`, the rationale text (falling back to `"No
+  rationale recorded."` when `null`, since the backend schema allows it), and a per-dimension
+  breakdown formatted as a percentage.
+- **`frontend/src/components/GradeFilter.tsx`**: the minimum-grade control, deliberately a
+  separate component from `OfferFilters`/`OfferListFilters` rather than a new field on either —
+  minimum-grade filtering is a client-side derived concern over already-fetched scores, not a
+  `GET /offers` query parameter (see below), so folding it into `OfferFilters` would blur that
+  boundary. Markup mirrors `OfferFilters.tsx`'s `<label>`/`<select className="input">` pattern.
+- **`frontend/src/components/OfferTable.tsx`**: gained `scores`/`minGrade` props plus two new
+  pure helpers. `filterByMinGrade` runs first, then either `sortByGrade` (if the Grade column
+  header has been clicked at least once) or the existing `sortByPostedDateDesc` — filter-then-sort
+  so the two compose correctly. `sortByGrade` always appends unscored offers last regardless of
+  direction, mirroring `sortByPostedDateDesc`'s existing nulls-last convention; the Grade header
+  is a two-state ascending/descending toggle (never back to "no sort"), matching the acceptance
+  criterion's own "ascending then descending" wording without inventing an untested third state.
+  Clicking a scored badge sets `selectedOfferId`, rendering a `ScoreDrawer` alongside the table.
+- **Client-side filter/sort, not a backend change**: mirrors US17's own "sort `GET /offers`
+  client-side rather than add an `ORDER BY`" precedent. `GET /offers` already has an incidental
+  exact-match `grade` query parameter from P3US21, but it is unrelated to this story's
+  minimum-grade filter (exact-match vs. minimum-grade are different semantics) and was
+  deliberately not reused.
+- **`frontend/src/pages/OfferListPage.tsx`**: now owns `minGrade` state alongside `filters`,
+  calls `useOfferScores(offers.map(o => o.id))`, and renders `GradeFilter` next to `OfferFilters`.
+  The hook's own `loading` flag is intentionally not surfaced as a separate page-level loading
+  state — `GradeBadge`'s neutral state already covers the in-flight case.
+- **Theme (`frontend/src/index.css`)**: new `--color-grade-a`/`-b`/`-c`/`-d`/`-f`/`-none` custom
+  properties (A reuses the existing accent green, F reuses the existing danger red) plus a
+  `.badge` base class and `.badge-grade-*` variants in the existing `@layer components` block —
+  no one-off Tailwind colour utilities, per this story's own acceptance criterion.
+
 React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
 
 - **TypeScript project references**: `tsconfig.json` is a references-only root (`files: []`)

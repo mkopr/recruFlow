@@ -1,8 +1,16 @@
+import { useState } from 'react';
+
 import type { OfferSummary } from '../api/offers';
+import type { MatchScoreResponse } from '../api/offerScore';
+import { gradeRank, isGrade, meetsMinimumGrade, type Grade } from '../lib/grade';
+import { GradeBadge } from './GradeBadge';
+import { ScoreDrawer } from './ScoreDrawer';
 
 interface OfferTableProps {
   offers: OfferSummary[];
   loading: boolean;
+  scores: Record<number, MatchScoreResponse | null>;
+  minGrade: Grade | '';
 }
 
 function formatSalary(offer: OfferSummary): string {
@@ -32,7 +40,45 @@ function sortByPostedDateDesc(offers: OfferSummary[]): OfferSummary[] {
   });
 }
 
-export function OfferTable({ offers, loading }: OfferTableProps) {
+function filterByMinGrade(
+  offers: OfferSummary[],
+  scores: Record<number, MatchScoreResponse | null>,
+  minGrade: Grade | '',
+): OfferSummary[] {
+  if (minGrade === '') return offers;
+
+  return offers.filter((offer) => {
+    const score = scores[offer.id];
+    return score != null && isGrade(score.grade) && meetsMinimumGrade(score.grade, minGrade);
+  });
+}
+
+function sortByGrade(
+  offers: OfferSummary[],
+  scores: Record<number, MatchScoreResponse | null>,
+  direction: 'asc' | 'desc',
+): OfferSummary[] {
+  const scored: Array<{ offer: OfferSummary; rank: number }> = [];
+  const unscored: OfferSummary[] = [];
+
+  for (const offer of offers) {
+    const grade = scores[offer.id]?.grade;
+    if (grade != null && isGrade(grade)) {
+      scored.push({ offer, rank: gradeRank(grade) });
+    } else {
+      unscored.push(offer);
+    }
+  }
+
+  scored.sort((a, b) => (direction === 'asc' ? a.rank - b.rank : b.rank - a.rank));
+
+  return [...scored.map((entry) => entry.offer), ...unscored];
+}
+
+export function OfferTable({ offers, loading, scores, minGrade }: OfferTableProps) {
+  const [selectedOfferId, setSelectedOfferId] = useState<number | null>(null);
+  const [gradeSort, setGradeSort] = useState<'asc' | 'desc' | null>(null);
+
   if (offers.length === 0 && !loading) {
     return (
       <div className="card flex items-center justify-center py-16 text-[var(--color-text-muted)]">
@@ -41,7 +87,19 @@ export function OfferTable({ offers, loading }: OfferTableProps) {
     );
   }
 
-  const sortedOffers = sortByPostedDateDesc(offers);
+  const filteredOffers = filterByMinGrade(offers, scores, minGrade);
+  const sortedOffers =
+    gradeSort !== null
+      ? sortByGrade(filteredOffers, scores, gradeSort)
+      : sortByPostedDateDesc(filteredOffers);
+
+  const selectedScore = selectedOfferId != null ? scores[selectedOfferId] : null;
+  const selectedOffer =
+    selectedOfferId != null ? offers.find((offer) => offer.id === selectedOfferId) : undefined;
+
+  const handleGradeHeaderClick = () => {
+    setGradeSort((current) => (current === 'asc' ? 'desc' : 'asc'));
+  };
 
   return (
     <div className="card max-h-[70vh] overflow-y-auto">
@@ -55,6 +113,11 @@ export function OfferTable({ offers, loading }: OfferTableProps) {
             <th className="px-4 py-3 font-medium">Remote</th>
             <th className="px-4 py-3 font-medium">Seniority</th>
             <th className="px-4 py-3 font-medium">Posted</th>
+            <th className="px-4 py-3 font-medium">
+              <button type="button" className="font-medium" onClick={handleGradeHeaderClick}>
+                Grade
+              </button>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -83,10 +146,23 @@ export function OfferTable({ offers, loading }: OfferTableProps) {
               <td className="px-4 py-3">{offer.remote ? 'Remote' : 'On-site'}</td>
               <td className="px-4 py-3">{offer.seniority ?? '-'}</td>
               <td className="px-4 py-3">{formatPostedDate(offer.posted_at)}</td>
+              <td className="px-4 py-3">
+                <GradeBadge
+                  grade={scores[offer.id]?.grade}
+                  onClick={scores[offer.id] ? () => setSelectedOfferId(offer.id) : undefined}
+                />
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
+      {selectedScore != null && selectedOffer != null && (
+        <ScoreDrawer
+          score={selectedScore}
+          offerTitle={selectedOffer.title}
+          onClose={() => setSelectedOfferId(null)}
+        />
+      )}
     </div>
   );
 }

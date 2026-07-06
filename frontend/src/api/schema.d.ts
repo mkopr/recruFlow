@@ -123,6 +123,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/offers/{offer_id}/score': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Offer Score */
+    get: operations['get_offer_score_offers__offer_id__score_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/profile': {
     parameters: {
       query?: never;
@@ -158,10 +175,36 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/score/batch': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Trigger Batch Scoring */
+    post: operations['trigger_batch_scoring_score_batch_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    /** BatchScoringResponse */
+    BatchScoringResponse: {
+      /** Scored */
+      scored: number;
+      /** Skipped */
+      skipped: number;
+      /** Failed */
+      failed: number;
+    };
     /** Body_upload_cv_profile_upload_post */
     Body_upload_cv_profile_upload_post: {
       /** File */
@@ -241,6 +284,30 @@ export interface components {
       started_at: string;
       /** Finished At */
       finished_at: string | null;
+    };
+    /** MatchScoreResponse */
+    MatchScoreResponse: {
+      /** Id */
+      id: number;
+      /** Offer Id */
+      offer_id: number;
+      /** Profile Id */
+      profile_id: number;
+      /** Engine */
+      engine: string;
+      /** Grade */
+      grade: string;
+      /** Dimensions */
+      dimensions: {
+        [key: string]: number;
+      };
+      /** Rationale */
+      rationale: string | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
     };
     /** OfferDetail */
     OfferDetail: {
@@ -685,6 +752,37 @@ export interface operations {
       };
     };
   };
+  get_offer_score_offers__offer_id__score_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        offer_id: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MatchScoreResponse'] | null;
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
   get_profile_profile_get: {
     parameters: {
       query?: never;
@@ -772,6 +870,26 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  trigger_batch_scoring_score_batch_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['BatchScoringResponse'];
         };
       };
     };
