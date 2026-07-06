@@ -1,5 +1,10 @@
+from uuid import uuid4
+
 import pytest
+from app.db.models import MatchScore as MatchScoreModel
+from app.db.models import Offer as OfferModel
 from app.db.models import Profile as ProfileModel
+from app.db.models import Source
 from app.db.profile_repo import (
     DEFAULT_PROFILE_NAME,
     ProfileNotFoundError,
@@ -10,6 +15,7 @@ from app.db.profile_repo import (
     upsert_active_profile,
     upsert_profile,
 )
+from app.ingestion.persist import ingest_offer
 from app.schemas.profile import Profile, Skill
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +31,105 @@ async def _reset_test_profiles(session: AsyncSession) -> None:
     await session.execute(update(ProfileModel).values(is_active=False))
     await session.execute(delete(ProfileModel).where(ProfileModel.name.in_(_TEST_PROFILE_NAMES)))
     await session.commit()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_reset_test_profiles_succeeds_when_a_match_score_references_the_default_name(
+    db_session: AsyncSession,
+) -> None:
+    """BUG15 (user stories/BUG/BUG15_...): DEFAULT_PROFILE_NAME ("active-profile") is
+    not test-exclusive -- it's the same literal name upsert_active_profile assigns in
+    real usage. `_reset_test_profiles`'s "deactivate all, then delete by fixed name"
+    strategy assumes it always owns every profile carrying that name, but a real
+    MatchScore (written by the batch-scoring job, P3US25) can reference a
+    default-named profile it does not own, and the delete then raises
+    ForeignKeyViolationError instead of the clean slate every test in this file
+    depends on `_reset_test_profiles` to produce as its first line.
+    """
+    source = Source(name=f"test-source-{uuid4()}", connector=None, config_json={})
+    db_session.add(source)
+    await db_session.flush()
+
+    result = await ingest_offer(
+        db_session,
+        {
+            "source_id": source.id,
+            "title": "Backend Engineer",
+            "company": "Acme",
+            "canonical_url": f"https://example.com/jobs/{uuid4()}",
+        },
+        raw_payload={},
+    )
+    assert result is not None
+    offer_id = result[0].id
+
+    # Reuse a profile already carrying this name if one exists (this repo's
+    # long-lived dev database already has one, permanently stuck for this
+    # exact reason -- see BUG15), otherwise create one, so this test reproduces
+    # the bug both on a fresh database and on this contaminated one.
+    existing = (
+        await db_session.execute(
+            select(ProfileModel).where(ProfileModel.name == DEFAULT_PROFILE_NAME)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        profile_id = existing.id
+        created_profile = False
+    else:
+        profile = ProfileModel(name=DEFAULT_PROFILE_NAME, status="active", is_active=True, data={})
+        db_session.add(profile)
+        await db_session.flush()
+        profile_id = profile.id
+        created_profile = True
+
+    db_session.add(
+        MatchScoreModel(
+            offer_id=offer_id,
+            profile_id=profile_id,
+            engine="langchain",
+            grade="A",
+            dimensions={},
+            rationale="test",
+        )
+    )
+    await db_session.commit()
+
+    try:
+        # This is exactly `_reset_test_profiles`, called as the first line of
+        # nearly every test in this file and in test_profile_routes.py. It is
+        # relied upon to always succeed -- it's cleanup, not the thing under
+        # test -- but currently raises IntegrityError here.
+        await _reset_test_profiles(db_session)
+
+        remaining = (
+            (
+                await db_session.execute(
+                    select(ProfileModel).where(ProfileModel.name == DEFAULT_PROFILE_NAME)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert remaining == []
+    finally:
+        # Best-effort teardown of this test's own synthetic rows. `_reset_test_profiles`
+        # above is expected to fail (that's the bug), which leaves the transaction in a
+        # failed state; a rollback is needed before any further statement, and this
+        # cleanup must never raise its own error over the top of the real assertion
+        # failure above.
+        await db_session.rollback()
+        try:
+            await db_session.execute(
+                delete(MatchScoreModel).where(MatchScoreModel.offer_id == offer_id)
+            )
+            await db_session.execute(delete(OfferModel).where(OfferModel.id == offer_id))
+            if created_profile:
+                await db_session.execute(delete(ProfileModel).where(ProfileModel.id == profile_id))
+            await db_session.execute(delete(Source).where(Source.id == source.id))
+            await db_session.commit()
+        except Exception:
+            await db_session.rollback()
 
 
 @pytest.mark.integration
