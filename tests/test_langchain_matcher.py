@@ -1,5 +1,6 @@
 import httpx
 import pytest
+from app.connectors.solid_jobs import map_solid_jobs_offer
 from app.llm.matcher import (
     DIMENSION_WEIGHTS,
     GradeScale,
@@ -254,15 +255,34 @@ def test_deal_breaker_matches_punctuation_variants() -> None:
     [
         ("justjoinit", True),
         ("nofluffjobs", True),
-        ("solid_jobs", False),
+        ("solid_jobs", True),
         ("unknown-connector", False),
         (None, False),
     ],
 )
-def test_is_langchain_source_true_for_justjoinit_and_nofluffjobs_false_for_solid_jobs_and_unknown(
+def test_is_langchain_source_true_for_all_three_connectors_false_for_unknown(
     connector: str | None, expected: bool
 ) -> None:
     assert is_langchain_source(connector) is expected
+
+
+@pytest.mark.asyncio
+async def test_score_offer_with_langchain_handles_solid_jobs_offer_missing_optional_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = {"title": "Backend Engineer", "company": "Acme"}
+    mapped_fields = map_solid_jobs_offer(1, raw)
+    offer = Offer(**mapped_fields)
+
+    output = _MatcherOutput(**_STRONG_OUTPUT_KWARGS)
+    monkeypatch.setattr("app.llm.matcher._build_chain", lambda: _FakeChain(output))
+
+    score = await score_offer_with_langchain(
+        offer_id=1, profile_id=2, profile=_profile(), offer=offer
+    )
+
+    assert score.engine == "langchain"
+    assert set(score.dimensions) == set(DIMENSION_WEIGHTS)
 
 
 def test_dimension_weights_sum_to_one() -> None:

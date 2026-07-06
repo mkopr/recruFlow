@@ -54,7 +54,7 @@ async def _create_profile(session: AsyncSession) -> ProfileModel:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_score_offers_with_langchain_only_scores_justjoinit_and_nofluffjobs_offers(
+async def test_score_offers_with_langchain_scores_all_three_sources_including_solid_jobs(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
@@ -97,9 +97,9 @@ async def test_score_offers_with_langchain_only_scores_justjoinit_and_nofluffjob
         .all()
     )
 
-    assert len(rows) == 2
+    assert len(rows) == 3
     assert all(row.engine == "langchain" for row in rows)
-    assert {row.offer_id for row in rows} == {jj_offer_id, nfj_offer_id}
+    assert {row.offer_id for row in rows} == {jj_offer_id, nfj_offer_id, sj_offer_id}
 
 
 @pytest.mark.integration

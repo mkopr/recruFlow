@@ -1214,10 +1214,11 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
 
 ### LangChain Matcher (P3US22)
 
-- **Purpose**: the first of Phase 3's two scoring engines, built directly on P3US21's schema and
-  read endpoint. Scores JustJoin.it and NoFluffJobs offers against the active `Profile` and writes
-  `MatchScore` rows; `sjctl evaluate` (US23) covers SOLID.Jobs offers via a different mechanism, and
-  US25's batch job is the entry point that will call both.
+- **Purpose**: built directly on P3US21's schema and read endpoint. Scores offers from all three
+  sources (SOLID.Jobs, JustJoin.it, NoFluffJobs) against the active `Profile` and writes
+  `MatchScore` rows. A second `sjctl evaluate` engine for SOLID.Jobs was originally planned but
+  abandoned before implementation — see P3US23/P3US24 below — so this is the only scoring engine;
+  US25's batch job is the entry point that will call it.
 - **Module**: `app/llm/matcher.py`, structured like `app/llm/cv_extraction.py` (private
   `_build_llm`/`_build_chain`, a typed `MatcherError` wrapping `httpx.HTTPError`/`OSError` plus a
   catch-all, a module logger, a `_describe(exc)` helper). Unlike `cv_extraction.py`, this chain stays
@@ -1266,9 +1267,10 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   salary only, per this story's acceptance criteria; `seniority_fit` has no backing `Profile` field
   at all to be conservative about, and `work_mode_location`/`contract_type` don't get an equivalent
   backstop yet — tracked as **OD-9** in `user stories/000 high level guide.md`.
-- **Routing**: `LANGCHAIN_SOURCES = frozenset({JUSTJOINIT, NOFLUFFJOBS})` and the pure predicate
-  `is_langchain_source(connector)` decide which offers this chain scores; SOLID.Jobs offers are
-  silently skipped (routing, not an error — no log noise for "not my job").
+- **Routing**: `LANGCHAIN_SOURCES = frozenset({SOLID_JOBS, JUSTJOINIT, NOFLUFFJOBS})` and the pure
+  predicate `is_langchain_source(connector)` decide which offers this chain scores — all three real
+  connectors route here (see P3US23 below); only a `None`/unrecognised connector (e.g. a manually
+  seeded `Source` row with no connector identity) is excluded.
   **`score_offers_with_langchain(session, profile_row, offers)`** is the batch entry point US25 will
   call by name: it filters to langchain-routed offers, scores each, `session.add()`s the resulting
   `MatchScore` rows, and returns them — never committing (the caller controls the transaction
@@ -1279,7 +1281,27 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   a listing that tries to instruct the model to change its scoring behavior is itself scored as a
   red flag rather than obeyed.
 
-### `frontend/` project
+### SOLID.Jobs Matcher verification (P3US23)
+
+- **Purpose**: the originally-planned second scoring engine (`sjctl evaluate`, for SOLID.Jobs only)
+  was abandoned before it was ever built — P3US24 records there is only one engine, the LangChain
+  Matcher, covering all three sources. This story fixed the one place P3US22 still encoded the
+  abandoned two-engine plan: `LANGCHAIN_SOURCES` was `frozenset({JUSTJOINIT, NOFLUFFJOBS})`, so
+  `is_langchain_source("solid_jobs")` returned `False` and `score_offers_with_langchain` silently
+  skipped every SOLID.Jobs offer passed to it, with no error and no log line.
+- **Fix**: `LANGCHAIN_SOURCES` now includes `SOLID_JOBS`; no other control flow in
+  `app/llm/matcher.py` changed. `score_offer_with_langchain`'s per-offer logic (deal-breaker cap,
+  missing-salary conservatism, structured-output call) was already source-agnostic — it operates
+  purely on `Offer`/`Profile` schema fields, never on the connector string — so SOLID.Jobs offers
+  needed no special-casing once routed through at all.
+- **Field-mapping verification**: `app/connectors/solid_jobs.py`'s `map_solid_jobs_offer` (confirmed
+  live-accurate per `docs/adr/0012-solid-jobs-direct-api-replaces-sjctl-subprocess.md`) maps every
+  SOLID.Jobs field the Matcher reads onto the same `Offer` schema JustJoin.it/NoFluffJobs populate.
+  When SOLID.Jobs omits an optional field (e.g. `salary`, `locations`, `experienceLevel`), the
+  mapper already returns `None` for the corresponding `Offer` field rather than a placeholder, so
+  the existing missing-salary conservatism (P3US22) and the LLM's own "score conservatively when a
+  field is missing" instruction apply exactly as they do for the other two sources — no
+  SOLID.Jobs-specific handling exists or is needed anywhere in the scoring path.
 
 React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
 

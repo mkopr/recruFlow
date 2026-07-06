@@ -12,7 +12,7 @@ from app.config import get_settings
 from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
 from app.db.models import Profile as ProfileModel
-from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS
+from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
 from app.schemas.match_score import MatchGrade, MatchScore
 from app.schemas.offer import Offer
 from app.schemas.profile import Profile
@@ -28,7 +28,7 @@ DIMENSION_WEIGHTS: dict[str, float] = {
     "red_flags": 0.05,
 }
 
-LANGCHAIN_SOURCES = frozenset({JUSTJOINIT, NOFLUFFJOBS})
+LANGCHAIN_SOURCES = frozenset({SOLID_JOBS, JUSTJOINIT, NOFLUFFJOBS})
 
 # Weighted-total-to-grade cutoffs. A future story (P3US27) persists these as
 # user-editable configuration and constructs a GradeScale from it; this
