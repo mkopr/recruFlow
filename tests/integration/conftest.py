@@ -7,9 +7,12 @@ import pytest
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
+from app.db.models import MatchScore as MatchScoreModel
+from app.db.models import Profile as ProfileModel
 from app.db.session import get_engine, get_sessionmaker
 from app.scoring import batch
 from app.scoring.batch import BatchScoringSummary
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 os.environ.setdefault(
@@ -76,6 +79,32 @@ def _stub_post_ingestion_batch_scoring(monkeypatch: pytest.MonkeyPatch) -> None:
         return BatchScoringSummary(scored=0, skipped=0, failed=0)
 
     monkeypatch.setattr(batch, "run_batch_scoring", _noop)
+
+
+async def reset_test_profiles(session: AsyncSession, names: list[str]) -> None:
+    # Deactivating (rather than deleting) every row avoids tripping the
+    # match_scores_profile_id_fkey constraint on profiles owned by unrelated
+    # tests; deleting only the caller's own fixed names avoids unique-name
+    # collisions on rerun without touching rows this suite doesn't own.
+    #
+    # BUG15: one of those names is `DEFAULT_PROFILE_NAME`, which is not
+    # test-exclusive -- `upsert_active_profile` assigns it in real usage too,
+    # so a real MatchScore (written by the batch-scoring job) can reference a
+    # default-named profile this suite doesn't own. Delete any MatchScore
+    # rows referencing the profiles about to be deleted first, or the profile
+    # delete raises ForeignKeyViolationError.
+    await session.execute(update(ProfileModel).values(is_active=False))
+    profile_ids = (
+        (await session.execute(select(ProfileModel.id).where(ProfileModel.name.in_(names))))
+        .scalars()
+        .all()
+    )
+    if profile_ids:
+        await session.execute(
+            delete(MatchScoreModel).where(MatchScoreModel.profile_id.in_(profile_ids))
+        )
+    await session.execute(delete(ProfileModel).where(ProfileModel.name.in_(names)))
+    await session.commit()
 
 
 @pytest_asyncio.fixture

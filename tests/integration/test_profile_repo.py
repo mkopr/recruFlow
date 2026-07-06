@@ -17,20 +17,16 @@ from app.db.profile_repo import (
 )
 from app.ingestion.persist import ingest_offer
 from app.schemas.profile import Profile, Skill
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from tests.integration.conftest import reset_test_profiles
 
 _TEST_PROFILE_NAMES = [DEFAULT_PROFILE_NAME, "profile-a", "profile-b"]
 
 
 async def _reset_test_profiles(session: AsyncSession) -> None:
-    # Deactivating (rather than deleting) every row avoids tripping the
-    # match_scores_profile_id_fkey constraint on profiles owned by unrelated
-    # tests; deleting only this suite's own fixed names avoids unique-name
-    # collisions on rerun without touching rows this suite doesn't own.
-    await session.execute(update(ProfileModel).values(is_active=False))
-    await session.execute(delete(ProfileModel).where(ProfileModel.name.in_(_TEST_PROFILE_NAMES)))
-    await session.commit()
+    await reset_test_profiles(session, _TEST_PROFILE_NAMES)
 
 
 @pytest.mark.integration
