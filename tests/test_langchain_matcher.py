@@ -9,11 +9,13 @@ from app.llm.matcher import (
     _deal_breaker_hit,
     _MatcherOutput,
     _weighted_total,
+    build_grade_scale,
     is_langchain_source,
     score_offer_with_langchain,
 )
 from app.schemas.offer import Offer
 from app.schemas.profile import Profile
+from app.schemas.scoring_config import ScoringConfig
 from langchain_core.messages import BaseMessage
 
 _STRONG_OUTPUT_KWARGS = {
@@ -226,6 +228,21 @@ def test_grade_scale_accepts_custom_thresholds() -> None:
     assert custom_scale.grade_for(0.5) == "A"
     assert custom_scale.grade_for(0.35) == "B"
     assert custom_scale.grade_for(0.1) == "F"
+
+
+def test_build_grade_scale_uses_config_thresholds() -> None:
+    config = ScoringConfig(grade_a=0.9, grade_b=0.75, grade_c=0.6, grade_d=0.45)
+    scale = build_grade_scale(config)
+
+    assert scale.grade_for(0.9) == "A"
+    assert scale.grade_for(0.5) == "D"
+
+
+def test_build_grade_scale_below_grade_d_returns_f() -> None:
+    config = ScoringConfig(grade_a=0.9, grade_b=0.75, grade_c=0.6, grade_d=0.45)
+    scale = build_grade_scale(config)
+
+    assert scale.grade_for(0.4) == "F"
 
 
 @pytest.mark.parametrize(

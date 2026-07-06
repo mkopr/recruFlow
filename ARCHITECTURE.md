@@ -1463,6 +1463,71 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
   `schema.d.ts`'s `paths` export — every future frontend feature reuses this single client rather
   than hand-rolling `fetch()` calls with hand-written response types.
 
+### Configurable grade thresholds (P3US27)
+
+- **Purpose**: every prior Phase 3 story hardcoded, or consumed without any way to change,
+  US22's 0.85/0.70/0.55/0.40 grade cutoffs. US22 deliberately shaped `GradeScale` and both
+  `score_offer_with_langchain`/`score_offers_with_langchain`'s `grade_scale` parameter as a seam
+  for exactly this story; this is the story that finally plugs something into that seam.
+- **`scoring_config` table / `app.db.models.ScoringConfig`**: one row, four `Float` columns
+  (`grade_a`/`grade_b`/`grade_c`/`grade_d`, `server_default` 0.85/0.70/0.55/0.40) plus the usual
+  `created_at`/`updated_at`. "Exactly one row" is an application-layer invariant only — no
+  uniqueness constraint, no activation flag — mirroring `profiles.is_active`'s own
+  "enforced by application logic, not a DB constraint" precedent rather than introducing a new
+  one for a table that never needs a second row. Added in migration `8e2c1a6f9d3b` (down-revision
+  `4d99f6acbb29`), which creates the table only — no row is seeded there; seeding happens lazily
+  on first read, matching `Profile`'s own no-seed-data precedent from P2US1.
+- **`app/schemas/scoring_config.py`**: a single `ScoringConfig` Pydantic model reused for both the
+  request and response body (unlike `Profile`/`Offer`/`MatchScore`, there is no id/status/timestamp
+  envelope — the acceptance criteria only ever mention the four thresholds themselves). Each field
+  is `Field(gt=0, le=1)`; a `model_validator(mode="after")` enforces
+  `grade_a > grade_b > grade_c > grade_d` in one comparison chain, covering both the descending-order
+  and pairwise-distinct requirements at once — FastAPI turns a `ValueError` here into a `422`
+  automatically, the same way `Profile`'s own `model_validator` already backs `PUT /profile`'s
+  `422`s. `DEFAULT_SCORING_CONFIG` is the single source of truth for the default thresholds; the
+  migration's column `server_default` literals and `get_or_create_scoring_config`'s seed both derive
+  from it so the two can never drift apart.
+- **`app/db/scoring_config_repo.py`**: mirrors `profile_repo.py`'s "one row, created lazily on read"
+  idiom. `get_or_create_scoring_config(session)` selects the first row by id, creating one from
+  `DEFAULT_SCORING_CONFIG` if none exists. `update_scoring_config(session, config)` calls
+  `get_or_create_scoring_config` first (so a `PUT` on a fresh, empty table still works, mirroring
+  `PUT /profile`'s own upsert semantics) then assigns the four fields. Neither function commits —
+  same transaction-boundary convention as every other repo/service function in this codebase; the
+  route commits.
+- **`app/llm/matcher.py`'s `build_grade_scale(config: ScoringConfig) -> GradeScale`**: the pure
+  builder this story adds next to `GradeScale` so callers never need to know its constructor shape.
+  `_GRADE_THRESHOLDS`/`_DEFAULT_GRADE_SCALE` are untouched and remain the fallback for any caller
+  that doesn't pass `grade_scale` explicitly (direct unit tests, any future ad-hoc scoring call) —
+  only `app.scoring.batch`'s call site changes.
+- **`app/scoring/batch.py`'s `run_batch_scoring`**: now fetches the persisted `ScoringConfig` via
+  `get_or_create_scoring_config`, builds a `GradeScale` via `build_grade_scale`, and passes
+  `grade_scale=...` into `score_offers_with_langchain` — for every LANGCHAIN_SOURCES-eligible
+  source, including SOLID.Jobs (US23), since all three already share this one call path.
+  `run_batch_scoring`'s own signature is unchanged, so neither `POST /score/batch` nor the
+  post-ingestion scheduler hook needed to change. A threshold change therefore takes effect on the
+  very next batch-scoring run; it never rewrites `MatchScore.grade` on any already-persisted row,
+  since this code path only ever inserts new `MatchScore` rows (US21's original design), never
+  updates existing ones.
+- **`GET /scoring-config` / `PUT /scoring-config`** (`app/api/routes/scoring.py`, same router as
+  `POST /score/batch`, no new `include_router` needed): `GET` calls
+  `get_or_create_scoring_config`, commits (seeding a default row on an empty table is itself a
+  write, so it must be), and returns the four thresholds — mirrors `GET /profile`'s "200 with
+  defaults instead of 404" convention. `PUT` calls `update_scoring_config`, commits, returns the
+  updated thresholds; FastAPI's own request-body validation against `ScoringConfig` produces the
+  `422` for a bad ordering before the handler body ever runs, so no manual `try`/`except` is needed
+  here (unlike `PUT /profile`, which needs one for `ProfileNotFoundError`).
+- **Frontend `/settings` page**: layered exactly like the Profile editor (P2US3) —
+  `frontend/src/api/scoringConfig.ts` (the `fetchScoringConfig`/`saveScoringConfig` throw-on-error
+  wrappers, mirroring `profile.ts`), `frontend/src/lib/scoringConfigValidation.ts` (a pure,
+  React-free module implementing the same descending-order/range rule client-side, so the UI can
+  show inline errors before ever calling the API), `frontend/src/hooks/useScoringConfig.ts` (owns
+  all state/validation/persistence — no `localStorage` caching, unlike `useProfileEditor.ts`, since
+  `GET /scoring-config` is always cheap and always returns a real row, so there's no
+  "in-between save and activate" state to bridge), and `frontend/src/pages/SettingsPage.tsx` (a page
+  shell only, rendering four `.input` numeric fields plus a `.btn-primary` Save button, reusing
+  `--color-danger` for inline errors — no new CSS). `App.tsx` gained a third route/nav link,
+  `/settings`, alongside the existing two.
+
 ### Makefile targets
 
 - `install` — `uv sync --all-groups` + `cd frontend && pnpm install`.

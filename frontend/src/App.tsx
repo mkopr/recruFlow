@@ -2,6 +2,7 @@ import { BrowserRouter, Link, Route, Routes } from 'react-router-dom';
 
 import { OfferListPage } from './pages/OfferListPage';
 import { ProfileEditorPage } from './pages/ProfileEditorPage';
+import { SettingsPage } from './pages/SettingsPage';
 
 function App() {
   return (
@@ -14,10 +15,14 @@ function App() {
           <Link to="/profile" className="text-[var(--color-accent)] hover:underline">
             Profile
           </Link>
+          <Link to="/settings" className="text-[var(--color-accent)] hover:underline">
+            Settings
+          </Link>
         </nav>
         <Routes>
           <Route path="/" element={<OfferListPage />} />
           <Route path="/profile" element={<ProfileEditorPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </BrowserRouter>
     </div>

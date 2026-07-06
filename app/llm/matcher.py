@@ -16,6 +16,7 @@ from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
 from app.schemas.match_score import MatchGrade, MatchScore
 from app.schemas.offer import Offer
 from app.schemas.profile import Profile
+from app.schemas.scoring_config import ScoringConfig
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,17 @@ class GradeScale:
 
 
 _DEFAULT_GRADE_SCALE = GradeScale()
+
+
+def build_grade_scale(config: ScoringConfig) -> GradeScale:
+    return GradeScale(
+        (
+            (config.grade_a, "A"),
+            (config.grade_b, "B"),
+            (config.grade_c, "C"),
+            (config.grade_d, "D"),
+        )
+    )
 
 
 class _MatcherOutput(BaseModel):

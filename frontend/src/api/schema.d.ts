@@ -192,6 +192,24 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/scoring-config': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Scoring Config */
+    get: operations['get_scoring_config_scoring_config_get'];
+    /** Put Scoring Config */
+    put: operations['put_scoring_config_scoring_config_put'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -489,6 +507,17 @@ export interface components {
     SchedulerStatusResponse: {
       /** Sources */
       sources: components['schemas']['SourceStatus'][];
+    };
+    /** ScoringConfig */
+    ScoringConfig: {
+      /** Grade A */
+      grade_a: number;
+      /** Grade B */
+      grade_b: number;
+      /** Grade C */
+      grade_c: number;
+      /** Grade D */
+      grade_d: number;
     };
     /** Skill */
     Skill: {
@@ -890,6 +919,59 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['BatchScoringResponse'];
+        };
+      };
+    };
+  };
+  get_scoring_config_scoring_config_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScoringConfig'];
+        };
+      };
+    };
+  };
+  put_scoring_config_scoring_config_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ScoringConfig'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScoringConfig'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
         };
       };
     };

@@ -8,7 +8,9 @@ from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
 from app.db.models import Source
 from app.db.profile_repo import get_active_profile
-from app.llm.matcher import LANGCHAIN_SOURCES, score_offers_with_langchain
+from app.db.scoring_config_repo import get_or_create_scoring_config
+from app.llm.matcher import LANGCHAIN_SOURCES, build_grade_scale, score_offers_with_langchain
+from app.schemas.scoring_config import ScoringConfig
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +60,18 @@ async def run_batch_scoring(session: AsyncSession) -> BatchScoringSummary:
 
     unscored = await _fetch_unscored_offers(session, profile_row.id)
     skipped = await _count_already_scored(session, profile_row.id)
-    results = await score_offers_with_langchain(session, profile_row, unscored)
+    scoring_config_row = await get_or_create_scoring_config(session)
+    grade_scale = build_grade_scale(
+        ScoringConfig(
+            grade_a=scoring_config_row.grade_a,
+            grade_b=scoring_config_row.grade_b,
+            grade_c=scoring_config_row.grade_c,
+            grade_d=scoring_config_row.grade_d,
+        )
+    )
+    results = await score_offers_with_langchain(
+        session, profile_row, unscored, grade_scale=grade_scale
+    )
     failed = len(unscored) - len(results)
 
     logger.info(

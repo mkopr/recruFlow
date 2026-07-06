@@ -545,6 +545,37 @@ same "steady state, not an error" convention as `GET /profile` and `GET /offers/
 If the active Profile changes, offers already scored against the previous Profile are picked up
 for scoring against the new one on the next run; their old `MatchScore` rows are never deleted.
 
+### `GET /scoring-config`
+
+Returns the current grade thresholds used by every scoring run. Seeds a default row
+(`0.85`/`0.70`/`0.55`/`0.40`) on first call if none exists yet — never `404`s.
+
+```bash
+curl http://localhost:8000/scoring-config
+```
+
+```json
+{"grade_a": 0.85, "grade_b": 0.70, "grade_c": 0.55, "grade_d": 0.40}
+```
+
+### `PUT /scoring-config`
+
+Updates the grade thresholds. Takes effect starting with the next batch-scoring run; never
+retroactively rewrites the `grade` on any already-persisted `MatchScore` row.
+
+```bash
+curl -X PUT http://localhost:8000/scoring-config \
+  -H "Content-Type: application/json" \
+  -d '{"grade_a": 0.9, "grade_b": 0.75, "grade_c": 0.6, "grade_d": 0.45}'
+```
+
+```json
+{"grade_a": 0.9, "grade_b": 0.75, "grade_c": 0.6, "grade_d": 0.45}
+```
+
+Returns `422` if the four values aren't strictly descending (`grade_a > grade_b > grade_c >
+grade_d > 0`) or any value is outside `(0, 1]` — the existing row, if any, is left untouched.
+
 ## Offer list page
 
 With `make up` running, open `http://localhost:5173` to browse ingested offers without calling
@@ -650,3 +681,17 @@ a profile by hand, without calling the API directly.
   `Certification.name`, and `Language.name` are the only required sub-fields `Profile` has. Leaving
   one blank and clicking **Save** or **Set as active** highlights the offending field(s) in red and
   blocks the request entirely — no network call is made until every required field is filled in.
+
+## Scoring settings
+
+With `make up` running, open `http://localhost:5173/settings` to view or change the four grade
+cutoffs the matcher uses (`GET`/`PUT /scoring-config` above), without calling the API directly.
+
+- **Four numeric inputs** — Grade A/B/C/D cutoff, pre-filled with the currently persisted values
+  on page load.
+- **Descending-order validation** — the same `grade_a > grade_b > grade_c > grade_d > 0` rule the
+  backend enforces is checked client-side too; clicking **Save** with an out-of-order or
+  out-of-range value highlights the offending field(s) in red and blocks the request entirely — no
+  network call is made until the thresholds are valid.
+- **Save** persists the four values via `PUT /scoring-config`; a subsequent page reload shows the
+  saved values, not the defaults, since they're read back from `GET /scoring-config`.
