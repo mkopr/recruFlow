@@ -55,11 +55,11 @@ def _isolate_langchain_sources(monkeypatch: pytest.MonkeyPatch, *connectors: str
     # justjoinit/nofluffjobs/solid_jobs connectors, so a brand-new never-scored Profile
     # would otherwise see every historical offer as "unscored", making exact
     # scored/skipped/failed counts nondeterministic. Swapping in unique per-test connector
-    # identities (and pointing both LANGCHAIN_SOURCES bindings at them) scopes each test to
-    # only the Source/Offer rows it creates itself, with no change to production code paths.
+    # identities scopes each test to only the Source/Offer rows it creates itself, with no
+    # change to production code paths. batch.py reads LANGCHAIN_SOURCES through the matcher
+    # module at call time rather than holding its own copy, so patching it here suffices.
     fake = frozenset(connectors)
     monkeypatch.setattr("app.llm.matcher.LANGCHAIN_SOURCES", fake)
-    monkeypatch.setattr("app.scoring.batch.LANGCHAIN_SOURCES", fake)
 
 
 async def _delete_sources_and_dependents(session: AsyncSession, source_ids: list[int]) -> None:

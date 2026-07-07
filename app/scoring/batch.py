@@ -12,12 +12,8 @@ from app.db.models import Offer as OfferModel
 from app.db.models import Source
 from app.db.profile_repo import get_active_profile
 from app.db.scoring_config_repo import get_or_create_scoring_config
-from app.llm.matcher import (
-    LANGCHAIN_SOURCES,
-    MatcherChain,
-    build_grade_scale,
-    score_offers_with_langchain,
-)
+from app.llm import matcher
+from app.llm.matcher import MatcherChain, build_grade_scale, score_offers_with_langchain
 from app.schemas.scoring_config import ScoringConfig
 
 logger = logging.getLogger(__name__)
@@ -67,7 +63,7 @@ async def _fetch_unscored_offers(
     stmt = (
         select(OfferModel, Source.connector)
         .join(Source, OfferModel.source_id == Source.id)
-        .where(Source.connector.in_(LANGCHAIN_SOURCES))
+        .where(Source.connector.in_(matcher.LANGCHAIN_SOURCES))
         .where(OfferModel.id.not_in(already_scored))
         .order_by(OfferModel.id)
         .limit(limit)
@@ -84,7 +80,7 @@ async def _count_already_scored(session: AsyncSession, profile_id: int) -> int:
         select(func.count())
         .select_from(OfferModel)
         .join(Source, OfferModel.source_id == Source.id)
-        .where(Source.connector.in_(LANGCHAIN_SOURCES))
+        .where(Source.connector.in_(matcher.LANGCHAIN_SOURCES))
         .where(OfferModel.id.in_(already_scored))
     )
     return (await session.execute(stmt)).scalar_one()
@@ -98,7 +94,7 @@ async def _count_unscored_offers(session: AsyncSession, profile_id: int) -> int:
         select(func.count())
         .select_from(OfferModel)
         .join(Source, OfferModel.source_id == Source.id)
-        .where(Source.connector.in_(LANGCHAIN_SOURCES))
+        .where(Source.connector.in_(matcher.LANGCHAIN_SOURCES))
         .where(OfferModel.id.not_in(already_scored))
     )
     return (await session.execute(stmt)).scalar_one()
