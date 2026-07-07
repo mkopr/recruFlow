@@ -9,7 +9,7 @@ interface LanguagesListProps {
   onChange: (next: Language[]) => void;
 }
 
-const emptyLanguage = (): Language => ({ name: '', proficiency: null });
+const emptyLanguage = (): Language => ({ name: '' });
 
 export function LanguagesList({ languages, errors, onChange }: LanguagesListProps) {
   const { updateEntry, removeEntry, addEntry } = useEditableList(
@@ -21,24 +21,15 @@ export function LanguagesList({ languages, errors, onChange }: LanguagesListProp
   return (
     <div className="card p-4">
       <h2 className="mb-3 text-lg font-semibold">Languages</h2>
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap gap-2">
         {languages.map((entry, index) => (
-          <div key={index} className="flex flex-wrap items-center gap-2">
+          <div key={index} className="flex items-center gap-1">
             <input
-              className={`input flex-1 ${errors[index] ? 'border-[var(--color-danger)]' : ''}`}
+              className={`input w-32 ${errors[index] ? 'border-[var(--color-danger)]' : ''}`}
               aria-label={`Language ${index + 1} name`}
               placeholder="Name"
               value={entry.name}
               onChange={(e) => updateEntry(index, { ...entry, name: e.target.value })}
-            />
-            <input
-              className="input flex-1"
-              aria-label={`Language ${index + 1} proficiency`}
-              placeholder="Proficiency"
-              value={entry.proficiency ?? ''}
-              onChange={(e) =>
-                updateEntry(index, { ...entry, proficiency: e.target.value || null })
-              }
             />
             <button
               type="button"

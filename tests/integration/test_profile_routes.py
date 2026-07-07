@@ -37,7 +37,7 @@ async def test_get_profile_returns_active_profile_fields(
         status="active",
         is_active=True,
         data={
-            "skills": [{"name": "Go", "proficiency": "senior", "years": 5}],
+            "skills": [{"name": "Go"}],
             "past_roles": [],
             "education": [],
             "certifications": [],
@@ -104,7 +104,7 @@ async def test_put_profile_rejects_invalid_payload_with_422(
 ) -> None:
     await _reset_test_profiles(db_session)
 
-    response = await client.put("/profile", json={"skills": [{"proficiency": "expert"}]})
+    response = await client.put("/profile", json={"skills": [{"category": "backend"}]})
 
     assert response.status_code == 422
     rows = (

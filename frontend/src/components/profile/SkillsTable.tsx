@@ -1,4 +1,5 @@
 import type { components } from '../../api/schema';
+import { useEditableList } from '../../hooks/useEditableList';
 
 type Skill = components['schemas']['Skill'];
 
@@ -8,77 +9,34 @@ interface SkillsTableProps {
   onChange: (next: Skill[]) => void;
 }
 
+const emptySkill = (): Skill => ({ name: '' });
+
 export function SkillsTable({ skills, errors, onChange }: SkillsTableProps) {
-  const updateSkill = (index: number, patch: Partial<Skill>) => {
-    onChange(skills.map((skill, i) => (i === index ? { ...skill, ...patch } : skill)));
-  };
-
-  const removeSkill = (index: number) => {
-    onChange(skills.filter((_, i) => i !== index));
-  };
-
-  const addSkill = () => {
-    onChange([...skills, { name: '', proficiency: null, years: null }]);
-  };
+  const { updateEntry, removeEntry, addEntry } = useEditableList(skills, onChange, emptySkill);
 
   return (
     <div className="card p-4">
       <h2 className="mb-3 text-lg font-semibold">Skills</h2>
-      <table className="w-full border-collapse text-left text-sm">
-        <thead>
-          <tr className="border-b border-[var(--color-border)] text-[var(--color-text-muted)]">
-            <th className="px-2 py-2 font-medium">Name</th>
-            <th className="px-2 py-2 font-medium">Proficiency</th>
-            <th className="px-2 py-2 font-medium">Years</th>
-            <th className="px-2 py-2 font-medium" />
-          </tr>
-        </thead>
-        <tbody>
-          {skills.map((skill, index) => (
-            <tr key={index} className="border-b border-[var(--color-border)] last:border-0">
-              <td className="px-2 py-2">
-                <input
-                  className={`input w-full ${errors[index] ? 'border-[var(--color-danger)]' : ''}`}
-                  aria-label={`Skill ${index + 1} name`}
-                  value={skill.name}
-                  onChange={(e) => updateSkill(index, { name: e.target.value })}
-                />
-              </td>
-              <td className="px-2 py-2">
-                <input
-                  className="input w-full"
-                  aria-label={`Skill ${index + 1} proficiency`}
-                  value={skill.proficiency ?? ''}
-                  onChange={(e) => updateSkill(index, { proficiency: e.target.value || null })}
-                />
-              </td>
-              <td className="px-2 py-2">
-                <input
-                  className="input w-full"
-                  type="number"
-                  aria-label={`Skill ${index + 1} years`}
-                  value={skill.years ?? ''}
-                  onChange={(e) =>
-                    updateSkill(index, {
-                      years: e.target.value === '' ? null : Number(e.target.value),
-                    })
-                  }
-                />
-              </td>
-              <td className="px-2 py-2">
-                <button
-                  type="button"
-                  className="text-xs text-[var(--color-danger)]"
-                  onClick={() => removeSkill(index)}
-                >
-                  Remove
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <button type="button" className="btn btn-primary mt-3" onClick={addSkill}>
+      <div className="flex flex-wrap gap-2">
+        {skills.map((skill, index) => (
+          <div key={index} className="flex items-center gap-1">
+            <input
+              className={`input w-32 ${errors[index] ? 'border-[var(--color-danger)]' : ''}`}
+              aria-label={`Skill ${index + 1} name`}
+              value={skill.name}
+              onChange={(e) => updateEntry(index, { ...skill, name: e.target.value })}
+            />
+            <button
+              type="button"
+              className="text-xs text-[var(--color-danger)]"
+              onClick={() => removeEntry(index)}
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+      </div>
+      <button type="button" className="btn btn-primary mt-3" onClick={addEntry}>
         Add skill
       </button>
     </div>

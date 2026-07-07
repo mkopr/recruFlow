@@ -291,8 +291,6 @@ export interface components {
     Language: {
       /** Name */
       name: string;
-      /** Proficiency */
-      proficiency?: string | null;
     };
     /** ManualRunResponse */
     ManualRunResponse: {
@@ -565,10 +563,6 @@ export interface components {
     Skill: {
       /** Name */
       name: string;
-      /** Proficiency */
-      proficiency?: string | null;
-      /** Years */
-      years?: number | null;
       /** Category */
       category?: string | null;
     };

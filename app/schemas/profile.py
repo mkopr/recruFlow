@@ -7,8 +7,6 @@ class Skill(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     name: str = Field(min_length=1)
-    proficiency: str | None = None
-    years: float | None = Field(default=None, ge=0)
     category: str | None = None
 
 
@@ -54,7 +52,6 @@ class Language(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     name: str = Field(min_length=1)
-    proficiency: str | None = None
 
 
 class CVExtraction(BaseModel):

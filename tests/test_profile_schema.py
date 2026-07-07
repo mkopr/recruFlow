@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 def test_profile_accepts_valid_payload_with_all_fields() -> None:
     profile = Profile(
-        skills=[{"name": "Python", "proficiency": "expert", "years": 8, "category": "language"}],
+        skills=[{"name": "Python", "category": "language"}],
         past_roles=[
             {
                 "title": "Backend Engineer",
@@ -25,7 +25,7 @@ def test_profile_accepts_valid_payload_with_all_fields() -> None:
             }
         ],
         certifications=[{"name": "AWS SAA", "issuer": "AWS", "year": 2022}],
-        languages=[{"name": "English", "proficiency": "fluent"}],
+        languages=[{"name": "English"}],
         projects=[
             {
                 "name": "EV Charging System",
@@ -52,8 +52,6 @@ def test_profile_accepts_valid_payload_with_all_fields() -> None:
 
     dumped = profile.model_dump()
     assert dumped["skills"][0]["name"] == "Python"
-    assert dumped["skills"][0]["proficiency"] == "expert"
-    assert dumped["skills"][0]["years"] == 8
     assert dumped["skills"][0]["category"] == "language"
     assert dumped["past_roles"][0]["title"] == "Backend Engineer"
     assert dumped["past_roles"][0]["company"] == "Acme"
@@ -105,7 +103,7 @@ def test_profile_accepts_minimal_payload_and_applies_defaults() -> None:
 
 def test_profile_rejects_skill_missing_name() -> None:
     with pytest.raises(ValidationError):
-        Profile(skills=[{"proficiency": "expert"}])
+        Profile(skills=[{"category": "backend"}])
 
 
 def test_profile_rejects_past_role_missing_company() -> None:
@@ -139,15 +137,12 @@ def test_profile_accepts_salary_target_equal_to_salary_min() -> None:
 
 
 def test_profile_accepts_unusually_large_and_unusual_skill_set() -> None:
-    skills = [{"name": f"made-up-skill-{i}", "proficiency": "novel-{i}"} for i in range(50)]
+    skills = [{"name": f"made-up-skill-{i}"} for i in range(50)]
     past_roles = [
         {"title": f"Role {i}", "company": f"Company {i}", "description": "unusual role"}
         for i in range(30)
     ]
-    languages = [
-        {"name": f"Conlang-{i}", "proficiency": "native-ish" if i % 2 == 0 else "conversational+"}
-        for i in range(20)
-    ]
+    languages = [{"name": f"Conlang-{i}"} for i in range(20)]
 
     profile = Profile(skills=skills, past_roles=past_roles, languages=languages)
 

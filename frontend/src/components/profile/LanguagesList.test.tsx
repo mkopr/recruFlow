@@ -7,14 +7,13 @@ import { LanguagesList } from './LanguagesList';
 
 type Language = components['schemas']['Language'];
 
-const languages: Language[] = [{ name: 'English', proficiency: 'fluent' }];
+const languages: Language[] = [{ name: 'English' }];
 
 describe('LanguagesList', () => {
   it('renders existing entries correctly', () => {
     render(<LanguagesList languages={languages} errors={[false]} onChange={vi.fn()} />);
 
     expect(screen.getByLabelText('Language 1 name')).toHaveValue('English');
-    expect(screen.getByLabelText('Language 1 proficiency')).toHaveValue('fluent');
   });
 
   it('editing a field updates it immutably', async () => {

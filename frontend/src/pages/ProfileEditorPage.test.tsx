@@ -22,7 +22,7 @@ function activeProfileResponse(): profileApi.ProfileResponse {
     status: 'active',
     is_active: true,
     profile: {
-      skills: [{ name: 'Python', proficiency: null, years: null }],
+      skills: [{ name: 'Python' }],
       past_roles: [],
       education: [],
       certifications: [],
@@ -134,7 +134,7 @@ describe('ProfileEditorPage', () => {
       status: 'draft',
       profile: {
         ...activeProfileResponse().profile,
-        skills: [{ name: 'Rust', proficiency: null, years: null }],
+        skills: [{ name: 'Rust' }],
       },
     };
     uploadCvMock.mockResolvedValue(draft);
