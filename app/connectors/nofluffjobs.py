@@ -8,6 +8,7 @@ from app.connectors.http import fetch_json
 from app.db.models import Source
 from app.ingestion.normalize import (
     NOFLUFFJOBS,
+    extract_envelope_list,
     normalize_remote,
     normalize_salary,
     normalize_seniority,
@@ -31,14 +32,7 @@ def _fetch_nofluffjobs_json(
 
 
 def _extract_offer_list(payload: Any) -> list[dict[str, Any]] | None:
-    if not isinstance(payload, dict) or "postings" not in payload:
-        return None
-    postings = payload["postings"]
-    if postings is None:
-        return []
-    if not isinstance(postings, list):
-        return None
-    return [item for item in postings if isinstance(item, dict)]
+    return extract_envelope_list(payload, "postings", allow_bare_list=False)
 
 
 def _epoch_ms_to_datetime(value: Any) -> datetime | None:

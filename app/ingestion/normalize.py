@@ -43,6 +43,29 @@ def to_int(value: Any) -> int | None:
     return int(value) if isinstance(value, int | float) else None
 
 
+def extract_envelope_list(
+    payload: Any, key: str, *, allow_bare_list: bool = True
+) -> list[dict[str, Any]] | None:
+    if isinstance(payload, list):
+        if not allow_bare_list:
+            return None
+        items: list[Any] = payload
+    elif isinstance(payload, dict):
+        if key not in payload:
+            return None
+        raw_items = payload[key]
+        if raw_items is None:
+            items = []
+        elif isinstance(raw_items, list):
+            items = raw_items
+        else:
+            return None
+    else:
+        return None
+
+    return [item for item in items if isinstance(item, dict)]
+
+
 def normalize_remote(source_name: str, raw_value: Any) -> bool:
     if isinstance(raw_value, bool):
         return raw_value

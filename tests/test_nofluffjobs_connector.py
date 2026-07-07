@@ -7,30 +7,24 @@ from app.connectors.nofluffjobs import _extract_offer_list, map_nofluffjobs_offe
 from app.ingestion.normalize import NOFLUFFJOBS
 
 
-def test_extract_offer_list_reads_postings_key_from_dict_payload() -> None:
-    result = _extract_offer_list({"postings": [{"title": "a"}, {"title": "b"}]})
+def test_extract_offer_list_delegates_to_shared_envelope_extractor_with_postings_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # shared envelope-shape behaviour (dict-with-key, None, wrong type, non-dict items)
+    # is covered once in tests/test_ingestion_normalize.py
+    calls: dict[str, Any] = {}
 
-    assert result == [{"title": "a"}, {"title": "b"}]
+    def _fake_extract_envelope_list(payload: Any, key: str, **kwargs: Any) -> Any:
+        calls["args"] = (payload, key, kwargs)
+        return [{"title": "a"}]
 
+    monkeypatch.setattr(nofluffjobs, "extract_envelope_list", _fake_extract_envelope_list)
 
-def test_extract_offer_list_treats_null_postings_as_empty_list() -> None:
-    result = _extract_offer_list({"postings": None})
+    result = _extract_offer_list({"postings": [{"title": "a"}]})
 
-    assert result == []
-
-
-def test_extract_offer_list_returns_none_for_unexpected_shape() -> None:
-    result = _extract_offer_list({"unexpected": "shape"})
-
-    assert result is None
-
-
-def test_extract_offer_list_returns_none_for_bare_list_payload() -> None:
-    # unlike JustJoin.it's endpoint, NoFluffJobs's confirmed response is always an
-    # envelope dict with a "postings" key -- a bare list is not a shape it produces.
-    result = _extract_offer_list([{"title": "a"}])
-
-    assert result is None
+    assert result == [{"title": "a"}]
+    assert calls["args"][1] == "postings"
+    assert calls["args"][2] == {"allow_bare_list": False}
 
 
 def test_map_nofluffjobs_offer_maps_all_known_fields() -> None:

@@ -7,6 +7,7 @@ from app.connectors.http import fetch_json
 from app.db.models import Source
 from app.ingestion.normalize import (
     SOLID_JOBS,
+    extract_envelope_list,
     normalize_remote,
     normalize_salary,
     normalize_seniority,
@@ -69,22 +70,7 @@ def build_offer_params(
 def _extract_offers(payload: Any) -> list[dict[str, Any]] | None:
     # Confirmed live 2026-07-05 (see ADR 0012): the direct API wraps offers under "jobs",
     # the same envelope key sjctl's own "search" subcommand used -- not "results"/"data".
-    if isinstance(payload, list):
-        items: list[Any] = payload
-    elif isinstance(payload, dict):
-        if "jobs" not in payload:
-            return None
-        raw_items = payload["jobs"]
-        if raw_items is None:
-            items = []
-        elif isinstance(raw_items, list):
-            items = raw_items
-        else:
-            return None
-    else:
-        return None
-
-    return [item for item in items if isinstance(item, dict)]
+    return extract_envelope_list(payload, "jobs")
 
 
 def map_solid_jobs_offer(source_id: int, raw: dict[str, Any]) -> dict[str, Any]:

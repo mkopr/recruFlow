@@ -7,22 +7,24 @@ from app.connectors.justjoinit import _extract_offer_list, map_justjoinit_offer
 from app.ingestion.normalize import JUSTJOINIT
 
 
-def test_extract_offer_list_reads_named_key_from_dict_payload() -> None:
-    result = _extract_offer_list({"data": [{"title": "a"}, {"title": "b"}]})
+def test_extract_offer_list_delegates_to_shared_envelope_extractor_with_data_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # shared envelope-shape behaviour (bare list, dict-with-key, None, wrong type,
+    # non-dict items) is covered once in tests/test_ingestion_normalize.py
+    calls: dict[str, Any] = {}
 
-    assert result == [{"title": "a"}, {"title": "b"}]
+    def _fake_extract_envelope_list(payload: Any, key: str, **kwargs: Any) -> Any:
+        calls["args"] = (payload, key, kwargs)
+        return [{"title": "a"}]
 
+    monkeypatch.setattr(justjoinit, "extract_envelope_list", _fake_extract_envelope_list)
 
-def test_extract_offer_list_reads_bare_list_payload() -> None:
-    result = _extract_offer_list([{"title": "a"}])
+    result = _extract_offer_list({"data": [{"title": "a"}]})
 
     assert result == [{"title": "a"}]
-
-
-def test_extract_offer_list_returns_none_for_unexpected_shape() -> None:
-    result = _extract_offer_list({"unexpected": "shape"})
-
-    assert result is None
+    assert calls["args"][1] == "data"
+    assert calls["args"][2] == {}
 
 
 def test_map_justjoinit_offer_maps_all_known_fields(caplog: pytest.LogCaptureFixture) -> None:

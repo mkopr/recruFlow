@@ -5,6 +5,7 @@ from app.ingestion.normalize import (
     JUSTJOINIT,
     NOFLUFFJOBS,
     SOLID_JOBS,
+    extract_envelope_list,
     normalize_remote,
     normalize_salary,
     normalize_seniority,
@@ -149,3 +150,59 @@ def test_normalize_salary_does_not_warn_when_raw_gross_is_none(
         normalize_salary(SOLID_JOBS, 18000, 24000, "PLN", raw_gross=None)
 
     assert not any(r.levelno == logging.WARNING for r in caplog.records)
+
+
+def test_extract_envelope_list_reads_bare_list_payload() -> None:
+    result = extract_envelope_list([{"title": "a"}], "jobs")
+
+    assert result == [{"title": "a"}]
+
+
+def test_extract_envelope_list_reads_named_key_from_dict_payload() -> None:
+    result = extract_envelope_list({"jobs": [{"title": "a"}, {"title": "b"}]}, "jobs")
+
+    assert result == [{"title": "a"}, {"title": "b"}]
+
+
+def test_extract_envelope_list_treats_null_value_as_empty_list() -> None:
+    result = extract_envelope_list({"jobs": None}, "jobs")
+
+    assert result == []
+
+
+def test_extract_envelope_list_returns_none_when_key_missing() -> None:
+    result = extract_envelope_list({"unexpected": "shape"}, "jobs")
+
+    assert result is None
+
+
+def test_extract_envelope_list_returns_none_when_keyed_value_is_wrong_type() -> None:
+    result = extract_envelope_list({"jobs": "not-a-list"}, "jobs")
+
+    assert result is None
+
+
+def test_extract_envelope_list_returns_none_for_non_list_non_dict_payload() -> None:
+    result = extract_envelope_list("not-a-payload", "jobs")
+
+    assert result is None
+
+
+def test_extract_envelope_list_filters_out_non_dict_items() -> None:
+    result = extract_envelope_list({"jobs": [{"title": "a"}, "not-a-dict", 1, None]}, "jobs")
+
+    assert result == [{"title": "a"}]
+
+
+def test_extract_envelope_list_rejects_bare_list_when_disallowed() -> None:
+    result = extract_envelope_list([{"title": "a"}], "postings", allow_bare_list=False)
+
+    assert result is None
+
+
+def test_extract_envelope_list_still_reads_keyed_dict_when_bare_list_disallowed() -> None:
+    result = extract_envelope_list(
+        {"postings": [{"title": "a"}]}, "postings", allow_bare_list=False
+    )
+
+    assert result == [{"title": "a"}]

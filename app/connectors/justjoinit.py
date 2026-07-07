@@ -7,6 +7,7 @@ from app.connectors.http import fetch_json
 from app.db.models import Source
 from app.ingestion.normalize import (
     JUSTJOINIT,
+    extract_envelope_list,
     normalize_remote,
     normalize_salary,
     normalize_seniority,
@@ -30,22 +31,7 @@ def _fetch_justjoinit_json(
 
 
 def _extract_offer_list(payload: Any) -> list[dict[str, Any]] | None:
-    if isinstance(payload, list):
-        items: list[Any] = payload
-    elif isinstance(payload, dict):
-        if "data" not in payload:
-            return None
-        raw_items = payload["data"]
-        if raw_items is None:
-            items = []
-        elif isinstance(raw_items, list):
-            items = raw_items
-        else:
-            return None
-    else:
-        return None
-
-    return [item for item in items if isinstance(item, dict)]
+    return extract_envelope_list(payload, "data")
 
 
 def _next_cursor(payload: Any) -> int | None:

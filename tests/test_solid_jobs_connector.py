@@ -99,22 +99,24 @@ def test_fetch_solid_jobs_json_returns_parsed_payload_on_success(
     assert result == payload
 
 
-def test_extract_offers_reads_bare_list_payload() -> None:
-    result = _extract_offers([{"title": "a"}])
+def test_extract_offers_delegates_to_shared_envelope_extractor_with_jobs_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # shared envelope-shape behaviour (bare list, dict-with-key, None, wrong type,
+    # non-dict items) is covered once in tests/test_ingestion_normalize.py
+    calls: dict[str, Any] = {}
+
+    def _fake_extract_envelope_list(payload: Any, key: str, **kwargs: Any) -> Any:
+        calls["args"] = (payload, key, kwargs)
+        return [{"title": "a"}]
+
+    monkeypatch.setattr(solid_jobs, "extract_envelope_list", _fake_extract_envelope_list)
+
+    result = _extract_offers({"jobs": [{"title": "a"}]})
 
     assert result == [{"title": "a"}]
-
-
-def test_extract_offers_reads_results_key_from_dict_payload() -> None:
-    result = _extract_offers({"jobs": [{"title": "a"}], "totalCount": 1})
-
-    assert result == [{"title": "a"}]
-
-
-def test_extract_offers_returns_none_for_unexpected_shape() -> None:
-    result = _extract_offers({"unexpected": "shape"})
-
-    assert result is None
+    assert calls["args"][1] == "jobs"
+    assert calls["args"][2] == {}
 
 
 def test_map_solid_jobs_offer_maps_all_known_fields() -> None:
