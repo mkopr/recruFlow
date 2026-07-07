@@ -48,6 +48,12 @@ This starts four services, each with a health check:
 Both `api` and `frontend` hot-reload on source changes since their directories are bind-mounted
 into the containers. Check status with `docker compose ps`.
 
+There is a fifth, test-only service, `db_test` (port 5433, `recruflow_test` database, no named
+volume). `make test`/`make test-integration` bring it up automatically (`make db-test-up`) and
+integration tests default to it — never to the real `db` service — so running the test suite can
+never disturb real dev data (see
+[docs/adr/0015-dedicated-postgres-service-for-integration-tests.md](docs/adr/0015-dedicated-postgres-service-for-integration-tests.md)).
+
 ## Database
 
 With `make up` running (the `api` container must exist for `docker compose exec` to work):

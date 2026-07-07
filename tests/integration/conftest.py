@@ -15,8 +15,13 @@ from app.scoring.batch import BatchScoringSummary
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+# BUG28: defaults to the dedicated `db_test` compose service (port 5433), never the real `db`
+# service (5432) that `make up` and a developer's real data live on -- this suite blanket-resets
+# whole tables (e.g. reset_test_profiles) and must never be able to touch real state. CI
+# overrides this via its own DATABASE_URL env var pointing at its ephemeral GitHub Actions
+# postgres service, so `setdefault` is a no-op there.
 os.environ.setdefault(
-    "DATABASE_URL", "postgresql+asyncpg://recruflow:recruflow@localhost:5432/recruflow"
+    "DATABASE_URL", "postgresql+asyncpg://recruflow:recruflow@localhost:5433/recruflow_test"
 )
 
 # Force app.main (and every router module it imports, e.g. app.api.routes.scoring's own
@@ -41,7 +46,7 @@ def alembic_config() -> Config:
 @pytest.fixture(scope="session", autouse=True)
 def _default_test_database_url() -> None:
     os.environ.setdefault(
-        "DATABASE_URL", "postgresql+asyncpg://recruflow:recruflow@localhost:5432/recruflow"
+        "DATABASE_URL", "postgresql+asyncpg://recruflow:recruflow@localhost:5433/recruflow_test"
     )
 
 

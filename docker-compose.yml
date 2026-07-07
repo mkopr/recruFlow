@@ -56,6 +56,24 @@ services:
       timeout: 5s
       retries: 5
 
+  # BUG28: a separate Postgres instance dedicated to `make test-integration`/`make ci`, so the
+  # test suite's blanket table resets (e.g. reset_test_profiles) can never touch the real `db`
+  # service's data. Ephemeral on purpose -- no named volume, so `docker compose down` (or a
+  # container recreate) wipes it clean.
+  db_test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: recruflow
+      POSTGRES_PASSWORD: recruflow
+      POSTGRES_DB: recruflow_test
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recruflow -d recruflow_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   ollama:
     image: ollama/ollama:latest
     ports:
