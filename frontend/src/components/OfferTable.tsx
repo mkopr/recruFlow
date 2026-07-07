@@ -60,7 +60,7 @@ function sortByGrade(offers: OfferSummary[], direction: 'asc' | 'desc'): OfferSu
 function NoOffersEmptyState() {
   return (
     <div className="card flex items-center justify-center py-16 text-[var(--color-text-muted)]">
-      No offers yet — try Fetch now above.
+      No offers yet. Fetch a source above to get started.
     </div>
   );
 }

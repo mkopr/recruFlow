@@ -37,7 +37,7 @@ describe('PreferencesFields', () => {
     const onChange = vi.fn();
     render(<PreferencesFields profile={baseProfile()} onChange={onChange} />);
 
-    fireEvent.change(screen.getByLabelText('Salary range (PLN) — min'), {
+    fireEvent.change(screen.getByLabelText('Min salary (PLN)'), {
       target: { value: '15000' },
     });
 
@@ -48,7 +48,7 @@ describe('PreferencesFields', () => {
     const onChange = vi.fn();
     render(<PreferencesFields profile={baseProfile()} onChange={onChange} />);
 
-    fireEvent.change(screen.getByLabelText('Salary range (PLN) — target'), {
+    fireEvent.change(screen.getByLabelText('Target salary (PLN)'), {
       target: { value: '20000' },
     });
 

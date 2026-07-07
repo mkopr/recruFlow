@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 
 import type { OfferListFilters } from '../api/offers';
-import { FetchNowButton } from '../components/FetchNowButton';
 import { GradeFilter } from '../components/GradeFilter';
 import { OfferFilters } from '../components/OfferFilters';
 import { OfferTable } from '../components/OfferTable';
+import { ScoreNowButton } from '../components/ScoreNowButton';
 import { ScoringStatusBanner } from '../components/ScoringStatusBanner';
-import { SourceStatusList } from '../components/SourceStatusList';
+import { SourceFetchCard } from '../components/SourceFetchCard';
 import { KNOWN_SOURCES } from '../constants';
 import { useOffers } from '../hooks/useOffers';
 import { useSchedulerStatus } from '../hooks/useSchedulerStatus';
@@ -56,30 +56,24 @@ export function OfferListPage() {
   }, [scoringStatus?.finished_at]);
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const lastFetchedByConnector = new Map(sources.map((source) => [source.connector, source]));
 
   return (
-    <div className="mx-auto flex w-full max-w-screen-2xl flex-col gap-6 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
-      <header>
-        <h1 className="text-2xl font-semibold">recruFlow — Offers</h1>
-        <p className="text-sm text-[var(--color-text-muted)]">
-          Browse ingested job offers and refresh a source on demand.
-        </p>
-      </header>
-
-      <SourceStatusList sources={sources} />
-
-      <ScoringStatusBanner status={scoringStatus} />
-
+    <div className="mx-auto flex w-full max-w-screen-2xl flex-col gap-4 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
       <div className="flex flex-wrap gap-3">
         {KNOWN_SOURCES.map((source) => (
-          <FetchNowButton
+          <SourceFetchCard
             key={source.id}
             source={source.id}
-            label={`Fetch now: ${source.label}`}
+            label={source.label}
+            lastFetchedAt={lastFetchedByConnector.get(source.id)?.last_fetched_at ?? null}
             onIngested={handleIngested}
           />
         ))}
+        <ScoreNowButton status={scoringStatus} onScored={refetch} />
       </div>
+
+      <ScoringStatusBanner status={scoringStatus} />
 
       <div className="flex flex-wrap items-end gap-4">
         <OfferFilters filters={filters} onChange={handleFiltersChange} />
@@ -97,7 +91,7 @@ export function OfferListPage() {
       {total > 0 && (
         <div className="flex items-center justify-between text-sm text-[var(--color-text-muted)]">
           <span>
-            {total.toLocaleString('en-US')} offer{total === 1 ? '' : 's'} — page {page + 1} of{' '}
+            {total.toLocaleString('en-US')} offer{total === 1 ? '' : 's'}, page {page + 1} of{' '}
             {pageCount}
           </span>
           <div className="flex gap-2">

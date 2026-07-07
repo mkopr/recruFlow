@@ -48,12 +48,9 @@ export function ProfileEditorPage() {
   return (
     <div className="mx-auto flex w-full max-w-screen-lg flex-col gap-6 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
       <header className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">recruFlow — Profile</h1>
-          <p className="text-sm text-[var(--color-text-muted)]">
-            Upload a CV or edit your profile directly.
-          </p>
-        </div>
+        <p className="text-sm text-[var(--color-text-muted)]">
+          Upload a CV or edit your profile directly.
+        </p>
         <span className="card px-3 py-1 text-xs text-[var(--color-text-muted)]">
           {editor.isActive ? 'Active' : 'Draft'}
         </span>

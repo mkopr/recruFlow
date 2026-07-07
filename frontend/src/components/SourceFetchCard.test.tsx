@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as offersApi from '../api/offers';
-import { FetchNowButton } from './FetchNowButton';
+import { SourceFetchCard } from './SourceFetchCard';
 
 vi.mock('../api/offers', () => ({
   triggerIngest: vi.fn(),
@@ -15,7 +15,33 @@ beforeEach(() => {
   triggerIngestMock.mockReset();
 });
 
-describe('FetchNowButton', () => {
+describe('SourceFetchCard', () => {
+  it('shows "Never fetched" when there is no last-fetched timestamp', () => {
+    render(
+      <SourceFetchCard
+        source="justjoinit"
+        label="JustJoin.it"
+        lastFetchedAt={null}
+        onIngested={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Never fetched')).toBeInTheDocument();
+  });
+
+  it('shows a formatted last-fetched timestamp', () => {
+    render(
+      <SourceFetchCard
+        source="justjoinit"
+        label="JustJoin.it"
+        lastFetchedAt="2026-07-06T12:00:00Z"
+        onIngested={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(new Date('2026-07-06T12:00:00Z').toLocaleString())).toBeInTheDocument();
+  });
+
   it('shows a loading state while the fetch is in progress', async () => {
     let resolveFetch: (value: offersApi.IngestResponse) => void = () => {};
     triggerIngestMock.mockReturnValue(
@@ -25,10 +51,17 @@ describe('FetchNowButton', () => {
     );
     const onIngested = vi.fn();
 
-    render(<FetchNowButton source="justjoinit" label="Fetch now" onIngested={onIngested} />);
+    render(
+      <SourceFetchCard
+        source="justjoinit"
+        label="JustJoin.it"
+        lastFetchedAt={null}
+        onIngested={onIngested}
+      />,
+    );
     await userEvent.click(screen.getByRole('button'));
 
-    expect(screen.getByRole('button')).toHaveTextContent('Fetching...');
+    expect(screen.getByText('Fetching…')).toBeInTheDocument();
     expect(screen.getByRole('button')).toBeDisabled();
 
     resolveFetch({ source: 'justjoinit', ok: true, fetched: 10, created: 4 });
@@ -44,7 +77,14 @@ describe('FetchNowButton', () => {
     });
     const onIngested = vi.fn();
 
-    render(<FetchNowButton source="justjoinit" label="Fetch now" onIngested={onIngested} />);
+    render(
+      <SourceFetchCard
+        source="justjoinit"
+        label="JustJoin.it"
+        lastFetchedAt={null}
+        onIngested={onIngested}
+      />,
+    );
     await userEvent.click(screen.getByRole('button'));
 
     await waitFor(() => expect(onIngested).toHaveBeenCalledTimes(1));
@@ -55,7 +95,14 @@ describe('FetchNowButton', () => {
     triggerIngestMock.mockRejectedValue(new Error('failed to trigger ingest for justjoinit'));
     const onIngested = vi.fn();
 
-    render(<FetchNowButton source="justjoinit" label="Fetch now" onIngested={onIngested} />);
+    render(
+      <SourceFetchCard
+        source="justjoinit"
+        label="JustJoin.it"
+        lastFetchedAt={null}
+        onIngested={onIngested}
+      />,
+    );
     await userEvent.click(screen.getByRole('button'));
 
     await waitFor(() =>
@@ -74,7 +121,14 @@ describe('FetchNowButton', () => {
     });
     const onIngested = vi.fn();
 
-    render(<FetchNowButton source="justjoinit" label="Fetch now" onIngested={onIngested} />);
+    render(
+      <SourceFetchCard
+        source="justjoinit"
+        label="JustJoin.it"
+        lastFetchedAt={null}
+        onIngested={onIngested}
+      />,
+    );
     await userEvent.click(screen.getByRole('button'));
 
     await waitFor(() =>
@@ -87,7 +141,14 @@ describe('FetchNowButton', () => {
     triggerIngestMock.mockReturnValue(new Promise(() => {}));
     const onIngested = vi.fn();
 
-    render(<FetchNowButton source="justjoinit" label="Fetch now" onIngested={onIngested} />);
+    render(
+      <SourceFetchCard
+        source="justjoinit"
+        label="JustJoin.it"
+        lastFetchedAt={null}
+        onIngested={onIngested}
+      />,
+    );
     await userEvent.click(screen.getByRole('button'));
     await userEvent.click(screen.getByRole('button'));
 

@@ -28,7 +28,6 @@ export function SettingsPage() {
   return (
     <div className="mx-auto flex w-full max-w-screen-lg flex-col gap-6 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
       <header>
-        <h1 className="text-2xl font-semibold">recruFlow — Settings</h1>
         <p className="text-sm text-[var(--color-text-muted)]">
           Configure the grade cutoffs used by the matcher. Thresholds must be strictly descending:
           Grade A &gt; Grade B &gt; Grade C &gt; Grade D &gt; 0.

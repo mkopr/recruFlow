@@ -42,7 +42,7 @@ function LastRunAndBacklogSummary({ status }: { status: ScoringStatus }) {
       {hasBacklog && (
         <span className="text-[var(--color-text-muted)]">
           {status.unscored_backlog} offer{status.unscored_backlog === 1 ? '' : 's'} not yet scored
-          for the active profile — scoring runs automatically in the background.
+          for the active profile. Scoring runs automatically in the background.
         </span>
       )}
     </div>

@@ -52,7 +52,7 @@ export function PreferencesFields({ profile, onChange }: PreferencesFieldsProps)
 
       <div className="flex flex-wrap gap-4">
         <label className="flex flex-col gap-1 text-sm text-[var(--color-text-muted)]">
-          Salary range (PLN) — min
+          Min salary (PLN)
           <input
             className="input"
             type="number"
@@ -61,7 +61,7 @@ export function PreferencesFields({ profile, onChange }: PreferencesFieldsProps)
           />
         </label>
         <label className="flex flex-col gap-1 text-sm text-[var(--color-text-muted)]">
-          Salary range (PLN) — target
+          Target salary (PLN)
           <input
             className="input"
             type="number"

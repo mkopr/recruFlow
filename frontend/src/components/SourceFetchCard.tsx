@@ -2,13 +2,23 @@ import { useState } from 'react';
 
 import { triggerIngest } from '../api/offers';
 
-interface FetchNowButtonProps {
+interface SourceFetchCardProps {
   source: string;
   label: string;
+  lastFetchedAt: string | null;
   onIngested: () => void;
 }
 
-export function FetchNowButton({ source, label, onIngested }: FetchNowButtonProps) {
+function formatLastFetchedAt(value: string | null): string {
+  return value === null ? 'Never fetched' : new Date(value).toLocaleString();
+}
+
+export function SourceFetchCard({
+  source,
+  label,
+  lastFetchedAt,
+  onIngested,
+}: SourceFetchCardProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
@@ -34,13 +44,23 @@ export function FetchNowButton({ source, label, onIngested }: FetchNowButtonProp
     }
   };
 
+  const status = loading ? 'Fetching…' : (error ?? summary ?? formatLastFetchedAt(lastFetchedAt));
+
   return (
-    <div className="flex flex-col gap-1">
-      <button type="button" className="btn btn-primary" onClick={handleClick} disabled={loading}>
-        {loading ? 'Fetching...' : label}
-      </button>
-      {summary && <span className="text-xs text-[var(--color-text-muted)]">{summary}</span>}
-      {error && <span className="text-xs text-[var(--color-danger)]">{error}</span>}
-    </div>
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={loading}
+      className="card card-interactive flex min-w-40 flex-1 flex-col items-start gap-0.5 px-4 py-3 text-left"
+    >
+      <span className="text-sm font-medium">{label}</span>
+      <span
+        className={
+          error ? 'text-xs text-[var(--color-danger)]' : 'text-xs text-[var(--color-text-muted)]'
+        }
+      >
+        {status}
+      </span>
+    </button>
   );
 }
