@@ -1,5 +1,6 @@
 import { BrowserRouter, NavLink, Route, Routes } from 'react-router-dom';
 
+import { useGradeAAlerts } from './hooks/useGradeAAlerts';
 import { OfferListPage } from './pages/OfferListPage';
 import { ProfileEditorPage } from './pages/ProfileEditorPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -11,6 +12,8 @@ const NAV_LINKS = [
 ];
 
 function App() {
+  useGradeAAlerts();
+
   return (
     <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text)]">
       <BrowserRouter>

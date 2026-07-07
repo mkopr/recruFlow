@@ -15,6 +15,7 @@ from app.db.scoring_config_repo import get_or_create_scoring_config
 from app.llm import matcher
 from app.llm.matcher import MatcherChain, build_grade_scale, score_offers_with_langchain
 from app.schemas.scoring_config import ScoringConfig
+from app.scoring.events import GradeAEvent
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ class BatchScoringSummary:
     skipped: int
     failed: int
     remaining: int = 0
+    grade_a_events: tuple[GradeAEvent, ...] = ()
 
 
 @dataclass
@@ -169,6 +171,19 @@ async def run_batch_scoring(
         _progress.running = False
         _progress.finished_at = datetime.now(UTC)
 
+    await session.flush()
+    offer_by_id = {offer.id: offer for offer, _ in unscored}
+    grade_a_events = tuple(
+        GradeAEvent(
+            score_id=row.id,
+            offer_id=row.offer_id,
+            title=offer_by_id[row.offer_id].title,
+            company=offer_by_id[row.offer_id].company,
+        )
+        for row in results
+        if row.grade == "A"
+    )
+
     failed = len(unscored) - len(results)
     remaining = max(total_unscored - len(unscored), 0)
     _progress.last_scored = len(results)
@@ -184,7 +199,11 @@ async def run_batch_scoring(
         remaining,
     )
     return BatchScoringSummary(
-        scored=len(results), skipped=skipped, failed=failed, remaining=remaining
+        scored=len(results),
+        skipped=skipped,
+        failed=failed,
+        remaining=remaining,
+        grade_a_events=grade_a_events,
     )
 
 

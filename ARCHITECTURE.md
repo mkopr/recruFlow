@@ -597,6 +597,10 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   block other sources' jobs from registering. The three built-in sources' shipped defaults
   (`app.scheduler.service.DEFAULT_SOURCE_CONFIGS`): `solid_jobs` — interval, 3600s (1h); `justjoinit`
   — interval, 1800s (30m); `nofluffjobs` — cron, `"0 */2 * * *"` (every 2 hours on the hour).
+  **Superseded by P3US28**: all three built-in connectors now default to a uniform interval
+  schedule of 300s (5 minutes) instead of the mixed values above, and every source's interval is
+  user-editable at runtime via `PUT /scheduler/sources/{source}/interval` — see the P3US28 notes
+  below.
 
 - **`scheduler_runs` table, not `sources.last_run_*` columns**: a new table rather than columns on
   `sources`, matching the project's existing ELT/audit-trail instinct (raw payloads are always kept,
@@ -1648,6 +1652,117 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
   shell only, rendering four `.input` numeric fields plus a `.btn-primary` Save button, reusing
   `--color-danger` for inline errors — no new CSS). `App.tsx` gained a third route/nav link,
   `/settings`, alongside the existing two.
+
+### Configurable auto-fetch cadence + Grade A sound alert (P3US28)
+
+- **Purpose**: two independent additions bundled into one story — (1) each connector's fetch
+  interval (P1US6) becomes user-editable at runtime instead of a hardcoded per-source default, and
+  (2) a live, in-browser sound alert fires the moment a new offer is scored Grade A, so the user
+  doesn't have to keep the offer list open to notice a strong match. (2) is also this app's first
+  SSE endpoint, and per `CLAUDE.md`'s OD-8 ("SSE, not WebSocket, for push-style updates") it
+  establishes the `sse-starlette` + in-process broadcaster pattern the future swarm-progress story
+  (Phase 5) is expected to reuse rather than inventing its own.
+
+- **Fetch cadence — `PUT /scheduler/sources/{source}/interval` / `PUT /scheduler/sources/interval`**
+  (`app/api/routes/scheduler.py`): both take `IntervalUpdateRequest { seconds: int }`
+  (`app/schemas/scheduler.py`, `Field(ge=60)` — FastAPI turns anything below the 60s floor into a
+  `422` automatically, so nobody can accidentally hammer a job board). `app/scheduler/service.py`'s
+  `set_source_interval`/`set_all_source_intervals` reuse `resolve_source_by_connector` (so an
+  unknown connector raises the same `SchedulerLookupError` → `404` path as the existing manual
+  trigger endpoint) and always write `config_json["schedule"] = {"type": "interval", "seconds":
+  ...}` — this **converts** a source currently on a cron schedule (NoFluffJobs, historically) to an
+  interval schedule, same as one already on interval; there is no cron-write path left in this
+  story. `Source.config_json` is a plain JSONB column with no SQLAlchemy `Mutable` wrapper, so both
+  functions reassign the attribute to a new dict (`source.config_json = {**source.config_json,
+  "schedule": {...}}`) rather than mutating the existing dict in place — an in-place `.update()`
+  would silently fail to persist, since the ORM's unit-of-work never sees the change.
+- **Live rescheduling, not just a persisted config change**: both routes call
+  `request.app.state.scheduler.reschedule_job(build_job_id(connector), trigger=IntervalTrigger
+  (seconds=...))` immediately after committing, reusing `app/scheduler/lifecycle.py`'s existing
+  `build_job_id` — the same live `AsyncIOScheduler` instance P1US6 already stashed on
+  `app.state.scheduler`. The new interval therefore takes effect on that job's very next tick, not
+  only after an app restart.
+- **New uniform default**: `DEFAULT_SOURCE_CONFIGS` (`app/scheduler/service.py`) now seeds all three
+  built-in connectors at a 300-second (5 minute) interval schedule, replacing the mixed
+  interval/cron defaults P1US6 originally shipped (see the "Superseded by P3US28" note on that
+  section above).
+- **Frontend**: `frontend/src/api/scheduler.ts` gained `updateSourceInterval`/
+  `updateAllSourceIntervals` (same throw-on-error shape as the existing `fetchSchedulerStatus`).
+  `frontend/src/hooks/useFetchCadence.ts` wraps the existing `useSchedulerStatus()` (reused, not
+  reimplemented) for the source list/refetch, and tracks a per-connector `saving: Record<string,
+  boolean>` map plus a shared `error` string — each row saves independently, and a successful save
+  calls `refetch()` so the row reflects the persisted value without a full reload.
+  `frontend/src/components/FetchCadenceSection.tsx` renders one row per connector (labelled via the
+  existing `KNOWN_SOURCES` constant), a minutes `<input>` pre-filled from that connector's current
+  `schedule.seconds / 60`, and a single "apply to all" control that pushes one value to every
+  connector via the bulk endpoint (minutes→seconds conversion happens at this UI boundary — the API
+  layer only ever deals in seconds). `SettingsPage.tsx` renders this alongside the existing
+  scoring-config card; the pre-existing scoring-config "Save" button gained `aria-label="Save
+  scoring config"` purely to keep it distinguishable from each cadence row's own "Save" button in
+  tests, with no visible UI change.
+
+- **Grade A sound alert — `app/scoring/events.py`** (new module): the in-process Grade A
+  broadcaster, and the reference implementation for OD-8's SSE-not-WebSocket seam. A module-level
+  `_subscribers: set[asyncio.Queue[GradeAEvent]]`, `subscribe()`/`unsubscribe()`/`publish_grade_a()`
+  — deliberately a plain global, the same "local single-user tool, one API process" justification
+  `app/scoring/batch.py`'s `ScoringProgress` singleton already uses. `publish_grade_a` uses
+  `put_nowait` on an unbounded `asyncio.Queue`, so it never blocks and never raises — a
+  slow/stalled SSE client can never stall the scoring pipeline that publishes to it.
+- **Publish call sites**: `BatchScoringSummary` (`app/scoring/batch.py`) gained a fifth field,
+  `grade_a_events: tuple[GradeAEvent, ...] = ()`, following the exact precedent BUG16 set when it
+  added `remaining: int = 0` to this same frozen dataclass — every existing construction site keeps
+  compiling unchanged. `run_batch_scoring` computes it after scoring completes, via an explicit
+  `await session.flush()` (required: `score_offers_with_langchain` only `session.add()`s each new
+  `MatchScore`, never flushes, so `row.id` is `None` until something forces a flush; `flush()` is
+  not a `commit()`, so this stays inside the existing "caller commits" convention). The two places
+  that already call `run_batch_scoring` and commit — `POST /score/batch`
+  (`app/api/routes/scoring.py`) and the dedicated backlog-draining job's `_run_scoring_job_async`
+  (`app/scheduler/service.py`, BUG24) — both now loop over `summary.grade_a_events` and call
+  `publish_grade_a` immediately after their existing `await session.commit()`. No third call site
+  exists.
+- **`GET /scoring/events`** (`app/api/routes/scoring.py`): an `EventSourceResponse`
+  (`sse-starlette`) whose generator `subscribe()`s on connect, loops on
+  `asyncio.wait_for(queue.get(), timeout=15)` (the timeout only bounds how often it re-checks
+  `request.is_disconnected()` when nothing has been published — it does not add latency to a
+  genuinely published event, since `queue.get()` returns immediately once something is enqueued),
+  and `unsubscribe()`s in a `finally` so a disconnected client's queue is always removed — without
+  that, `publish_grade_a` would keep enqueueing onto a queue nobody drains, leaking memory for the
+  life of the process. Each `grade_a` event's `data` is `{score_id, offer_id, title, company}` as
+  JSON. Deliberately **no replay/catch-up/baseline bookkeeping**: because SSE only delivers events
+  published after a client connects, a freshly opened connection naturally receives nothing for
+  Grade A scores that already existed, and each event fires exactly once per subscriber — this is a
+  live notification stream, not an audit log, so a reconnect after a dropped connection (handled by
+  the browser's native `EventSource` auto-reconnect) never needs to catch up on anything missed.
+- **Frontend**: `frontend/src/api/client.ts`'s `baseUrl` constant is now exported (the only change
+  to that file) since `EventSource` cannot go through `openapi-fetch` and needs the same base URL
+  `apiClient` already uses. `frontend/src/hooks/useGradeAAlerts.ts` opens exactly one
+  `new EventSource(`${baseUrl}/scoring/events`)` in a `useEffect` with an empty dependency array,
+  called once from `App.tsx` above the `<Routes>` switch (not from any one page) — so exactly one
+  connection exists per browser tab regardless of which page is active, and it closes on unmount.
+  On each `grade_a` event it reads prefs fresh via `loadGradeAlertPrefs()` (not from closed-over
+  state, so a change saved from the Settings page takes effect on the very next event without this
+  hook needing to re-subscribe) and calls `playAlertSound(prefs.sound, prefs.muted ? 0 :
+  prefs.volume)` — muting passes volume `0` through rather than skipping the call, so the SSE
+  stream and its side effects keep running identically whether muted or not.
+- **`frontend/src/lib/sound.ts`**: a small, dependency-free Web Audio synth (not a literal port of
+  ZzFX, which optimizes for byte count over readability) — `playAlertSound(sound, volume)`
+  constructs a `new AudioContext()`, schedules 1–3 short square/triangle-wave oscillator notes via a
+  `GainNode` set from `volume`, and closes the context once the last note's envelope ends; `volume
+  <= 0` is a no-op guard (belt-and-braces alongside the caller's own mute gate) that never
+  constructs an `AudioContext` at all.
+- **`frontend/src/lib/gradeAlertPrefs.ts`**: pure, React-free `localStorage` read/write, mirroring
+  the precedent set by `grade.ts`/`scoringConfigValidation.ts`. Sound choice, volume, and mute live
+  under a single JSON blob at `localStorage["recruflow.gradeAlertPrefs"]` — **client-only UX
+  preference, not server-side domain state** (unlike `Source.config_json.schedule` above, which is
+  persisted server-side and shared across browser sessions) — there is deliberately no backend
+  table or endpoint for these three fields. `loadGradeAlertPrefs()` falls back to defaults
+  (`{sound: 'chime', volume: 0.5, muted: false}`) on missing or malformed stored JSON rather than
+  throwing.
+- **`frontend/src/components/NotificationsSection.tsx`**: a sound dropdown (`ALERT_SOUNDS`), a
+  volume slider, a mute checkbox, and a "Test sound" button that calls `playAlertSound` directly —
+  bypassing the SSE stream entirely, since it's a local preview, not a simulated event. Every change
+  handler updates local state and calls `saveGradeAlertPrefs` immediately; unlike the scoring-config
+  and cadence sections, there is no separate explicit Save step for this section.
 
 ### Makefile targets
 

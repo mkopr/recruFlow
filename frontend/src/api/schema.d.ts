@@ -72,6 +72,40 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/scheduler/sources/interval': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /** Update All Source Intervals */
+    put: operations['update_all_source_intervals_scheduler_sources_interval_put'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/scheduler/sources/{source}/interval': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /** Update Source Interval */
+    put: operations['update_source_interval_scheduler_sources__source__interval_put'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/ingest/{source}': {
     parameters: {
       query?: never;
@@ -227,6 +261,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/scoring/events': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Scoring Events */
+    get: operations['scoring_events_scoring_events_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -286,6 +337,11 @@ export interface components {
       created: number;
       /** Error Message */
       error_message?: string | null;
+    };
+    /** IntervalUpdateRequest */
+    IntervalUpdateRequest: {
+      /** Seconds */
+      seconds: number;
     };
     /** Language */
     Language: {
@@ -736,6 +792,74 @@ export interface operations {
       };
     };
   };
+  update_all_source_intervals_scheduler_sources_interval_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['IntervalUpdateRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SchedulerStatusResponse'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  update_source_interval_scheduler_sources__source__interval_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        source: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['IntervalUpdateRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SourceStatus'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
   trigger_ingest_route_ingest__source__post: {
     parameters: {
       query?: {
@@ -1054,6 +1178,26 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  scoring_events_scoring_events_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
         };
       };
     };

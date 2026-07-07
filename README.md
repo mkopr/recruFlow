@@ -335,20 +335,53 @@ two). Two shapes are supported, a tagged union on `"type"`:
 {"schedule": {"type": "cron", "expression": "0 */2 * * *"}}
 ```
 
-`expression` is a standard five-field crontab string. To change a source's schedule, update its row
-directly (e.g. via `psql` or a future admin UI — there is no `PATCH /sources/{id}` endpoint yet) and
-restart the API so `register_jobs` picks up the new trigger; a running scheduler does not hot-reload
-config changes mid-process. A missing or malformed `"schedule"` value never crashes the app — it
-logs a `WARNING` and falls back to a 1-hour interval.
+`expression` is a standard five-field crontab string. A missing or malformed `"schedule"` value
+never crashes the app — it logs a `WARNING` and falls back to a 1-hour interval.
 
-The three built-in sources ship with these defaults (`app/scheduler/service.py`'s
+The three built-in sources ship with a uniform default (`app/scheduler/service.py`'s
 `DEFAULT_SOURCE_CONFIGS`):
 
 | Source | Schedule |
 | --- | --- |
-| `solid_jobs` | interval, every 3600s (1 hour) |
-| `justjoinit` | interval, every 1800s (30 minutes) |
-| `nofluffjobs` | cron, `0 */2 * * *` (every 2 hours, on the hour) |
+| `solid_jobs` | interval, every 300s (5 minutes) |
+| `justjoinit` | interval, every 300s (5 minutes) |
+| `nofluffjobs` | interval, every 300s (5 minutes) |
+
+To change a source's interval at runtime, use `PUT /scheduler/sources/{source}/interval` (or
+`PUT /scheduler/sources/interval` to apply one value to every connector at once) — see below. Both
+reschedule the live `AsyncIOScheduler` job immediately, so the new interval takes effect on that
+job's very next tick without an API restart.
+
+### `PUT /scheduler/sources/{source}/interval`
+
+Sets one connector's fetch interval. `seconds` must be a positive integer with a floor of `60`
+(anything lower is rejected with a `422`). Converts a source currently on a cron schedule to an
+interval schedule, same as one already on interval.
+
+```bash
+curl -X PUT http://localhost:8000/scheduler/sources/nofluffjobs/interval \
+  -H 'Content-Type: application/json' \
+  -d '{"seconds": 900}'
+```
+
+Returns the updated `SourceStatus` (same shape as one entry of `GET /scheduler/status`). Returns
+`404` for an unrecognised connector or a recognised connector with no provisioned `Source` row —
+same error semantics as `POST /scheduler/run/{source}`.
+
+### `PUT /scheduler/sources/interval`
+
+Applies one interval to every connector-tagged source in a single call — the "same value for all
+connectors" case. Same body shape and validation as the single-source endpoint above.
+
+```bash
+curl -X PUT http://localhost:8000/scheduler/sources/interval \
+  -H 'Content-Type: application/json' \
+  -d '{"seconds": 300}'
+```
+
+Returns `{"sources": [...]}`, one `SourceStatus` entry per connector, same shape as
+`GET /scheduler/status`. Never `404`s — an empty result set (no connector-tagged sources
+provisioned) simply reschedules nothing.
 
 ### `POST /scheduler/run/{source}`
 
@@ -582,6 +615,27 @@ curl -X PUT http://localhost:8000/scoring-config \
 Returns `422` if the four values aren't strictly descending (`grade_a > grade_b > grade_c >
 grade_d > 0`) or any value is outside `(0, 1]` — the existing row, if any, is left untouched.
 
+### `GET /scoring/events`
+
+Server-Sent Events (SSE) stream. Emits a `grade_a` event the moment a Grade A `MatchScore` row
+commits (from either `POST /score/batch` or the scheduler's own recurring backlog-draining job).
+This is the app's first SSE endpoint.
+
+```bash
+curl -N http://localhost:8000/scoring/events
+```
+
+```
+event: grade_a
+data: {"score_id": 42, "offer_id": 17, "title": "Backend Engineer", "company": "Acme"}
+```
+
+A freshly opened connection only ever receives events published after it connects — there is no
+replay or "seen id" bookkeeping, so a Grade A score that already existed before you connected never
+fires. The connection stays open indefinitely; the browser's native `EventSource` handles
+reconnection on a dropped connection automatically, and a reconnect never replays anything missed
+in the gap (this is a live notification stream, not an audit log).
+
 ## Offer list page
 
 With `make up` running, open `http://localhost:5173` to browse ingested offers without calling
@@ -701,3 +755,17 @@ cutoffs the matcher uses (`GET`/`PUT /scoring-config` above), without calling th
   network call is made until the thresholds are valid.
 - **Save** persists the four values via `PUT /scoring-config`; a subsequent page reload shows the
   saved values, not the defaults, since they're read back from `GET /scoring-config`.
+
+The same page also has two more sections:
+
+- **Fetch cadence** — one row per connector (sourced from `GET /scheduler/status`), a minutes input
+  pre-filled with that connector's current interval, each saved independently via
+  `PUT /scheduler/sources/{source}/interval`, plus an "apply to all" control that pushes one value
+  to every connector via `PUT /scheduler/sources/interval`. Saving reschedules the live job
+  immediately — no restart needed.
+- **Notifications** — a preset retro alert sound dropdown, a "Test sound" preview button, a volume
+  slider, and a mute toggle. These three settings persist in `localStorage` only (no backend table)
+  and take effect immediately, with no separate Save step. When a new offer is scored Grade A, the
+  app plays the selected sound once via the `GET /scoring/events` SSE stream — every open browser
+  tab connects and plays independently, and muting stops playback without closing the underlying
+  SSE connection.

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,16 +12,18 @@ from app.db.models import SchedulerRun, Source
 from app.db.session import get_engine, get_sessionmaker
 from app.ingestion.lifecycle import run_with_lifecycle
 from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
+from app.ingestion.registry import resolve_source_by_connector
 from app.ingestion.types import IngestionResult
 from app.scheduler.runs import finish_run_error, finish_run_ok, start_run
 from app.scoring import batch
+from app.scoring.events import publish_grade_a
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_SOURCE_CONFIGS: dict[str, dict[str, Any]] = {
-    SOLID_JOBS: {"schedule": {"type": "interval", "seconds": 3600}},
-    JUSTJOINIT: {"schedule": {"type": "interval", "seconds": 1800}},
-    NOFLUFFJOBS: {"schedule": {"type": "cron", "expression": "0 */2 * * *"}},
+    SOLID_JOBS: {"schedule": {"type": "interval", "seconds": 300}},
+    JUSTJOINIT: {"schedule": {"type": "interval", "seconds": 300}},
+    NOFLUFFJOBS: {"schedule": {"type": "interval", "seconds": 300}},
 }
 
 
@@ -114,6 +117,8 @@ async def _run_scoring_job_async() -> batch.BatchScoringSummary:
             try:
                 summary = await batch.run_batch_scoring(session)
                 await session.commit()
+                for event in summary.grade_a_events:
+                    publish_grade_a(event)
                 logger.info(
                     "scheduled backlog scoring: scored=%d skipped=%d failed=%d remaining=%d",
                     summary.scored,
@@ -132,3 +137,24 @@ async def _run_scoring_job_async() -> batch.BatchScoringSummary:
 
 def run_scoring_job_sync() -> batch.BatchScoringSummary:
     return asyncio.run(_run_scoring_job_async())
+
+
+async def set_source_interval(session: AsyncSession, connector: str, seconds: int) -> Source:
+    source = await resolve_source_by_connector(session, connector)
+    source.config_json = {
+        **source.config_json,
+        "schedule": {"type": "interval", "seconds": seconds},
+    }
+    await session.flush()
+    return source
+
+
+async def set_all_source_intervals(session: AsyncSession, seconds: int) -> list[Source]:
+    sources = (await session.scalars(select(Source).where(Source.connector.is_not(None)))).all()
+    for source in sources:
+        source.config_json = {
+            **source.config_json,
+            "schedule": {"type": "interval", "seconds": seconds},
+        }
+        await session.flush()
+    return list(sources)

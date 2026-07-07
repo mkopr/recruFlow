@@ -13,7 +13,6 @@ from app.scheduler.lifecycle import (
 )
 from app.scheduler.service import DEFAULT_SOURCE_CONFIGS
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import delete
 
@@ -31,13 +30,12 @@ async def test_lifespan_registers_one_job_per_builtin_source_with_configured_int
     for connector in (SOLID_JOBS, JUSTJOINIT, NOFLUFFJOBS):
         assert build_job_id(connector) in jobs
 
-    for connector in (SOLID_JOBS, JUSTJOINIT):
+    # P3US28: all three built-in connectors now default to a uniform 300s interval.
+    for connector in (SOLID_JOBS, JUSTJOINIT, NOFLUFFJOBS):
         job = jobs[build_job_id(connector)]
         expected_seconds = DEFAULT_SOURCE_CONFIGS[connector]["schedule"]["seconds"]
+        assert isinstance(job.trigger, IntervalTrigger)
         assert job.trigger.interval.total_seconds() == expected_seconds
-
-    nofluffjobs_job = jobs[build_job_id(NOFLUFFJOBS)]
-    assert isinstance(nofluffjobs_job.trigger, CronTrigger)
 
     # BUG24: the backlog-draining job must be registered independently of any
     # per-source ingestion schedule, so it keeps advancing even between fetches.

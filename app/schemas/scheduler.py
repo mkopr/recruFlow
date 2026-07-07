@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ManualRunResponse(BaseModel):
@@ -43,3 +43,7 @@ class SchedulerStatusResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     sources: list[SourceStatus]
+
+
+class IntervalUpdateRequest(BaseModel):
+    seconds: int = Field(ge=60)

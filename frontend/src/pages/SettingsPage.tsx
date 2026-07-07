@@ -1,3 +1,5 @@
+import { FetchCadenceSection } from '../components/FetchCadenceSection';
+import { NotificationsSection } from '../components/NotificationsSection';
 import { useScoringConfig } from '../hooks/useScoringConfig';
 import type { components } from '../api/schema';
 
@@ -71,12 +73,27 @@ export function SettingsPage() {
         <button
           type="button"
           className="btn btn-primary"
+          aria-label="Save scoring config"
           disabled={settings.saving}
           onClick={() => settings.save()}
         >
           Save
         </button>
       </div>
+
+      <header>
+        <p className="text-sm text-[var(--color-text-muted)]">
+          Fetch cadence: how often each connector automatically checks for new offers.
+        </p>
+      </header>
+      <FetchCadenceSection />
+
+      <header>
+        <p className="text-sm text-[var(--color-text-muted)]">
+          Notifications: play a sound the moment a new offer is scored Grade A.
+        </p>
+      </header>
+      <NotificationsSection />
     </div>
   );
 }
