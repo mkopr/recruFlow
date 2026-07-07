@@ -4,6 +4,7 @@ from uuid import uuid4
 import httpx
 import pytest
 from app.connectors import justjoinit, nofluffjobs, solid_jobs
+from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
 from app.db.models import Source
 from app.db.session import get_engine, get_sessionmaker
@@ -13,8 +14,19 @@ from app.ingestion.persist import ingest_offer
 from app.ingestion.types import IngestionResult as JustJoinItIngestionResult
 from app.ingestion.types import IngestionResult as NoFluffJobsIngestionResult
 from app.ingestion.types import IngestionResult as SolidJobsIngestionResult
+from app.llm.matcher import _MatcherOutput
+from app.scoring import batch
+from app.scoring.batch import run_batch_scoring
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from tests.integration.test_batch_scoring import (
+    _create_profile,
+    _delete_sources_and_dependents,
+    _isolate_langchain_sources,
+)
+from tests.integration.test_langchain_matcher_batch import _STRONG_OUTPUT_KWARGS, _FakeChain
+from tests.integration.test_offers_routes import _create_source, _deactivate_all_profiles
 
 
 def _unique_url(path: str) -> str:
@@ -225,3 +237,79 @@ async def test_health_endpoint_responds_during_ingest_run(
     assert elapsed < 1.0
 
     await task
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ingest_triggers_batch_scoring_for_newly_persisted_offer(
+    scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # BUG16: POST /ingest/{source} -- the only ingestion path FetchNowButton.tsx ever calls --
+    # must trigger scoring same as POST /scheduler/run/{source} does. A fake connector name is
+    # registered against the real justjoinit dispatcher, mirroring
+    # test_ingest_known_connector_without_configured_source_returns_404's own pattern, so this
+    # test can isolate LANGCHAIN_SOURCES to just its own Source instead of racing the huge
+    # backlog of real, pre-existing justjoinit/nofluffjobs offers already in the shared dev DB.
+    connector = f"justjoinit-{uuid4()}"
+    monkeypatch.setitem(
+        registry.CONNECTOR_REGISTRY, connector, registry.CONNECTOR_REGISTRY[JUSTJOINIT]
+    )
+    _isolate_langchain_sources(monkeypatch, connector)
+    # conftest.py's `_stub_post_ingestion_batch_scoring` no-ops real scoring by default for
+    # every other ingestion/scheduler test; this test is specifically about observing a real
+    # MatchScore appear, so it restores the real implementation for its own duration.
+    monkeypatch.setattr(batch, "run_batch_scoring", run_batch_scoring)
+    monkeypatch.setattr(
+        "app.llm.matcher._build_chain",
+        lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
+    )
+
+    canonical_url = _unique_url("justjoinit-scoring-offer")
+
+    async def _fake(
+        session: AsyncSession, source: Source, *, force_refresh: bool = False
+    ) -> JustJoinItIngestionResult:
+        await ingest_offer(
+            session,
+            {
+                "source_id": source.id,
+                "title": "Backend Engineer",
+                "company": "Acme",
+                "canonical_url": canonical_url,
+            },
+            raw_payload={"id": "abc"},
+        )
+        return JustJoinItIngestionResult(ok=True, fetched=1, created=1)
+
+    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake)
+
+    engine = get_engine()
+    sessionmaker = get_sessionmaker(engine)
+    async with sessionmaker() as session:
+        await _deactivate_all_profiles(session)
+        source_id = await _create_source(session, connector=connector)
+        profile = await _create_profile(session)
+        await session.commit()
+
+    try:
+        response = await scheduled_client.post(f"/ingest/{connector}")
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
+
+        async with sessionmaker() as session:
+            offer_id = await session.scalar(
+                select(OfferModel.id).where(OfferModel.canonical_url == canonical_url)
+            )
+            assert offer_id is not None
+
+            score = await session.scalar(
+                select(MatchScoreModel).where(
+                    MatchScoreModel.offer_id == offer_id,
+                    MatchScoreModel.profile_id == profile.id,
+                )
+            )
+            assert score is not None
+    finally:
+        async with sessionmaker() as session:
+            await _delete_sources_and_dependents(session, [source_id])

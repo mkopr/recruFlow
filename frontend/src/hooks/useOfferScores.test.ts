@@ -84,4 +84,19 @@ describe('useOfferScores', () => {
     expect(result.current.scores).toEqual({});
     expect(fetchOfferScoreMock).not.toHaveBeenCalled();
   });
+
+  it('refetch re-pulls scores for the same offer ids (BUG16: a score can complete after the initial load)', async () => {
+    fetchOfferScoreMock.mockResolvedValue(null);
+
+    const { result } = renderHook(() => useOfferScores([1]));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.scores[1]).toBeNull();
+
+    const score = makeScore();
+    fetchOfferScoreMock.mockResolvedValue(score);
+    result.current.refetch();
+
+    await waitFor(() => expect(result.current.scores[1]).toEqual(score));
+  });
 });

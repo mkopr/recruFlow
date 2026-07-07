@@ -192,6 +192,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/scoring/status': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Scoring Status */
+    get: operations['scoring_status_scoring_status_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/scoring-config': {
     parameters: {
       query?: never;
@@ -222,6 +239,8 @@ export interface components {
       skipped: number;
       /** Failed */
       failed: number;
+      /** Remaining */
+      remaining: number;
     };
     /** Body_upload_cv_profile_upload_post */
     Body_upload_cv_profile_upload_post: {
@@ -518,6 +537,27 @@ export interface components {
       grade_c: number;
       /** Grade D */
       grade_d: number;
+    };
+    /** ScoringStatusResponse */
+    ScoringStatusResponse: {
+      /** Running */
+      running: boolean;
+      /** Processed */
+      processed: number;
+      /** Total */
+      total: number;
+      /** Remaining Backlog */
+      remaining_backlog: number;
+      /** Started At */
+      started_at: string | null;
+      /** Finished At */
+      finished_at: string | null;
+      /** Last Scored */
+      last_scored: number;
+      /** Last Skipped */
+      last_skipped: number;
+      /** Last Failed */
+      last_failed: number;
     };
     /** Skill */
     Skill: {
@@ -919,6 +959,26 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['BatchScoringResponse'];
+        };
+      };
+    };
+  };
+  scoring_status_scoring_status_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScoringStatusResponse'];
         };
       };
     };

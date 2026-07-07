@@ -1335,24 +1335,42 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   — there's no per-connector routing to 404 on the way `POST /ingest/{source}` has, and
   `run_batch_scoring` never raises (mirrors `score_offers_with_langchain`'s own
   never-raise-out-of-a-batch convention).
-- **Automatic post-ingestion trigger** (`app/scheduler/service.py`): a new
-  `_trigger_batch_scoring_after_ingestion()` builds its own throwaway engine/sessionmaker
-  (matching `run_with_lifecycle`'s and `app.scheduler.service`'s existing "engine per
-  operation" convention) and is called unconditionally from the end of `_run_source_async` —
-  after `run_with_lifecycle` returns, regardless of whether the ingestion cycle itself
-  succeeded or errored, since `run_with_lifecycle` never raises out of `_run_source_async`
-  either way. `_run_source_async` is the one shared code path both automatic scheduled runs
-  and `POST /scheduler/run/{source}` funnel through (ADR 0005), so this one hook covers both;
-  it deliberately does **not** run after `POST /ingest/{source}` (US16/ADR 0006's separate,
-  scheduler-bookkeeping-bypassing on-demand trigger), since only US15 (the Scheduler) is named
-  in this story's acceptance criteria. The hook's own exceptions are caught and logged
-  (`logger.exception`), never propagated — a bug in batch scoring must never make an
-  already-completed ingestion run report failure for a connector that actually succeeded. The
-  module imports `app.scoring.batch` qualified (`from app.scoring import batch`, not `from
-  app.scoring.batch import run_batch_scoring`) specifically so tests can monkeypatch
-  `batch.run_batch_scoring` and have the scheduler pick up the patched version — a name-bound
-  `from x import y` import resolves once, at import time, and would not observe a later
-  `monkeypatch.setattr(x, "y", ...)`.
+- **Automatic post-ingestion trigger, moved to the shared lifecycle (BUG16)**: the trigger used
+  to live in `app/scheduler/service.py`, called only from `_run_source_async` — meaning
+  `POST /ingest/{source}` (the *only* fetch action `FetchNowButton.tsx` actually calls) never
+  scored anything, ever, since it goes through a sibling code path
+  (`app/ingestion/service.py`'s `_trigger_ingest_async`) that never called it. Offers fetched
+  through the UI's one fetch button stayed unscored indefinitely, unless an unrelated background
+  APScheduler interval happened to catch up on the backlog later. The fix moves
+  `_trigger_batch_scoring_after_ingestion()` into `app/ingestion/lifecycle.py`'s
+  `run_with_lifecycle` — the one call site genuinely shared by manual `/ingest`, manual
+  `/scheduler/run`, and automatic APScheduler jobs alike (all three funnel through it) — and
+  calls it unconditionally after `dispatch_ingestion` returns, on both the success and error
+  branches, since batch scoring sweeps all unscored offers regardless of whether this
+  particular run's connector succeeded. `app/scheduler/service.py` no longer has its own copy.
+  The hook's own exceptions are still caught and logged (`logger.exception`), never propagated —
+  a bug in batch scoring must never make an already-completed ingestion run report failure for a
+  connector that actually succeeded. `app/ingestion/lifecycle.py` imports `app.scoring.batch`
+  qualified (`from app.scoring import batch`, not `from app.scoring.batch import
+  run_batch_scoring`) specifically so tests can monkeypatch `batch.run_batch_scoring` and have
+  the trigger pick up the patched version — a name-bound `from x import y` import resolves once,
+  at import time, and would not observe a later `monkeypatch.setattr(x, "y", ...)`.
+- **Bounded batch size and live progress (BUG16)**: with the trigger now firing on every
+  ingestion door, a single manual `/ingest` call could otherwise try to score an unbounded
+  backlog synchronously (this repo's dev database had ~15k offers ingested-but-never-scored by
+  the time this bug was fixed, since nothing had ever scored them). `run_batch_scoring` now takes
+  a `limit` (default `Settings.batch_scoring_limit`, `BATCH_SCORING_LIMIT` env var, 20) applied
+  via `.limit()` on `_fetch_unscored_offers`'s query (now also `.order_by(OfferModel.id)` for
+  determinism), and `BatchScoringSummary` gains a `remaining` count (`_count_unscored_offers`
+  taken *before* the limited fetch, minus what was just scored) so callers know how much backlog
+  is left. A module-level `ScoringProgress` singleton in `app/scoring/batch.py`
+  (`get_scoring_progress()`) tracks `running`/`processed`/`total`/`remaining_backlog` for the
+  current or most recent run — a local single-user tool with one API process, so no DB-backed
+  job state is needed just to answer "is scoring running right now." `score_offers_with_langchain`
+  (`app/llm/matcher.py`) takes an optional `on_progress: Callable[[int], None]` invoked after each
+  offer (scored, failed, or skipped) so `processed` updates live during a run, not just at the
+  end. `GET /scoring/status` (`app/api/routes/scoring.py`, `ScoringStatusResponse`) exposes this
+  state read-only, no DB session needed.
 - **Test isolation from the dev database**: this repo's local Postgres is a long-lived,
   real recruFlow instance — the live scheduler has already ingested thousands of real offers
   under the real `justjoinit`/`nofluffjobs`/`solid_jobs` connectors by the time any test runs.
@@ -1394,14 +1412,30 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   `fetchOfferScore(offerId): Promise<MatchScoreResponse | null>` collapses `openapi-fetch`'s
   `{data, error}` into throw-on-error, but a `null` body (no active Profile, or no MatchScore yet)
   is returned as-is, not thrown, matching the endpoint's own "`null` is a normal state" contract.
-- **`frontend/src/hooks/useOfferScores.ts`**: `useOfferScores(offerIds): { scores, loading }`,
-  structured like `useOffers.ts`'s inline-effect convention (`react-hooks/set-state-in-effect`).
-  Keyed on `offerIds.join(',')` rather than the array reference itself, since a new `offerIds`
-  array is created on every parent re-render. Uses `Promise.allSettled`, not `Promise.all` —
-  mirrors `score_offers_with_langchain`'s own "one failure never aborts the batch" convention — so
-  one offer's rejected fetch degrades that offer to `null` (the same neutral "not yet scored"
-  state `GradeBadge` already renders for a missing score) without discarding any other offer's
-  already-resolved score.
+- **`frontend/src/hooks/useOfferScores.ts`**: `useOfferScores(offerIds): { scores, loading,
+  refetch }`, structured like `useOffers.ts`'s inline-effect convention
+  (`react-hooks/set-state-in-effect`). Keyed on `offerIds.join(',')` rather than the array
+  reference itself, since a new `offerIds` array is created on every parent re-render. Uses
+  `Promise.allSettled`, not `Promise.all` — mirrors `score_offers_with_langchain`'s own "one
+  failure never aborts the batch" convention — so one offer's rejected fetch degrades that offer
+  to `null` (the same neutral "not yet scored" state `GradeBadge` already renders for a missing
+  score) without discarding any other offer's already-resolved score. `refetch` (BUG16) exists
+  because the effect above only re-runs when the *offer-id list itself* changes, never just
+  because a score for one of those same offers arrived later — `OfferListPage` calls it whenever
+  `useScoringStatus`'s `finished_at` changes, so a grade badge can appear once background scoring
+  completes without the user reloading the page.
+- **`frontend/src/api/scoring.ts`, `frontend/src/hooks/useScoringStatus.ts`,
+  `frontend/src/components/ScoringStatusBanner.tsx` (BUG16)**: `useScoringStatus` self-paces its
+  own polling of `GET /scoring/status` via `setTimeout` (not `setInterval`, so a slow response
+  can't pile up overlapping requests) — 1.5s while a run is `running`, 5s otherwise. Failed polls
+  are swallowed silently (best-effort; the offer list and Fetch Now button already surface their
+  own errors) and keep the last-known status rather than clearing it. `ScoringStatusBanner`
+  renders nothing until a run has happened at least once this session (`status.running` or
+  `status.finished_at` set), then either a live `processed`/`total` progress bar or the last
+  run's summary (scored/failed count, remaining backlog) — this is what surfaces the
+  previously-silent "no active profile" / "LLM call failed" no-ops from
+  `run_batch_scoring`/`score_offers_with_langchain` as something a user can actually see, per
+  this bug's suggested fix.
 - **`frontend/src/components/GradeBadge.tsx`**: renders the neutral "Not yet scored" state for
   `null`/`undefined`/any string that fails `isGrade` (defensive against the widened `grade: str`),
   otherwise a coloured badge — a `<button>` when the caller passes `onClick` (a scored offer), a

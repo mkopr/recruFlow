@@ -8,12 +8,10 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import SchedulerRun, Source
-from app.db.session import get_engine, get_sessionmaker
 from app.ingestion.lifecycle import run_with_lifecycle
 from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
 from app.ingestion.types import IngestionResult
 from app.scheduler.runs import finish_run_error, finish_run_ok, start_run
-from app.scoring import batch
 
 logger = logging.getLogger(__name__)
 
@@ -49,27 +47,6 @@ class SchedulerRunRecord:
     finished_at: datetime | None
 
 
-async def _trigger_batch_scoring_after_ingestion() -> None:
-    engine = get_engine()
-    try:
-        sessionmaker = get_sessionmaker(engine)
-        async with sessionmaker() as session:
-            try:
-                summary = await batch.run_batch_scoring(session)
-                await session.commit()
-                logger.info(
-                    "post-ingestion batch scoring: scored=%d skipped=%d failed=%d",
-                    summary.scored,
-                    summary.skipped,
-                    summary.failed,
-                )
-            except Exception:
-                await session.rollback()
-                logger.exception("post-ingestion batch scoring failed")
-    finally:
-        await engine.dispose()
-
-
 async def _run_source_async(connector: str, *, trigger_type: str) -> SchedulerRunRecord:
     run: SchedulerRun | None = None
 
@@ -98,8 +75,6 @@ async def _run_source_async(connector: str, *, trigger_type: str) -> SchedulerRu
     await run_with_lifecycle(
         connector, before_dispatch=before_dispatch, on_success=on_success, on_error=on_error
     )
-
-    await _trigger_batch_scoring_after_ingestion()
 
     assert run is not None
     return SchedulerRunRecord(

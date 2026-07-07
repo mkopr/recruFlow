@@ -228,7 +228,7 @@ async def test_post_score_batch_scores_unscored_offers_via_http(
 
         assert response.status_code == 200
         body = response.json()
-        assert body == {"scored": 1, "skipped": 0, "failed": 0}
+        assert body == {"scored": 1, "skipped": 0, "failed": 0, "remaining": 0}
 
         rows = (
             (
@@ -254,7 +254,7 @@ async def test_post_score_batch_returns_zero_counts_when_no_active_profile(
     response = await client.post("/score/batch")
 
     assert response.status_code == 200
-    assert response.json() == {"scored": 0, "skipped": 0, "failed": 0}
+    assert response.json() == {"scored": 0, "skipped": 0, "failed": 0, "remaining": 0}
 
 
 @pytest.mark.integration
@@ -534,3 +534,70 @@ async def test_changing_scoring_config_does_not_rewrite_existing_match_score_gra
     finally:
         await _delete_sources_and_dependents(db_session, [source_id])
         await _reset_scoring_config(db_session)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_run_batch_scoring_caps_work_per_run_and_reports_remaining_backlog(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # BUG16: a single trigger (manual /ingest, manual /scheduler/run, or an automatic
+    # APScheduler job) must not block on an unbounded unscored-offer backlog, so
+    # run_batch_scoring caps how much it scores per call and reports how much is left.
+    connector = _fake_connector()
+    _isolate_langchain_sources(monkeypatch, connector)
+    monkeypatch.setattr(
+        "app.llm.matcher._build_chain",
+        lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
+    )
+
+    await _deactivate_all_profiles(db_session)
+    source_id = await _create_source(db_session, connector=connector)
+    try:
+        for _ in range(3):
+            await _create_offer(db_session, source_id)
+        await _create_profile(db_session)
+        await db_session.commit()
+
+        summary = await run_batch_scoring(db_session, limit=2)
+        await db_session.commit()
+
+        assert summary.scored == 2
+        assert summary.failed == 0
+        assert summary.remaining == 1
+    finally:
+        await _delete_sources_and_dependents(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_scoring_status_reflects_last_completed_run(
+    client: httpx.AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connector = _fake_connector()
+    _isolate_langchain_sources(monkeypatch, connector)
+    monkeypatch.setattr(
+        "app.llm.matcher._build_chain",
+        lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
+    )
+
+    await _deactivate_all_profiles(db_session)
+    source_id = await _create_source(db_session, connector=connector)
+    try:
+        await _create_offer(db_session, source_id)
+        await _create_profile(db_session)
+        await db_session.commit()
+
+        await run_batch_scoring(db_session)
+        await db_session.commit()
+
+        response = await client.get("/scoring/status")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["running"] is False
+        assert body["last_scored"] == 1
+        assert body["last_failed"] == 0
+        assert body["remaining_backlog"] == 0
+    finally:
+        await _delete_sources_and_dependents(db_session, [source_id])

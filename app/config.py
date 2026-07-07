@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from_email: str = ""
     solid_jobs_campaign: str = "recruflow"
+    batch_scoring_limit: int = 20
     app_env: str = "development"
     log_level: str = "INFO"
     api_host: str = "0.0.0.0"

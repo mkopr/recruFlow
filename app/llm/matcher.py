@@ -1,5 +1,6 @@
 import logging
 import re
+from collections.abc import Callable
 
 import httpx
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -260,12 +261,15 @@ async def score_offers_with_langchain(
     offers: list[tuple[OfferModel, str]],
     *,
     grade_scale: GradeScale = _DEFAULT_GRADE_SCALE,
+    on_progress: Callable[[int], None] | None = None,
 ) -> list[MatchScoreModel]:
     profile = Profile(**profile_row.data)
     results: list[MatchScoreModel] = []
 
-    for offer_row, connector in offers:
+    for processed, (offer_row, connector) in enumerate(offers, start=1):
         if not is_langchain_source(connector):
+            if on_progress is not None:
+                on_progress(processed)
             continue
 
         offer = Offer.model_validate(offer_row, from_attributes=True)
@@ -279,6 +283,8 @@ async def score_offers_with_langchain(
             )
         except MatcherError as exc:
             logger.warning("LangChain matcher failed for offer_id=%s: %s", offer_row.id, exc)
+            if on_progress is not None:
+                on_progress(processed)
             continue
 
         row = MatchScoreModel(
@@ -291,5 +297,7 @@ async def score_offers_with_langchain(
         )
         session.add(row)
         results.append(row)
+        if on_progress is not None:
+            on_progress(processed)
 
     return results

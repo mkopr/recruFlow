@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { fetchOfferScore, type MatchScoreResponse } from '../api/offerScore';
 
 export interface UseOfferScoresResult {
   scores: Record<number, MatchScoreResponse | null>;
   loading: boolean;
+  refetch: () => void;
 }
 
 export function useOfferScores(offerIds: number[]): UseOfferScoresResult {
@@ -48,5 +49,28 @@ export function useOfferScores(offerIds: number[]): UseOfferScoresResult {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
-  return { scores, loading };
+  // Lets a caller re-pull scores for the *same* offer-id list once background
+  // scoring completes (BUG16) — the effect above only re-fetches when that
+  // list itself changes, which never happens just because a score arrived.
+  const refetch = useCallback(() => {
+    if (offerIds.length === 0) {
+      setScores({});
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    Promise.allSettled(offerIds.map((id) => fetchOfferScore(id))).then((results) => {
+      const next: Record<number, MatchScoreResponse | null> = {};
+      offerIds.forEach((id, index) => {
+        const result = results[index];
+        next[id] = result.status === 'fulfilled' ? result.value : null;
+      });
+      setScores(next);
+      setLoading(false);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+
+  return { scores, loading, refetch };
 }
