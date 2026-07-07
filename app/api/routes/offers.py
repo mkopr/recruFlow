@@ -1,18 +1,26 @@
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 
 from app.api.deps import SessionDep
 from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
 from app.db.models import Source
 from app.db.profile_repo import get_active_profile
-from app.schemas.match_score import MatchScoreResponse
-from app.schemas.offer import OfferDetail, OfferSummary
+from app.schemas.match_score import GRADE_ORDER, MatchScoreResponse
+from app.schemas.offer import OfferDetail, OfferListResponse, OfferSummary
 
 router = APIRouter()
 
+DEFAULT_PAGE_SIZE = 50
+MAX_PAGE_SIZE = 200
 
-def _offer_summary(offer: OfferModel, source: str) -> OfferSummary:
+# Sentinel profile id: no offer can have a MatchScore against it, so scoping the
+# "latest score per offer" subquery to this id when there's no active profile
+# yields an always-empty join without branching the query shape.
+_NO_ACTIVE_PROFILE_ID = -1
+
+
+def _offer_summary(offer: OfferModel, source: str, grade: str | None = None) -> OfferSummary:
     return OfferSummary(
         id=offer.id,
         source=source,
@@ -30,12 +38,13 @@ def _offer_summary(offer: OfferModel, source: str) -> OfferSummary:
         posted_at=offer.posted_at,
         industry_tags=offer.industry_tags or [],
         created_at=offer.created_at,
+        grade=grade,
     )
 
 
-def _offer_detail(offer: OfferModel, source: str) -> OfferDetail:
+def _offer_detail(offer: OfferModel, source: str, grade: str | None = None) -> OfferDetail:
     return OfferDetail(
-        **_offer_summary(offer, source).model_dump(),
+        **_offer_summary(offer, source, grade).model_dump(),
         description=offer.description,
         raw_payload=offer.raw_payload,
         updated_at=offer.updated_at,
@@ -84,9 +93,44 @@ async def list_offers(
             "matches against any recorded MatchScore for the offer"
         ),
     ),
-) -> list[OfferSummary]:
-    stmt = select(OfferModel, Source.connector, Source.name).join(
-        Source, OfferModel.source_id == Source.id
+    min_grade: str | None = Query(
+        default=None,
+        pattern="^[ABCDF]$",
+        description=(
+            "Minimum acceptable match grade (A-F) for the active profile; keeps offers "
+            "graded at least this well (e.g. min_grade=B keeps A and B, drops C/D/F/unscored)"
+        ),
+    ),
+    limit: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(default=0, ge=0),
+) -> OfferListResponse:
+    active_profile = await get_active_profile(session)
+    active_profile_id = active_profile.id if active_profile is not None else _NO_ACTIVE_PROFILE_ID
+
+    ranked_scores = (
+        select(
+            MatchScoreModel.offer_id,
+            MatchScoreModel.grade,
+            func.row_number()
+            .over(
+                partition_by=MatchScoreModel.offer_id,
+                order_by=MatchScoreModel.created_at.desc(),
+            )
+            .label("rn"),
+        )
+        .where(MatchScoreModel.profile_id == active_profile_id)
+        .subquery()
+    )
+    latest_score = (
+        select(ranked_scores.c.offer_id, ranked_scores.c.grade)
+        .where(ranked_scores.c.rn == 1)
+        .subquery()
+    )
+
+    stmt = (
+        select(OfferModel, Source.connector, Source.name, latest_score.c.grade)
+        .join(Source, OfferModel.source_id == Source.id)
+        .outerjoin(latest_score, latest_score.c.offer_id == OfferModel.id)
     )
 
     if source is not None:
@@ -108,9 +152,28 @@ async def list_offers(
                 select(MatchScoreModel.offer_id).where(MatchScoreModel.grade == grade)
             )
         )
+    if min_grade is not None:
+        allowed_grades = GRADE_ORDER[: GRADE_ORDER.index(min_grade) + 1]
+        stmt = stmt.where(latest_score.c.grade.in_(allowed_grades))
 
-    rows = (await session.execute(stmt)).all()
-    return [_offer_summary(offer, connector or name) for offer, connector, name in rows]
+    total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
+
+    page_stmt = (
+        stmt.order_by(
+            OfferModel.posted_at.desc().nulls_last(),
+            OfferModel.created_at.desc(),
+            OfferModel.id.desc(),
+        )
+        .limit(limit)
+        .offset(offset)
+    )
+
+    rows = (await session.execute(page_stmt)).all()
+    items = [
+        _offer_summary(offer, connector or name, offer_grade)
+        for offer, connector, name, offer_grade in rows
+    ]
+    return OfferListResponse(items=items, total=total)
 
 
 @router.get("/offers/{offer_id}")

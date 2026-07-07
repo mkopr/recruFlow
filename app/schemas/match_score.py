@@ -6,6 +6,10 @@ from pydantic import BaseModel, ConfigDict, Field
 MatchEngine = Literal["langchain", "sjctl"]
 MatchGrade = Literal["A", "B", "C", "D", "F"]
 
+# Best-to-worst grade ordering; a "minimum grade" filter keeps grades at or
+# before its index here (e.g. min_grade="B" keeps A and B).
+GRADE_ORDER: tuple[MatchGrade, ...] = ("A", "B", "C", "D", "F")
+
 
 class MatchScore(BaseModel):
     model_config = ConfigDict(from_attributes=True)

@@ -36,6 +36,9 @@ async def _delete_sources_with_offers(session: AsyncSession, source_ids: list[in
     # Sources carrying a non-null connector are picked up by connector.is_not(None)
     # assertions elsewhere (e.g. test_scheduler_ensure_sources.py's exact-set check),
     # so any test that gives a Source a real-looking connector must clean up after itself.
+    # MatchScore rows referencing these offers must go first (FK on offer_id).
+    offer_ids = select(OfferModel.id).where(OfferModel.source_id.in_(source_ids))
+    await session.execute(delete(MatchScore).where(MatchScore.offer_id.in_(offer_ids)))
     await session.execute(delete(OfferModel).where(OfferModel.source_id.in_(source_ids)))
     await session.execute(delete(Source).where(Source.id.in_(source_ids)))
     await session.commit()
@@ -56,21 +59,30 @@ async def _create_offer(session: AsyncSession, source_id: int, **overrides: obje
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_list_offers_returns_all_when_no_filters_given(
+async def test_list_offers_returns_offers_from_multiple_sources_within_requested_scope(
     client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
-    source_a = await _create_source(db_session)
-    source_b = await _create_source(db_session)
+    # A request with no filters only returns page one (BUG26 pagination) against a dev
+    # DB that carries a large, ever-growing real backlog, so two bare test offers would
+    # be buried past page one and never come back — scope both sources to one shared
+    # connector instead so a single `source` filter still exercises "multiple sources,
+    # one query" without competing against the rest of the table.
+    connector = f"multi-src-{uuid4()}"
+    source_a = await _create_source(db_session, connector=connector)
+    source_b = await _create_source(db_session, connector=connector)
     offer_a = await _create_offer(db_session, source_a)
     offer_b = await _create_offer(db_session, source_b)
     await db_session.commit()
 
-    response = await client.get("/offers")
+    try:
+        response = await client.get("/offers", params={"source": connector})
 
-    assert response.status_code == 200
-    ids = {entry["id"] for entry in response.json()}
-    assert offer_a in ids
-    assert offer_b in ids
+        assert response.status_code == 200
+        ids = {entry["id"] for entry in response.json()["items"]}
+        assert offer_a in ids
+        assert offer_b in ids
+    finally:
+        await _delete_sources_with_offers(db_session, [source_a, source_b])
 
 
 @pytest.mark.integration
@@ -90,7 +102,7 @@ async def test_list_offers_filters_by_source(
         response = await client.get("/offers", params={"source": connector_a})
 
         assert response.status_code == 200
-        ids = {entry["id"] for entry in response.json()}
+        ids = {entry["id"] for entry in response.json()["items"]}
         assert offer_a in ids
         assert offer_b not in ids
     finally:
@@ -102,20 +114,30 @@ async def test_list_offers_filters_by_source(
 async def test_list_offers_filters_by_remote(
     client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
-    source_id = await _create_source(db_session)
+    # Scoped to a dedicated connector (BUG26 pagination): otherwise these two bare
+    # test offers compete for page one against the dev DB's real backlog.
+    connector = f"remote-filter-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
     remote_offer = await _create_offer(db_session, source_id, remote=True)
     onsite_offer = await _create_offer(db_session, source_id, remote=False)
     await db_session.commit()
 
-    remote_response = await client.get("/offers", params={"remote": "true"})
-    onsite_response = await client.get("/offers", params={"remote": "false"})
+    try:
+        remote_response = await client.get(
+            "/offers", params={"source": connector, "remote": "true"}
+        )
+        onsite_response = await client.get(
+            "/offers", params={"source": connector, "remote": "false"}
+        )
 
-    remote_ids = {entry["id"] for entry in remote_response.json()}
-    onsite_ids = {entry["id"] for entry in onsite_response.json()}
-    assert remote_offer in remote_ids
-    assert onsite_offer not in remote_ids
-    assert onsite_offer in onsite_ids
-    assert remote_offer not in onsite_ids
+        remote_ids = {entry["id"] for entry in remote_response.json()["items"]}
+        onsite_ids = {entry["id"] for entry in onsite_response.json()["items"]}
+        assert remote_offer in remote_ids
+        assert onsite_offer not in remote_ids
+        assert onsite_offer in onsite_ids
+        assert remote_offer not in onsite_ids
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
 
 
 @pytest.mark.integration
@@ -123,16 +145,22 @@ async def test_list_offers_filters_by_remote(
 async def test_list_offers_filters_by_seniority_substring_match(
     client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
-    source_id = await _create_source(db_session)
+    # Scoped to a dedicated connector (BUG26 pagination): otherwise these two bare
+    # test offers compete for page one against the dev DB's real backlog.
+    connector = f"senior-filt-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
     senior_offer = await _create_offer(db_session, source_id, seniority="senior, lead")
     junior_offer = await _create_offer(db_session, source_id, seniority="junior")
     await db_session.commit()
 
-    response = await client.get("/offers", params={"seniority": "senior"})
+    try:
+        response = await client.get("/offers", params={"source": connector, "seniority": "senior"})
 
-    ids = {entry["id"] for entry in response.json()}
-    assert senior_offer in ids
-    assert junior_offer not in ids
+        ids = {entry["id"] for entry in response.json()["items"]}
+        assert senior_offer in ids
+        assert junior_offer not in ids
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
 
 
 @pytest.mark.integration
@@ -140,18 +168,24 @@ async def test_list_offers_filters_by_seniority_substring_match(
 async def test_list_offers_filters_by_min_salary_meets_or_exceeds(
     client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
-    source_id = await _create_source(db_session)
+    # Scoped to a dedicated connector (BUG26 pagination): otherwise these bare
+    # test offers compete for page one against the dev DB's real backlog.
+    connector = f"min-sal-filt-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
     above_max = await _create_offer(db_session, source_id, salary_max=20000)
     below_max = await _create_offer(db_session, source_id, salary_max=10000)
     fallback_min = await _create_offer(db_session, source_id, salary_min=18000, salary_max=None)
     await db_session.commit()
 
-    response = await client.get("/offers", params={"min_salary": 15000})
+    try:
+        response = await client.get("/offers", params={"source": connector, "min_salary": 15000})
 
-    ids = {entry["id"] for entry in response.json()}
-    assert above_max in ids
-    assert fallback_min in ids
-    assert below_max not in ids
+        ids = {entry["id"] for entry in response.json()["items"]}
+        assert above_max in ids
+        assert fallback_min in ids
+        assert below_max not in ids
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
 
 
 @pytest.mark.integration
@@ -178,7 +212,7 @@ async def test_list_offers_filters_by_grade(
 
     response = await client.get("/offers", params={"grade": "A"})
 
-    ids = {entry["id"] for entry in response.json()}
+    ids = {entry["id"] for entry in response.json()["items"]}
     assert scored_offer in ids
     assert unscored_offer not in ids
 
@@ -191,7 +225,7 @@ async def test_list_offers_unknown_source_filter_returns_empty_list_not_error(
     response = await client.get("/offers", params={"source": "totally-unknown-connector"})
 
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json() == {"items": [], "total": 0}
 
 
 @pytest.mark.integration
@@ -211,12 +245,232 @@ async def test_list_offers_combines_source_and_remote_filters(
     try:
         response = await client.get("/offers", params={"source": connector_a, "remote": "true"})
 
-        ids = {entry["id"] for entry in response.json()}
+        ids = {entry["id"] for entry in response.json()["items"]}
         assert ids == {a_remote}
         assert a_onsite not in ids
         assert b_remote not in ids
     finally:
         await _delete_sources_with_offers(db_session, [source_a, source_b])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_list_offers_orders_newest_first_by_default(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    connector = f"order-test-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    older = await _create_offer(db_session, source_id, posted_at=datetime(2026, 1, 1, tzinfo=UTC))
+    newer = await _create_offer(db_session, source_id, posted_at=datetime(2026, 6, 1, tzinfo=UTC))
+    no_posted_date = await _create_offer(db_session, source_id, posted_at=None)
+    await db_session.commit()
+
+    try:
+        response = await client.get("/offers", params={"source": connector})
+
+        ids = [entry["id"] for entry in response.json()["items"]]
+        assert ids == [newer, older, no_posted_date]
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_list_offers_paginates_with_limit_and_offset(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    connector = f"page-test-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    third = await _create_offer(db_session, source_id, posted_at=datetime(2026, 1, 1, tzinfo=UTC))
+    second = await _create_offer(db_session, source_id, posted_at=datetime(2026, 2, 1, tzinfo=UTC))
+    first = await _create_offer(db_session, source_id, posted_at=datetime(2026, 3, 1, tzinfo=UTC))
+    await db_session.commit()
+
+    try:
+        page_one = await client.get(
+            "/offers", params={"source": connector, "limit": 2, "offset": 0}
+        )
+        page_two = await client.get(
+            "/offers", params={"source": connector, "limit": 2, "offset": 2}
+        )
+
+        assert [entry["id"] for entry in page_one.json()["items"]] == [first, second]
+        assert page_one.json()["total"] == 3
+        assert [entry["id"] for entry in page_two.json()["items"]] == [third]
+        assert page_two.json()["total"] == 3
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_list_offers_rejects_page_size_above_max(client: httpx.AsyncClient) -> None:
+    response = await client.get("/offers", params={"limit": 10000})
+
+    assert response.status_code == 422
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_list_offers_includes_active_profile_grade_inline(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await _deactivate_all_profiles(db_session)
+    connector = f"grade-inline-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    scored_offer = await _create_offer(db_session, source_id)
+    unscored_offer = await _create_offer(db_session, source_id)
+    profile = Profile(name=f"profile-{uuid4()}", is_active=True, data={})
+    db_session.add(profile)
+    await db_session.flush()
+    db_session.add(
+        MatchScore(
+            offer_id=scored_offer,
+            profile_id=profile.id,
+            engine="langchain",
+            grade="B",
+            dimensions={},
+        )
+    )
+    await db_session.commit()
+
+    try:
+        response = await client.get("/offers", params={"source": connector})
+
+        by_id = {entry["id"]: entry["grade"] for entry in response.json()["items"]}
+        assert by_id[scored_offer] == "B"
+        assert by_id[unscored_offer] is None
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_list_offers_inline_grade_uses_most_recent_score_for_active_profile(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await _deactivate_all_profiles(db_session)
+    connector = f"grade-latest-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    offer_id = await _create_offer(db_session, source_id)
+    profile = Profile(name=f"profile-{uuid4()}", is_active=True, data={})
+    db_session.add(profile)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            MatchScore(
+                offer_id=offer_id,
+                profile_id=profile.id,
+                engine="langchain",
+                grade="C",
+                dimensions={},
+                created_at=datetime(2026, 6, 1, tzinfo=UTC),
+            ),
+            MatchScore(
+                offer_id=offer_id,
+                profile_id=profile.id,
+                engine="langchain",
+                grade="A",
+                dimensions={},
+                created_at=datetime(2026, 6, 2, tzinfo=UTC),
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    try:
+        response = await client.get("/offers", params={"source": connector})
+
+        by_id = {entry["id"]: entry["grade"] for entry in response.json()["items"]}
+        assert by_id[offer_id] == "A"
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_list_offers_min_grade_keeps_offers_at_or_better(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await _deactivate_all_profiles(db_session)
+    connector = f"min-grade-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    grade_a = await _create_offer(db_session, source_id)
+    grade_b = await _create_offer(db_session, source_id)
+    grade_d = await _create_offer(db_session, source_id)
+    unscored = await _create_offer(db_session, source_id)
+    profile = Profile(name=f"profile-{uuid4()}", is_active=True, data={})
+    db_session.add(profile)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            MatchScore(
+                offer_id=grade_a,
+                profile_id=profile.id,
+                engine="langchain",
+                grade="A",
+                dimensions={},
+            ),
+            MatchScore(
+                offer_id=grade_b,
+                profile_id=profile.id,
+                engine="langchain",
+                grade="B",
+                dimensions={},
+            ),
+            MatchScore(
+                offer_id=grade_d,
+                profile_id=profile.id,
+                engine="langchain",
+                grade="D",
+                dimensions={},
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    try:
+        response = await client.get("/offers", params={"source": connector, "min_grade": "B"})
+
+        ids = {entry["id"] for entry in response.json()["items"]}
+        assert ids == {grade_a, grade_b}
+        assert grade_d not in ids
+        assert unscored not in ids
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_list_offers_min_grade_scopes_to_active_profile_only(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await _deactivate_all_profiles(db_session)
+    connector = f"min-scope-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    offer_id = await _create_offer(db_session, source_id)
+    active_profile = Profile(name=f"active-{uuid4()}", is_active=True, data={})
+    other_profile = Profile(name=f"other-{uuid4()}", is_active=False, data={})
+    db_session.add_all([active_profile, other_profile])
+    await db_session.flush()
+    db_session.add(
+        MatchScore(
+            offer_id=offer_id,
+            profile_id=other_profile.id,
+            engine="langchain",
+            grade="A",
+            dimensions={},
+        )
+    )
+    await db_session.commit()
+
+    try:
+        response = await client.get("/offers", params={"source": connector, "min_grade": "A"})
+
+        ids = {entry["id"] for entry in response.json()["items"]}
+        assert offer_id not in ids
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
 
 
 @pytest.mark.integration

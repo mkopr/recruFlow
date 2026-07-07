@@ -1,7 +1,9 @@
 import { apiClient } from './client';
+import type { Grade } from '../lib/grade';
 import type { components } from './schema';
 
 export type OfferSummary = components['schemas']['OfferSummary'];
+export type OfferListResponse = components['schemas']['OfferListResponse'];
 export type IngestResponse = components['schemas']['IngestResponse'];
 
 export interface OfferListFilters {
@@ -9,9 +11,18 @@ export interface OfferListFilters {
   remote?: boolean;
   seniority?: string;
   minSalary?: number;
+  minGrade?: Grade;
 }
 
-export async function fetchOffers(filters: OfferListFilters): Promise<OfferSummary[]> {
+export interface OfferListPage {
+  limit: number;
+  offset: number;
+}
+
+export async function fetchOffers(
+  filters: OfferListFilters,
+  page: OfferListPage,
+): Promise<OfferListResponse> {
   const { data, error } = await apiClient.GET('/offers', {
     params: {
       query: {
@@ -19,6 +30,9 @@ export async function fetchOffers(filters: OfferListFilters): Promise<OfferSumma
         remote: filters.remote,
         seniority: filters.seniority,
         min_salary: filters.minSalary,
+        min_grade: filters.minGrade,
+        limit: page.limit,
+        offset: page.offset,
       },
     },
   });

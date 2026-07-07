@@ -30,9 +30,10 @@ def test_offer_summary_maps_all_scalar_fields() -> None:
         created_at=created_at,
     )
 
-    result = _offer_summary(offer, "justjoinit")
+    result = _offer_summary(offer, "justjoinit", "B")
 
     assert result.id == 1
+    assert result.grade == "B"
     assert result.source == "justjoinit"
     assert result.external_id == "ext-1"
     assert result.canonical_url == "https://example.com/jobs/1"
@@ -71,6 +72,7 @@ def test_offer_summary_uses_given_source_label_verbatim() -> None:
     assert result.contract_type is None
     assert result.posted_at is None
     assert result.industry_tags == []
+    assert result.grade is None
 
 
 def test_offer_detail_includes_description_and_raw_payload() -> None:

@@ -58,9 +58,20 @@ class OfferSummary(BaseModel):
     posted_at: datetime | None
     industry_tags: list[str]
     created_at: datetime
+    grade: str | None = Field(
+        default=None,
+        description="Active profile's most recent match grade for this offer, if scored",
+    )
 
 
 class OfferDetail(OfferSummary):
     description: str | None
     raw_payload: dict[str, Any]
     updated_at: datetime
+
+
+class OfferListResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    items: list[OfferSummary]
+    total: int = Field(description="Total offers matching the filters, ignoring limit/offset")

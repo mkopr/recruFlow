@@ -381,6 +381,11 @@ export interface components {
        * Format: date-time
        */
       created_at: string;
+      /**
+       * Grade
+       * @description Active profile's most recent match grade for this offer, if scored
+       */
+      grade?: string | null;
       /** Description */
       description: string | null;
       /** Raw Payload */
@@ -392,6 +397,16 @@ export interface components {
        * Format: date-time
        */
       updated_at: string;
+    };
+    /** OfferListResponse */
+    OfferListResponse: {
+      /** Items */
+      items: components['schemas']['OfferSummary'][];
+      /**
+       * Total
+       * @description Total offers matching the filters, ignoring limit/offset
+       */
+      total: number;
     };
     /** OfferSummary */
     OfferSummary: {
@@ -430,6 +445,11 @@ export interface components {
        * Format: date-time
        */
       created_at: string;
+      /**
+       * Grade
+       * @description Active profile's most recent match grade for this offer, if scored
+       */
+      grade?: string | null;
     };
     /** PastRole */
     PastRole: {
@@ -761,6 +781,10 @@ export interface operations {
         min_salary?: number | null;
         /** @description Single-letter match grade (A-F) to filter by; matches against any recorded MatchScore for the offer */
         grade?: string | null;
+        /** @description Minimum acceptable match grade (A-F) for the active profile; keeps offers graded at least this well (e.g. min_grade=B keeps A and B, drops C/D/F/unscored) */
+        min_grade?: string | null;
+        limit?: number;
+        offset?: number;
       };
       header?: never;
       path?: never;
@@ -774,7 +798,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['OfferSummary'][];
+          'application/json': components['schemas']['OfferListResponse'];
         };
       };
       /** @description Validation Error */

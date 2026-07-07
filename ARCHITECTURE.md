@@ -814,8 +814,21 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   anywhere in `app/db/models.py`, matching the codebase-wide convention. Two private, pure mapping
   helpers, `_offer_summary`/`_offer_detail`, are unit-tested without a database
   (`tests/test_offers_mapping.py`) since `OfferModel` instances can be constructed in memory.
-  `GET /offers` has no pagination in this story — acceptable at current single-machine data volumes;
-  add `limit`/`offset` if/when P1US8's table needs it, which is a backwards-compatible addition.
+  **Paginated, ordered, and scored inline (BUG26)**: `GET /offers` originally had no pagination
+  ("acceptable at current single-machine data volumes") and no `ORDER BY` at all — fine until the
+  backlog crossed ~18k rows, at which point an unfiltered request returned every row in one
+  response and Postgres's scan order had no relationship to recency or scoring progress. It now
+  takes `limit` (default 50, max 200) and `offset` (default 0) and always applies
+  `ORDER BY posted_at DESC NULLS LAST, created_at DESC, id DESC` — the same ordering BUG24 already
+  applied to `_fetch_unscored_offers` (`app/scoring/batch.py`), so "top of the table" and "scored
+  first" are finally the same offers. The response is now an envelope,
+  `{"items": [...], "total": <count ignoring limit/offset>}`, so a client can page without a
+  second request. Each item also now carries `grade: str | null` — the active profile's most
+  recent `MatchScore.grade` for that offer, joined in via a `ROW_NUMBER() OVER (PARTITION BY
+  offer_id ORDER BY created_at DESC)` subquery scoped to the active profile (or to a sentinel `-1`
+  profile id when there's no active profile, so the query shape never branches) — eliminating the
+  one-`GET /offers/{id}/score`-request-per-offer fan-out the frontend previously did to render
+  grade badges for a loaded page.
 
   **`source`**: the response's `source` field is the connector identity string
   (`Source.connector`), falling back to `Source.name` when `connector` is `NULL` (covers
@@ -841,31 +854,44 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   `MatchScore` row for the offer has the given grade, regardless of which profile or engine produced
   it. Revisit this scoping once Phase 3 defines how `MatchScore` rows actually relate to
   profiles/engines over time (e.g. whether a profile edit re-scores or leaves stale grades behind).
+  Left as-is by BUG26, which added a separate `min_grade` param instead of changing `grade`'s
+  existing (tested) semantics.
+
+  **`min_grade`** (BUG26): a "minimum acceptable grade" filter — `min_grade=B` keeps offers graded
+  A or B, dropping C/D/F and not-yet-scored offers. Unlike `grade`, this **is** scoped to the
+  active profile only (it reuses the same inline-grade join described above), matching what the
+  frontend's "Minimum grade" selector conceptually means: the active profile's own bar, not any
+  profile's. `GRADE_ORDER = ("A", "B", "C", "D", "F")` (`app/schemas/match_score.py`) is the
+  best-to-worst ordering both this filter and the frontend's `lib/grade.ts` agree on.
 
   ```bash
-  curl "http://localhost:8000/offers?source=justjoinit&remote=true&seniority=senior&min_salary=15000"
+  curl "http://localhost:8000/offers?source=justjoinit&remote=true&seniority=senior&min_salary=15000&min_grade=B&limit=50&offset=0"
   ```
 
   ```json
-  [
-    {
-      "id": 42,
-      "source": "justjoinit",
-      "external_id": "abc123",
-      "canonical_url": "https://justjoin.it/offers/abc123",
-      "title": "Senior Backend Engineer",
-      "company": "Acme",
-      "location": "Warsaw",
-      "remote": true,
-      "seniority": "senior, lead",
-      "salary_min": 18000,
-      "salary_max": 25000,
-      "salary_currency": "PLN",
-      "contract_type": "B2B",
-      "posted_at": "2026-06-20T09:00:00Z",
-      "created_at": "2026-06-21T08:00:00Z"
-    }
-  ]
+  {
+    "items": [
+      {
+        "id": 42,
+        "source": "justjoinit",
+        "external_id": "abc123",
+        "canonical_url": "https://justjoin.it/offers/abc123",
+        "title": "Senior Backend Engineer",
+        "company": "Acme",
+        "location": "Warsaw",
+        "remote": true,
+        "seniority": "senior, lead",
+        "salary_min": 18000,
+        "salary_max": 25000,
+        "salary_currency": "PLN",
+        "contract_type": "B2B",
+        "posted_at": "2026-06-20T09:00:00Z",
+        "created_at": "2026-06-21T08:00:00Z",
+        "grade": "A"
+      }
+    ],
+    "total": 1
+  }
   ```
 
   `GET /offers/{offer_id}` returns the same fields plus `description`, `raw_payload` (the ELT raw
@@ -900,15 +926,31 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   `fetchOffers`/`triggerIngest` both collapse `openapi-fetch`'s `{data, error}` result into a
   throw-on-error `Promise<T>`, so every caller uses one `try`/`catch` rather than checking `error`
   at each call site.
-- **`frontend/src/hooks/useOffers.ts`**: owns `offers`/`loading`/`error` state and re-fetches when
-  `source`/`remote`/`seniority`/`minSalary` change. Structured around
-  `react-hooks/set-state-in-effect` (part of `eslint-plugin-react-hooks`'s `recommended` config,
-  already wired up since P0US7) — this rule statically rejects an effect calling any hoisted (e.g.
-  `useCallback`) function that eventually calls a state setter, even past an `await`, so the
-  automatic fetch-on-filter-change effect defines and invokes its own async function *inline*,
-  duplicating (rather than delegating to) `refetch`'s fetch-and-setState logic. `refetch` itself
-  is safe as a `useCallback` because it's only ever invoked from an event handler
-  (`FetchNowButton`'s click), never from within an effect.
+- **`frontend/src/hooks/useOffers.ts`**: owns `offers`/`total`/`loading`/`error` state and
+  re-fetches when `source`/`remote`/`seniority`/`minSalary`/`minGrade` **or** the page
+  (`{limit, offset}`, BUG26) change. Structured around `react-hooks/set-state-in-effect` (part of
+  `eslint-plugin-react-hooks`'s `recommended` config, already wired up since P0US7) — this rule
+  statically rejects an effect calling any hoisted (e.g. `useCallback`) function that eventually
+  calls a state setter, even past an `await`, so the automatic fetch-on-filter-change effect
+  defines and invokes its own async function *inline*, duplicating (rather than delegating to)
+  `refetch`'s fetch-and-setState logic. `refetch` itself is safe as a `useCallback` because it's
+  only ever invoked from an event handler (`FetchNowButton`'s click) or `OfferListPage`'s
+  scoring-finished effect, never from within an effect. **BUG26**: page changes share the same
+  300ms debounce as filter changes (`OfferListPage` owns `page` state, resets it to `0` on any
+  filter/minGrade change, and passes `{limit: PAGE_SIZE, offset: page * PAGE_SIZE}` down) —
+  deliberately not special-cased to skip the debounce, since a Prev/Next click is a single
+  low-frequency event where a 300ms delay is imperceptible, and one code path is simpler than two.
+- **`frontend/src/hooks/useOfferScoreDetail.ts`** (BUG26, replaces `useOfferScores.ts`): fetches
+  one offer's full score breakdown (rationale, dimensions) on demand — only when the score drawer
+  opens for that specific offer id — rather than the old `useOfferScores`, which fired
+  `GET /offers/{id}/score` once per *currently loaded* offer via `Promise.allSettled`. At the
+  reported backlog size (18k+ offers, unpaginated) that fan-out became ~18,000 concurrent requests
+  on a single page load; browsers cap concurrent connections per origin (~6), so only an arbitrary
+  handful of scores ever resolved before the user gave up looking, and the visible "scored" count
+  bore no relationship to real scoring progress. `GET /offers` now returns each offer's `grade`
+  inline (see the backend section above), so the list/table render entirely off data from one
+  request; this hook exists solely to fetch the *rest* of a score (rationale, per-dimension
+  breakdown) for `ScoreDrawer`, which only ever needs one offer's detail at a time.
 - **`frontend/src/components/OfferFilters.tsx`**: controlled filter bar
   (source/remote/seniority/min-salary), no local state duplication — every control's `onChange`
   produces a new `OfferListFilters` object from the parent-owned value. `remote` is modelled as a
@@ -921,19 +963,34 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   counts inline (`"Fetched 12, 4 new"`) rather than silently refreshing the table — `fetched`/
   `created` were already computed by the API and otherwise discarded, and a `0`-new-offers outcome
   is otherwise invisible in the table.
-- **`frontend/src/components/OfferTable.tsx`**: `GET /offers` (P1US7) has no `ORDER BY` — this
-  component sorts client-side by `posted_at` descending (nulls last) before rendering, rather than
-  the backend gaining an `ORDER BY` (kept as "reuse without modification" per this story's scope).
-  Salary formatting distinguishes a floor from a ceiling rather than collapsing both to the same
-  string: `"20,000+ PLN"` (min only), `"up to 25,000 PLN"` (max only), `"15,000-25,000 PLN"`
-  (both), `"-"` (neither); a `null` `salary_currency` on an offer with a known salary defaults to
-  display `"PLN"` (matching the DB column's own `server_default`, see "Database schema" above),
-  never left blank. Empty state (`offers.length === 0 && !loading`) renders a message instead of
-  an empty `<table>`; a bounded-height (`max-h-[70vh]`), `overflow-y-auto` wrapper keeps a large
-  result set scrollable rather than requiring pagination, since `GET /offers` has none.
-- **`frontend/src/pages/OfferListPage.tsx`**: the page shell — holds `filters` state, renders the
-  three `FetchNowButton`s, `OfferFilters`, an inline error banner when `useOffers().error` is set,
-  and `OfferTable`.
+- **`frontend/src/components/OfferTable.tsx`**: originally sorted client-side by `posted_at`
+  descending (nulls last) because `GET /offers` (P1US7) had no `ORDER BY` at all; the backend now
+  always applies that exact ordering server-side (BUG26), but the client-side
+  `sortByPostedDateDesc` default stayed — it's now a no-op re-sort of an already-ordered page
+  rather than the sole source of order, kept because the "click Grade header to sort" behavior
+  (`sortByGrade`) already needed client-side re-sorting infrastructure regardless. Both sort
+  helpers now read `offer.grade` directly (inline field, BUG26) instead of a separate `scores`
+  lookup map. Salary formatting distinguishes a floor from a ceiling rather than collapsing both
+  to the same string: `"20,000+ PLN"` (min only), `"up to 25,000 PLN"` (max only),
+  `"15,000-25,000 PLN"` (both), `"-"` (neither); a `null` `salary_currency` on an offer with a
+  known salary defaults to display `"PLN"` (matching the DB column's own `server_default`, see
+  "Database schema" above), never left blank. Empty state (`offers.length === 0 && !loading`)
+  renders a message instead of an empty `<table>` — a minimum-grade-filtered empty result gets its
+  own message (`FilteredEmptyState`) naming the active `minGrade`, simplified by BUG26 to drop the
+  old "N of M loaded offers haven't been scored yet" wording: that messaging existed only because
+  minGrade filtering used to run against a partially-loaded, in-flight `scores` map client-side, an
+  incompleteness that can't happen anymore now that `min_grade` filters server-side against a
+  complete page. A bounded-height (`max-h-[70vh]`), `overflow-y-auto` wrapper keeps a rendered page
+  scrollable; the table itself no longer needs to scroll through the *entire* backlog because
+  `OfferListPage` now pages through it (BUG26) rather than loading everything at once.
+- **`frontend/src/pages/OfferListPage.tsx`**: the page shell — holds `filters`, `minGrade`, and
+  `page` state, renders the three `FetchNowButton`s, `OfferFilters`, `GradeFilter`, an inline error
+  banner when `useOffers().error` is set, `OfferTable`, and (BUG26) a Prev/Next pagination footer
+  driven by `useOffers().total`. Changing any filter or `minGrade` resets `page` to `0` (an
+  in-range page for the old filters can be out of range for new ones); paging itself does not
+  reset filters. The scoring-finished-triggers-a-refetch effect (BUG16) now calls `useOffers()`'s
+  own `refetch` directly instead of a separate scores hook, since grades arrive inline with the
+  page (BUG26) — there is no longer a second, scores-only fetch to re-trigger.
 - **Routing**: `react-router-dom` was added even though this story ships only one route
   (`App.tsx`'s `<BrowserRouter><Routes><Route path="/" element={<OfferListPage />} /></Routes></BrowserRouter>`)
   — CLAUDE.md's own phase roadmap already documents further pages landing in Phase 2+ (profile,
@@ -1489,6 +1546,19 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   properties (A reuses the existing accent green, F reuses the existing danger red) plus a
   `.badge` base class and `.badge-grade-*` variants in the existing `@layer components` block —
   no one-off Tailwind colour utilities, per this story's own acceptance criterion.
+- **Superseded by BUG26**: the "client-side filter/sort, not a backend change" design above (`grade`
+  vs. minimum-grade being "different semantics" so `GradeFilter`/`minGrade` deliberately stayed
+  client-only) held only while `GET /offers` returned every offer unpaginated. Once the backlog
+  reached 18k+ rows, an unfiltered client-side `minGrade` filter over `useOfferScores`'s
+  still-arriving, per-offer-fetch `scores` map meant "10 shown" could mean "10 of thousands
+  resolved so far" — not "10 actually meeting the filter" (the exact bug this table's stale
+  comments predicted was possible: partial data masquerading as complete). BUG26 added a real,
+  server-side `min_grade` query param (scoped to the active profile, distinct from the pre-existing
+  exact-match `grade` param, which is unchanged) and moved grade data onto `GET /offers` itself, so
+  `GradeFilter`/`minGrade` now drive a real API filter instead of a client-side derived one, and
+  `OfferTable` no longer takes `scores`/runs `filterByMinGrade` at all — see the BUG26 notes on
+  `GET /offers`, `useOffers.ts`, `useOfferScoreDetail.ts`, and `OfferTable.tsx` above for the
+  current shape.
 
 React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
 

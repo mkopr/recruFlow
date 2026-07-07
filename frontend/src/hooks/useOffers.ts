@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { fetchOffers, type OfferListFilters, type OfferSummary } from '../api/offers';
+import {
+  fetchOffers,
+  type OfferListFilters,
+  type OfferListPage,
+  type OfferSummary,
+} from '../api/offers';
 
 export interface UseOffersResult {
   offers: OfferSummary[];
+  total: number;
   loading: boolean;
   error: string | null;
   refetch: () => void;
@@ -18,13 +24,15 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'failed to load offers';
 }
 
-export function useOffers(filters: OfferListFilters): UseOffersResult {
+export function useOffers(filters: OfferListFilters, page: OfferListPage): UseOffersResult {
   const [offers, setOffers] = useState<OfferSummary[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const isFirstRun = useRef(true);
 
-  const { source, remote, seniority, minSalary } = filters;
+  const { source, remote, seniority, minSalary, minGrade } = filters;
+  const { limit, offset } = page;
 
   // react-hooks/set-state-in-effect forbids an effect calling a hoisted
   // (e.g. useCallback) function that sets state, so the automatic
@@ -36,9 +44,13 @@ export function useOffers(filters: OfferListFilters): UseOffersResult {
     async function run() {
       setLoading(true);
       try {
-        const result = await fetchOffers({ source, remote, seniority, minSalary });
+        const result = await fetchOffers(
+          { source, remote, seniority, minSalary, minGrade },
+          { limit, offset },
+        );
         if (!ignore) {
-          setOffers(result);
+          setOffers(result.items);
+          setTotal(result.total);
           setError(null);
         }
       } catch (err) {
@@ -65,13 +77,14 @@ export function useOffers(filters: OfferListFilters): UseOffersResult {
       ignore = true;
       clearTimeout(timer);
     };
-  }, [source, remote, seniority, minSalary]);
+  }, [source, remote, seniority, minSalary, minGrade, limit, offset]);
 
   const refetch = useCallback(() => {
     setLoading(true);
-    fetchOffers({ source, remote, seniority, minSalary })
+    fetchOffers({ source, remote, seniority, minSalary, minGrade }, { limit, offset })
       .then((result) => {
-        setOffers(result);
+        setOffers(result.items);
+        setTotal(result.total);
         setError(null);
       })
       .catch((err: unknown) => {
@@ -80,7 +93,7 @@ export function useOffers(filters: OfferListFilters): UseOffersResult {
       .finally(() => {
         setLoading(false);
       });
-  }, [source, remote, seniority, minSalary]);
+  }, [source, remote, seniority, minSalary, minGrade, limit, offset]);
 
-  return { offers, loading, error, refetch };
+  return { offers, total, loading, error, refetch };
 }

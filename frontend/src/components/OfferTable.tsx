@@ -1,15 +1,14 @@
 import { useState } from 'react';
 
 import type { OfferSummary } from '../api/offers';
-import type { MatchScoreResponse } from '../api/offerScore';
-import { gradeRank, isGrade, meetsMinimumGrade, type Grade } from '../lib/grade';
+import { useOfferScoreDetail } from '../hooks/useOfferScoreDetail';
+import { gradeRank, isGrade, type Grade } from '../lib/grade';
 import { GradeBadge } from './GradeBadge';
 import { ScoreDrawer } from './ScoreDrawer';
 
 interface OfferTableProps {
   offers: OfferSummary[];
   loading: boolean;
-  scores: Record<number, MatchScoreResponse | null>;
   minGrade: Grade | '';
 }
 
@@ -40,29 +39,12 @@ function sortByPostedDateDesc(offers: OfferSummary[]): OfferSummary[] {
   });
 }
 
-function filterByMinGrade(
-  offers: OfferSummary[],
-  scores: Record<number, MatchScoreResponse | null>,
-  minGrade: Grade | '',
-): OfferSummary[] {
-  if (minGrade === '') return offers;
-
-  return offers.filter((offer) => {
-    const score = scores[offer.id];
-    return score != null && isGrade(score.grade) && meetsMinimumGrade(score.grade, minGrade);
-  });
-}
-
-function sortByGrade(
-  offers: OfferSummary[],
-  scores: Record<number, MatchScoreResponse | null>,
-  direction: 'asc' | 'desc',
-): OfferSummary[] {
+function sortByGrade(offers: OfferSummary[], direction: 'asc' | 'desc'): OfferSummary[] {
   const scored: Array<{ offer: OfferSummary; rank: number }> = [];
   const unscored: OfferSummary[] = [];
 
   for (const offer of offers) {
-    const grade = scores[offer.id]?.grade;
+    const grade = offer.grade;
     if (grade != null && isGrade(grade)) {
       scored.push({ offer, rank: gradeRank(grade) });
     } else {
@@ -83,65 +65,34 @@ function NoOffersEmptyState() {
   );
 }
 
-function FilteredEmptyState({ minGrade, unscoredCount, totalCount }: FilteredEmptyStateProps) {
+function FilteredEmptyState({ minGrade }: { minGrade: Grade }) {
   return (
     <div className="card flex flex-col items-center justify-center gap-1 py-16 text-center text-[var(--color-text-muted)]">
-      <span>No offers meet the minimum grade filter ({minGrade}) yet.</span>
-      {unscoredCount > 0 && (
-        <span>
-          {unscoredCount} of {totalCount} loaded offers haven&apos;t been scored yet — try again
-          once scoring catches up.
-        </span>
-      )}
+      <span>No offers meet the minimum grade filter ({minGrade}).</span>
     </div>
   );
 }
 
-interface FilteredEmptyStateProps {
-  minGrade: Grade;
-  unscoredCount: number;
-  totalCount: number;
-}
-
-function getEmptyState(
-  offers: OfferSummary[],
-  filteredOffers: OfferSummary[],
-  scores: Record<number, MatchScoreResponse | null>,
-  minGrade: Grade | '',
-  loading: boolean,
-) {
+function getEmptyState(offers: OfferSummary[], minGrade: Grade | '', loading: boolean) {
   if (loading) return null;
-  if (offers.length === 0) return <NoOffersEmptyState />;
-  if (minGrade && filteredOffers.length === 0) {
-    const unscoredCount = offers.filter((offer) => scores[offer.id] == null).length;
-    return (
-      <FilteredEmptyState
-        minGrade={minGrade}
-        unscoredCount={unscoredCount}
-        totalCount={offers.length}
-      />
-    );
-  }
-  return null;
+  if (offers.length > 0) return null;
+  if (minGrade) return <FilteredEmptyState minGrade={minGrade} />;
+  return <NoOffersEmptyState />;
 }
 
-export function OfferTable({ offers, loading, scores, minGrade }: OfferTableProps) {
+export function OfferTable({ offers, loading, minGrade }: OfferTableProps) {
   const [selectedOfferId, setSelectedOfferId] = useState<number | null>(null);
   const [gradeSort, setGradeSort] = useState<'asc' | 'desc' | null>(null);
+  const { score: selectedScore } = useOfferScoreDetail(selectedOfferId);
 
-  const filteredOffers = filterByMinGrade(offers, scores, minGrade);
-
-  const emptyState = getEmptyState(offers, filteredOffers, scores, minGrade, loading);
+  const emptyState = getEmptyState(offers, minGrade, loading);
   if (emptyState) {
     return emptyState;
   }
 
   const sortedOffers =
-    gradeSort !== null
-      ? sortByGrade(filteredOffers, scores, gradeSort)
-      : sortByPostedDateDesc(filteredOffers);
+    gradeSort !== null ? sortByGrade(offers, gradeSort) : sortByPostedDateDesc(offers);
 
-  const selectedScore = selectedOfferId != null ? scores[selectedOfferId] : null;
   const selectedOffer =
     selectedOfferId != null ? offers.find((offer) => offer.id === selectedOfferId) : undefined;
 
@@ -196,23 +147,28 @@ export function OfferTable({ offers, loading, scores, minGrade }: OfferTableProp
                 <td className="px-4 py-3">{offer.seniority ?? '-'}</td>
                 <td className="px-4 py-3">{formatPostedDate(offer.posted_at)}</td>
                 <td className="px-4 py-3">
-                  <GradeBadge
-                    grade={scores[offer.id]?.grade}
-                    onClick={scores[offer.id] ? () => setSelectedOfferId(offer.id) : undefined}
-                  />
+                  <GradeBadge grade={offer.grade} onClick={() => setSelectedOfferId(offer.id)} />
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      {selectedScore != null && selectedOffer != null && (
-        <ScoreDrawer
-          score={selectedScore}
-          offerTitle={selectedOffer.title}
-          onClose={() => setSelectedOfferId(null)}
-        />
-      )}
+      {selectedOffer != null &&
+        (selectedScore != null ? (
+          <ScoreDrawer
+            score={selectedScore}
+            offerTitle={selectedOffer.title}
+            onClose={() => setSelectedOfferId(null)}
+          />
+        ) : (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+            onClick={() => setSelectedOfferId(null)}
+          >
+            <div className="card p-6 text-sm text-[var(--color-text-muted)]">Loading score…</div>
+          </div>
+        ))}
     </div>
   );
 }
