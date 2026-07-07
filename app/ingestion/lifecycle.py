@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,13 +44,15 @@ async def run_with_lifecycle(
     *,
     force_refresh: bool = False,
     before_dispatch: BeforeDispatch | None = None,
-    on_success: OnSuccess,
+    on_success: OnSuccess | None = None,
     on_error: OnError,
 ) -> tuple[Source, IngestionResult | None, Exception | None]:
     """Own the engine/session/dispatch lifecycle shared by every "run a connector" flow.
 
-    `on_success` runs, then the session is committed. `on_error` owns rollback/commit itself
-    since callers disagree on which — nothing is committed on its behalf. Batch scoring is
+    On success, `source.last_fetched_at` is stamped before `on_success` runs, then the
+    session is committed — every "run a connector" door needs that checkpoint, so it's owned
+    here rather than duplicated per caller. `on_error` owns rollback/commit itself since
+    callers disagree on which — nothing is committed on its behalf. Batch scoring is
     triggered unconditionally afterwards (success or error) since it sweeps all unscored
     offers, not just ones from this run — this is the one call site every "run a connector"
     door (manual `/ingest`, manual `/scheduler/run`, and automatic APScheduler jobs) shares.
@@ -71,7 +74,10 @@ async def run_with_lifecycle(
                 await _trigger_batch_scoring_after_ingestion()
                 return source, None, exc
 
-            await on_success(session, source, result)
+            if result.ok:
+                source.last_fetched_at = datetime.now(UTC)
+            if on_success is not None:
+                await on_success(session, source, result)
             await session.commit()
             await _trigger_batch_scoring_after_ingestion()
             return source, result, None
