@@ -8,8 +8,8 @@ router = APIRouter()
 
 
 @router.post("/ingest/{source}")
-async def trigger_ingest_route(source: str) -> IngestResponse:
+async def trigger_ingest_route(source: str, force_refresh: bool = False) -> IngestResponse:
     try:
-        return await trigger_ingest(source)
+        return await trigger_ingest(source, force_refresh=force_refresh)
     except SchedulerLookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

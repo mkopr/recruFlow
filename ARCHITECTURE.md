@@ -791,6 +791,23 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   still prevents duplicate rows, so the cost is wasted work, not data corruption. Debouncing that is
   a frontend concern for P1US8, not this endpoint's.
 
+- **`force_refresh` defaults to `False` on `POST /ingest/{source}` (BUG18, reverses ADR 0008)**:
+  `_trigger_ingest_async` used to hardcode `force_refresh=True` unconditionally — a decision ADR
+  0008 made to work around SOLID.Jobs' old `sjctl sync`/`search` mode switch (fixed for BUG01).
+  Once ADR 0012 replaced `sjctl` with a direct-HTTP connector, `force_refresh`'s only remaining
+  effect for every connector (SOLID.Jobs, JustJoin.it) is bypassing the BUG02/ADR0009
+  `consecutive_already_seen` early-stop, so the hardcoded `True` silently defeated that
+  incremental checkpoint on every single "Fetch now" click — the only fetch action reachable from
+  the UI, since `FetchNowButton.tsx` has no way to pass a flag through `triggerIngest`/
+  `POST /ingest/{source}` (`frontend/src/api/offers.ts`). `POST /ingest/{source}` now accepts an
+  optional `force_refresh` query param (`app/api/routes/ingestion.py`, default `False`), threaded
+  through `trigger_ingest`/`_trigger_ingest_sync`/`_trigger_ingest_async`
+  (`app/ingestion/service.py`) to `run_with_lifecycle`, so a normal button click now gets the same
+  early-stop behaviour as `POST /scheduler/run/{source}` already had. A genuine full re-sync
+  (recovering from a bad `dedup_hash` change, backfilling) is still reachable via
+  `POST /ingest/{source}?force_refresh=true`, but is no longer the button's default — no UI control
+  wires it up yet, so today it is curl/ops-only.
+
 - **`GET /offers`** and **`GET /offers/{offer_id}`** (`app/api/routes/offers.py`) use `SessionDep`
   (plain read-only `SELECT`s, no blocking I/O underneath, unlike the ingest trigger) and join
   `Offer` to `Source` explicitly via `select(...).join(...)` — no ORM `relationship()` is defined

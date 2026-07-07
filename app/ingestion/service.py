@@ -13,7 +13,7 @@ from app.schemas.ingestion import IngestResponse
 logger = logging.getLogger(__name__)
 
 
-async def _trigger_ingest_async(source: str) -> IngestResponse:
+async def _trigger_ingest_async(source: str, *, force_refresh: bool = False) -> IngestResponse:
     async def on_success(session: AsyncSession, src: Source, result: IngestionResult) -> None:
         if result.ok:
             src.last_fetched_at = datetime.now(UTC)
@@ -23,7 +23,7 @@ async def _trigger_ingest_async(source: str) -> IngestResponse:
         logger.error("manual ingest for %r raised: %s", source, exc, exc_info=True)
 
     _, result, exc = await run_with_lifecycle(
-        source, force_refresh=True, on_success=on_success, on_error=on_error
+        source, force_refresh=force_refresh, on_success=on_success, on_error=on_error
     )
 
     if exc is not None:
@@ -33,9 +33,9 @@ async def _trigger_ingest_async(source: str) -> IngestResponse:
     return IngestResponse(source=source, **asdict(result))
 
 
-def _trigger_ingest_sync(source: str) -> IngestResponse:
-    return asyncio.run(_trigger_ingest_async(source))
+def _trigger_ingest_sync(source: str, *, force_refresh: bool = False) -> IngestResponse:
+    return asyncio.run(_trigger_ingest_async(source, force_refresh=force_refresh))
 
 
-async def trigger_ingest(source: str) -> IngestResponse:
-    return await asyncio.to_thread(_trigger_ingest_sync, source)
+async def trigger_ingest(source: str, *, force_refresh: bool = False) -> IngestResponse:
+    return await asyncio.to_thread(_trigger_ingest_sync, source, force_refresh=force_refresh)
