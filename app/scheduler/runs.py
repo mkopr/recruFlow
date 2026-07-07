@@ -3,7 +3,8 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import SchedulerRun
+from app.db.models import SchedulerRun, Source
+from app.schemas.scheduler import SourceStatus
 
 
 async def start_run(session: AsyncSession, source_id: int, *, trigger_type: str) -> SchedulerRun:
@@ -45,3 +46,24 @@ async def get_latest_run_by_source(session: AsyncSession, source_id: int) -> Sch
     )
     result: SchedulerRun | None = await session.scalar(stmt)
     return result
+
+
+def build_source_status(source: Source, last_run: SchedulerRun | None) -> SourceStatus:
+    connector = source.connector
+    assert connector is not None
+    return SourceStatus(
+        source_id=source.id,
+        connector=connector,
+        name=source.name,
+        schedule=(source.config_json or {}).get("schedule", {}),
+        last_fetched_at=source.last_fetched_at,
+        last_run_id=last_run.id if last_run else None,
+        last_run_started_at=last_run.started_at if last_run else None,
+        last_run_finished_at=last_run.finished_at if last_run else None,
+        last_run_status=last_run.status if last_run else None,
+        last_run_trigger_type=last_run.trigger_type if last_run else None,
+        last_run_fetched=last_run.fetched_count if last_run else None,
+        last_run_created=last_run.created_count if last_run else None,
+        last_run_warning=last_run.warning if last_run else False,
+        last_run_error_message=last_run.error_message if last_run else None,
+    )
