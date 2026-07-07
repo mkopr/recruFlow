@@ -19,14 +19,14 @@ export function SettingsPage() {
 
   if (settings.loading) {
     return (
-      <div className="mx-auto flex max-w-3xl flex-col gap-6 p-[var(--spacing-page)]">
+      <div className="mx-auto flex w-full max-w-screen-lg flex-col gap-6 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
         <p className="text-[var(--color-text-muted)]">Loading scoring config...</p>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6 p-[var(--spacing-page)]">
+    <div className="mx-auto flex w-full max-w-screen-lg flex-col gap-6 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
       <header>
         <h1 className="text-2xl font-semibold">recruFlow — Settings</h1>
         <p className="text-sm text-[var(--color-text-muted)]">

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { fetchOfferScore, type MatchScoreResponse } from '../api/offerScore';
 
@@ -11,6 +11,10 @@ export interface UseOfferScoresResult {
 export function useOfferScores(offerIds: number[]): UseOfferScoresResult {
   const [scores, setScores] = useState<Record<number, MatchScoreResponse | null>>({});
   const [loading, setLoading] = useState(offerIds.length > 0);
+  const scoresRef = useRef(scores);
+  useEffect(() => {
+    scoresRef.current = scores;
+  }, [scores]);
 
   const key = offerIds.join(',');
 
@@ -22,21 +26,31 @@ export function useOfferScores(offerIds: number[]): UseOfferScoresResult {
 
     async function run() {
       if (offerIds.length === 0) {
-        setScores({});
+        setLoading(false);
+        return;
+      }
+
+      // Only pull ids not already cached (BUG17) — the offers array gets a new
+      // reference on every fetch, but that shouldn't re-request a score this
+      // hook already has for an id it's seen before.
+      const idsToFetch = offerIds.filter((id) => !(id in scoresRef.current));
+      if (idsToFetch.length === 0) {
         setLoading(false);
         return;
       }
 
       setLoading(true);
-      const results = await Promise.allSettled(offerIds.map((id) => fetchOfferScore(id)));
+      const results = await Promise.allSettled(idsToFetch.map((id) => fetchOfferScore(id)));
 
       if (!ignore) {
-        const next: Record<number, MatchScoreResponse | null> = {};
-        offerIds.forEach((id, index) => {
-          const result = results[index];
-          next[id] = result.status === 'fulfilled' ? result.value : null;
+        setScores((prev) => {
+          const next = { ...prev };
+          idsToFetch.forEach((id, index) => {
+            const result = results[index];
+            next[id] = result.status === 'fulfilled' ? result.value : null;
+          });
+          return next;
         });
-        setScores(next);
         setLoading(false);
       }
     }

@@ -103,59 +103,61 @@ export function OfferTable({ offers, loading, scores, minGrade }: OfferTableProp
 
   return (
     <div className="card max-h-[70vh] overflow-y-auto">
-      <table className="w-full border-collapse text-left text-sm">
-        <thead className="sticky top-0 bg-[var(--color-surface)]">
-          <tr className="border-b border-[var(--color-border)] text-[var(--color-text-muted)]">
-            <th className="px-4 py-3 font-medium">Title</th>
-            <th className="px-4 py-3 font-medium">Company</th>
-            <th className="px-4 py-3 font-medium">Source</th>
-            <th className="px-4 py-3 font-medium">Salary</th>
-            <th className="px-4 py-3 font-medium">Remote</th>
-            <th className="px-4 py-3 font-medium">Seniority</th>
-            <th className="px-4 py-3 font-medium">Posted</th>
-            <th className="px-4 py-3 font-medium">
-              <button type="button" className="font-medium" onClick={handleGradeHeaderClick}>
-                Grade
-              </button>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {sortedOffers.map((offer) => (
-            <tr
-              key={offer.id}
-              className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-surface-hover)]"
-            >
-              <td className="px-4 py-3">
-                {offer.canonical_url ? (
-                  <a
-                    href={offer.canonical_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-[var(--color-accent)] hover:underline"
-                  >
-                    {offer.title}
-                  </a>
-                ) : (
-                  offer.title
-                )}
-              </td>
-              <td className="px-4 py-3">{offer.company}</td>
-              <td className="px-4 py-3">{offer.source}</td>
-              <td className="px-4 py-3">{formatSalary(offer)}</td>
-              <td className="px-4 py-3">{offer.remote ? 'Remote' : 'On-site'}</td>
-              <td className="px-4 py-3">{offer.seniority ?? '-'}</td>
-              <td className="px-4 py-3">{formatPostedDate(offer.posted_at)}</td>
-              <td className="px-4 py-3">
-                <GradeBadge
-                  grade={scores[offer.id]?.grade}
-                  onClick={scores[offer.id] ? () => setSelectedOfferId(offer.id) : undefined}
-                />
-              </td>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] border-collapse text-left text-sm">
+          <thead className="sticky top-0 bg-[var(--color-surface)]">
+            <tr className="border-b border-[var(--color-border)] text-[var(--color-text-muted)]">
+              <th className="px-4 py-3 font-medium">Title</th>
+              <th className="px-4 py-3 font-medium">Company</th>
+              <th className="px-4 py-3 font-medium">Source</th>
+              <th className="px-4 py-3 font-medium">Salary</th>
+              <th className="px-4 py-3 font-medium">Remote</th>
+              <th className="px-4 py-3 font-medium">Seniority</th>
+              <th className="px-4 py-3 font-medium">Posted</th>
+              <th className="px-4 py-3 font-medium">
+                <button type="button" className="font-medium" onClick={handleGradeHeaderClick}>
+                  Grade
+                </button>
+              </th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {sortedOffers.map((offer) => (
+              <tr
+                key={offer.id}
+                className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-surface-hover)]"
+              >
+                <td className="px-4 py-3">
+                  {offer.canonical_url ? (
+                    <a
+                      href={offer.canonical_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[var(--color-accent)] hover:underline"
+                    >
+                      {offer.title}
+                    </a>
+                  ) : (
+                    offer.title
+                  )}
+                </td>
+                <td className="px-4 py-3">{offer.company}</td>
+                <td className="px-4 py-3">{offer.source}</td>
+                <td className="px-4 py-3">{formatSalary(offer)}</td>
+                <td className="px-4 py-3">{offer.remote ? 'Remote' : 'On-site'}</td>
+                <td className="px-4 py-3">{offer.seniority ?? '-'}</td>
+                <td className="px-4 py-3">{formatPostedDate(offer.posted_at)}</td>
+                <td className="px-4 py-3">
+                  <GradeBadge
+                    grade={scores[offer.id]?.grade}
+                    onClick={scores[offer.id] ? () => setSelectedOfferId(offer.id) : undefined}
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       {selectedScore != null && selectedOffer != null && (
         <ScoreDrawer
           score={selectedScore}

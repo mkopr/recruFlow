@@ -8,7 +8,7 @@ function App() {
   return (
     <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text)]">
       <BrowserRouter>
-        <nav className="flex gap-4 border-b border-[var(--color-border)] px-[var(--spacing-page)] py-3 text-sm">
+        <nav className="flex gap-4 border-b border-[var(--color-border)] px-4 py-3 text-sm sm:px-6 lg:px-8">
           <Link to="/" className="text-[var(--color-accent)] hover:underline">
             Offers
           </Link>

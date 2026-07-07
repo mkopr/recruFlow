@@ -99,4 +99,28 @@ describe('useOfferScores', () => {
 
     await waitFor(() => expect(result.current.scores[1]).toEqual(score));
   });
+
+  it('only fetches ids not already cached when the offer id list changes (BUG17)', async () => {
+    fetchOfferScoreMock.mockImplementation((id: number) =>
+      Promise.resolve(makeScore({ offer_id: id, grade: id === 1 ? 'A' : 'B' })),
+    );
+
+    const { result, rerender } = renderHook((ids: number[]) => useOfferScores(ids), {
+      initialProps: [1],
+    });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(fetchOfferScoreMock).toHaveBeenCalledTimes(1);
+    expect(fetchOfferScoreMock).toHaveBeenCalledWith(1);
+
+    // A new array reference containing the same id 1 plus a brand-new id 2 —
+    // only id 2 should trigger a network call.
+    rerender([1, 2]);
+
+    await waitFor(() => expect(result.current.scores[2]).not.toBeUndefined());
+    expect(fetchOfferScoreMock).toHaveBeenCalledTimes(2);
+    expect(fetchOfferScoreMock).toHaveBeenCalledWith(2);
+    expect(result.current.scores[1]?.grade).toBe('A');
+    expect(result.current.scores[2]?.grade).toBe('B');
+  });
 });

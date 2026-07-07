@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { fetchOffers, type OfferListFilters, type OfferSummary } from '../api/offers';
 
@@ -9,6 +9,11 @@ export interface UseOffersResult {
   refetch: () => void;
 }
 
+// Filter changes (esp. every keystroke in "Min salary") are debounced by this
+// much before firing the network fetch (BUG17) — the initial load on mount
+// is exempt so the page doesn't sit idle for no reason.
+const FILTER_DEBOUNCE_MS = 300;
+
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'failed to load offers';
 }
@@ -17,6 +22,7 @@ export function useOffers(filters: OfferListFilters): UseOffersResult {
   const [offers, setOffers] = useState<OfferSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const isFirstRun = useRef(true);
 
   const { source, remote, seniority, minSalary } = filters;
 
@@ -46,10 +52,18 @@ export function useOffers(filters: OfferListFilters): UseOffersResult {
       }
     }
 
-    run();
+    if (isFirstRun.current) {
+      isFirstRun.current = false;
+      run();
+      return () => {
+        ignore = true;
+      };
+    }
 
+    const timer = setTimeout(run, FILTER_DEBOUNCE_MS);
     return () => {
       ignore = true;
+      clearTimeout(timer);
     };
   }, [source, remote, seniority, minSalary]);
 
