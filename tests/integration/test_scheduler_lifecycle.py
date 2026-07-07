@@ -5,10 +5,16 @@ import pytest
 from app.db.models import Source
 from app.db.session import get_engine, get_sessionmaker
 from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
-from app.scheduler.lifecycle import build_job_id, register_jobs
+from app.scheduler.lifecycle import (
+    SCORING_JOB_ID,
+    build_job_id,
+    register_jobs,
+    register_scoring_job,
+)
 from app.scheduler.service import DEFAULT_SOURCE_CONFIGS
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import delete
 
 
@@ -32,6 +38,24 @@ async def test_lifespan_registers_one_job_per_builtin_source_with_configured_int
 
     nofluffjobs_job = jobs[build_job_id(NOFLUFFJOBS)]
     assert isinstance(nofluffjobs_job.trigger, CronTrigger)
+
+    # BUG24: the backlog-draining job must be registered independently of any
+    # per-source ingestion schedule, so it keeps advancing even between fetches.
+    assert SCORING_JOB_ID in jobs
+    assert isinstance(jobs[SCORING_JOB_ID].trigger, IntervalTrigger)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_register_scoring_job_uses_the_configured_interval() -> None:
+    scheduler = AsyncIOScheduler(timezone="UTC")
+
+    register_scoring_job(scheduler, interval_seconds=45)
+
+    job = scheduler.get_job(SCORING_JOB_ID)
+    assert job is not None
+    assert job.trigger.interval.total_seconds() == 45
+    assert job.max_instances == 1
 
 
 @pytest.mark.integration

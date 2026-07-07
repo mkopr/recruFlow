@@ -75,19 +75,67 @@ function sortByGrade(
   return [...scored.map((entry) => entry.offer), ...unscored];
 }
 
+function NoOffersEmptyState() {
+  return (
+    <div className="card flex items-center justify-center py-16 text-[var(--color-text-muted)]">
+      No offers yet — try Fetch now above.
+    </div>
+  );
+}
+
+function FilteredEmptyState({ minGrade, unscoredCount, totalCount }: FilteredEmptyStateProps) {
+  return (
+    <div className="card flex flex-col items-center justify-center gap-1 py-16 text-center text-[var(--color-text-muted)]">
+      <span>No offers meet the minimum grade filter ({minGrade}) yet.</span>
+      {unscoredCount > 0 && (
+        <span>
+          {unscoredCount} of {totalCount} loaded offers haven&apos;t been scored yet — try again
+          once scoring catches up.
+        </span>
+      )}
+    </div>
+  );
+}
+
+interface FilteredEmptyStateProps {
+  minGrade: Grade;
+  unscoredCount: number;
+  totalCount: number;
+}
+
+function getEmptyState(
+  offers: OfferSummary[],
+  filteredOffers: OfferSummary[],
+  scores: Record<number, MatchScoreResponse | null>,
+  minGrade: Grade | '',
+  loading: boolean,
+) {
+  if (loading) return null;
+  if (offers.length === 0) return <NoOffersEmptyState />;
+  if (minGrade && filteredOffers.length === 0) {
+    const unscoredCount = offers.filter((offer) => scores[offer.id] == null).length;
+    return (
+      <FilteredEmptyState
+        minGrade={minGrade}
+        unscoredCount={unscoredCount}
+        totalCount={offers.length}
+      />
+    );
+  }
+  return null;
+}
+
 export function OfferTable({ offers, loading, scores, minGrade }: OfferTableProps) {
   const [selectedOfferId, setSelectedOfferId] = useState<number | null>(null);
   const [gradeSort, setGradeSort] = useState<'asc' | 'desc' | null>(null);
 
-  if (offers.length === 0 && !loading) {
-    return (
-      <div className="card flex items-center justify-center py-16 text-[var(--color-text-muted)]">
-        No offers yet — try Fetch now above.
-      </div>
-    );
+  const filteredOffers = filterByMinGrade(offers, scores, minGrade);
+
+  const emptyState = getEmptyState(offers, filteredOffers, scores, minGrade, loading);
+  if (emptyState) {
+    return emptyState;
   }
 
-  const filteredOffers = filterByMinGrade(offers, scores, minGrade);
   const sortedOffers =
     gradeSort !== null
       ? sortByGrade(filteredOffers, scores, gradeSort)

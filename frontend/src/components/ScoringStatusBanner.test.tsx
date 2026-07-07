@@ -10,6 +10,7 @@ function makeStatus(overrides: Partial<ScoringStatus> = {}): ScoringStatus {
     processed: 0,
     total: 0,
     remaining_backlog: 0,
+    unscored_backlog: 0,
     started_at: null,
     finished_at: null,
     last_scored: 0,
@@ -20,10 +21,16 @@ function makeStatus(overrides: Partial<ScoringStatus> = {}): ScoringStatus {
 }
 
 describe('ScoringStatusBanner', () => {
-  it('renders nothing before any scoring run has ever happened', () => {
+  it('renders nothing before any scoring run has ever happened and nothing is unscored', () => {
     const { container } = render(<ScoringStatusBanner status={makeStatus()} />);
 
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('shows the live unscored backlog even before any run has completed', () => {
+    render(<ScoringStatusBanner status={makeStatus({ unscored_backlog: 17288 })} />);
+
+    expect(screen.getByText(/17288 offers not yet scored/i)).toBeInTheDocument();
   });
 
   it('renders nothing when status is null', () => {
@@ -55,14 +62,14 @@ describe('ScoringStatusBanner', () => {
           finished_at: '2026-01-01T00:05:00Z',
           last_scored: 20,
           last_failed: 2,
-          remaining_backlog: 14986,
+          unscored_backlog: 14986,
         })}
       />,
     );
 
     expect(screen.getByText(/scored 20 offers/i)).toBeInTheDocument();
     expect(screen.getByText(/2 failed to score/i)).toBeInTheDocument();
-    expect(screen.getByText(/14986 more offers waiting/i)).toBeInTheDocument();
+    expect(screen.getByText(/14986 offers not yet scored/i)).toBeInTheDocument();
   });
 
   it('omits the backlog message once nothing remains unscored', () => {
@@ -72,6 +79,6 @@ describe('ScoringStatusBanner', () => {
       />,
     );
 
-    expect(screen.queryByText(/waiting to be scored/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/not yet scored/i)).not.toBeInTheDocument();
   });
 });

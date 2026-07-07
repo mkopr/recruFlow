@@ -271,6 +271,24 @@ describe('OfferTable', () => {
     expect(screen.queryByText('Unscored')).not.toBeInTheDocument();
   });
 
+  it('shows a distinct empty state when the grade filter hides every offer, naming the unscored count', () => {
+    const unscoredOfferA = makeOffer({ id: 1, title: 'OfferA' });
+    const unscoredOfferB = makeOffer({ id: 2, title: 'OfferB' });
+
+    render(
+      <OfferTable
+        offers={[unscoredOfferA, unscoredOfferB]}
+        loading={false}
+        scores={{}}
+        minGrade="F"
+      />,
+    );
+
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(screen.getByText(/no offers meet the minimum grade filter/i)).toBeInTheDocument();
+    expect(screen.getByText(/2 of 2 loaded offers haven't been scored yet/i)).toBeInTheDocument();
+  });
+
   it('shows unscored offers when no minimum grade filter is active', () => {
     const scoredOffer = makeOffer({ id: 1, title: 'Scored' });
     const unscoredOffer = makeOffer({ id: 2, title: 'Unscored' });

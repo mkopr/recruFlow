@@ -1,5 +1,6 @@
 import logging
 from collections.abc import AsyncGenerator, Iterator
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from uuid import uuid4
 
@@ -16,7 +17,7 @@ from app.db.models import Source
 from app.ingestion.types import IngestionResult
 from app.llm.matcher import _MatcherOutput
 from app.scoring import batch
-from app.scoring.batch import BatchScoringSummary, run_batch_scoring
+from app.scoring.batch import BatchScoringSummary, count_unscored_backlog, run_batch_scoring
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -350,8 +351,11 @@ async def test_run_batch_scoring_partial_failure_does_not_abort_batch(
             .all()
         )
         assert len(rows) == 1
-        assert rows[0].offer_id == offer_2_id
-        assert offer_1_id != rows[0].offer_id
+        # BUG24: scoring now works newest-first, so offer_2 (created later, no
+        # posted_at) is processed first and gets the failing chain; offer_1 is
+        # processed second and succeeds.
+        assert rows[0].offer_id == offer_1_id
+        assert offer_2_id != rows[0].offer_id
     finally:
         await _delete_sources_and_dependents(db_session, [source_id])
 
@@ -567,6 +571,151 @@ async def test_run_batch_scoring_caps_work_per_run_and_reports_remaining_backlog
         assert summary.scored == 2
         assert summary.failed == 0
         assert summary.remaining == 1
+    finally:
+        await _delete_sources_and_dependents(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_run_batch_scoring_prefers_newest_offers_first(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # BUG24: scoring must work newest-to-oldest (by posted_at, falling back to
+    # created_at for offers with no posted_at) so a capped run scores what the user
+    # is actually looking at (the offer list's default sort is newest-first), not
+    # whatever happens to have the lowest DB id.
+    connector = _fake_connector()
+    _isolate_langchain_sources(monkeypatch, connector)
+
+    await _deactivate_all_profiles(db_session)
+    source_id = await _create_source(db_session, connector=connector)
+    try:
+        now = datetime.now(UTC)
+        oldest_id = await _create_offer(db_session, source_id, posted_at=now - timedelta(days=10))
+        await _create_offer(db_session, source_id, posted_at=now - timedelta(days=5))
+        newest_id = await _create_offer(db_session, source_id, posted_at=now)
+        profile = await _create_profile(db_session)
+        await db_session.commit()
+
+        summary = await run_batch_scoring(
+            db_session,
+            limit=1,
+            chain_factory=lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
+        )
+        await db_session.commit()
+
+        assert summary.scored == 1
+        scored_offer_id = (
+            await db_session.execute(
+                select(MatchScoreModel.offer_id).where(MatchScoreModel.profile_id == profile.id)
+            )
+        ).scalar_one()
+        assert scored_offer_id == newest_id
+        assert scored_offer_id != oldest_id
+    finally:
+        await _delete_sources_and_dependents(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_run_batch_scoring_falls_back_to_created_at_when_posted_at_is_null(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connector = _fake_connector()
+    _isolate_langchain_sources(monkeypatch, connector)
+
+    await _deactivate_all_profiles(db_session)
+    source_id = await _create_source(db_session, connector=connector)
+    try:
+        older_no_posted_at = await _create_offer(db_session, source_id, posted_at=None)
+        newer_no_posted_at = await _create_offer(db_session, source_id, posted_at=None)
+        profile = await _create_profile(db_session)
+        await db_session.commit()
+
+        # created_at is a server default stamped at insert time, so the second offer
+        # created is the "newer" one when posted_at is null for both.
+        summary = await run_batch_scoring(
+            db_session,
+            limit=1,
+            chain_factory=lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
+        )
+        await db_session.commit()
+
+        assert summary.scored == 1
+        scored_offer_id = (
+            await db_session.execute(
+                select(MatchScoreModel.offer_id).where(MatchScoreModel.profile_id == profile.id)
+            )
+        ).scalar_one()
+        assert scored_offer_id == newer_no_posted_at
+        assert scored_offer_id != older_no_posted_at
+    finally:
+        await _delete_sources_and_dependents(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_count_unscored_backlog_returns_zero_when_no_active_profile(
+    db_session: AsyncSession,
+) -> None:
+    await _deactivate_all_profiles(db_session)
+
+    assert await count_unscored_backlog(db_session) == 0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_count_unscored_backlog_reflects_live_state_before_any_run(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # BUG24: the backlog must be visible before a run ever completes -- a brand-new
+    # active profile has never been scored against, so this must equal the full
+    # eligible offer count, not 0.
+    connector = _fake_connector()
+    _isolate_langchain_sources(monkeypatch, connector)
+
+    await _deactivate_all_profiles(db_session)
+    source_id = await _create_source(db_session, connector=connector)
+    try:
+        await _create_offer(db_session, source_id)
+        await _create_offer(db_session, source_id)
+        await _create_profile(db_session)
+        await db_session.commit()
+
+        assert await count_unscored_backlog(db_session) == 2
+
+        await run_batch_scoring(
+            db_session,
+            limit=1,
+            chain_factory=lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
+        )
+        await db_session.commit()
+
+        assert await count_unscored_backlog(db_session) == 1
+    finally:
+        await _delete_sources_and_dependents(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_scoring_status_reports_live_unscored_backlog(
+    client: httpx.AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connector = _fake_connector()
+    _isolate_langchain_sources(monkeypatch, connector)
+
+    await _deactivate_all_profiles(db_session)
+    source_id = await _create_source(db_session, connector=connector)
+    try:
+        await _create_offer(db_session, source_id)
+        await _create_offer(db_session, source_id)
+        await _create_profile(db_session)
+        await db_session.commit()
+
+        response = await client.get("/scoring/status")
+
+        assert response.status_code == 200
+        assert response.json()["unscored_backlog"] == 2
     finally:
         await _delete_sources_and_dependents(db_session, [source_id])
 

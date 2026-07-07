@@ -65,7 +65,11 @@ async def _fetch_unscored_offers(
         .join(Source, OfferModel.source_id == Source.id)
         .where(Source.connector.in_(matcher.LANGCHAIN_SOURCES))
         .where(OfferModel.id.not_in(already_scored))
-        .order_by(OfferModel.id)
+        .order_by(
+            OfferModel.posted_at.desc().nulls_last(),
+            OfferModel.created_at.desc(),
+            OfferModel.id.desc(),
+        )
         .limit(limit)
     )
     rows = (await session.execute(stmt)).all()
@@ -98,6 +102,19 @@ async def _count_unscored_offers(session: AsyncSession, profile_id: int) -> int:
         .where(OfferModel.id.not_in(already_scored))
     )
     return (await session.execute(stmt)).scalar_one()
+
+
+async def count_unscored_backlog(session: AsyncSession) -> int:
+    """Live count of offers not yet scored for the active profile.
+
+    Computed on demand rather than cached from the last run, so it reflects the
+    backlog immediately after a profile switch/edit -- before any run has picked
+    it up.
+    """
+    profile_row = await get_active_profile(session)
+    if profile_row is None:
+        return 0
+    return await _count_unscored_offers(session, profile_row.id)
 
 
 async def run_batch_scoring(

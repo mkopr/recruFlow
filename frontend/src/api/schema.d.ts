@@ -548,6 +548,8 @@ export interface components {
       total: number;
       /** Remaining Backlog */
       remaining_backlog: number;
+      /** Unscored Backlog */
+      unscored_backlog: number;
       /** Started At */
       started_at: string | null;
       /** Finished At */
@@ -722,7 +724,9 @@ export interface operations {
   };
   trigger_ingest_route_ingest__source__post: {
     parameters: {
-      query?: never;
+      query?: {
+        force_refresh?: boolean;
+      };
       header?: never;
       path: {
         source: string;

@@ -8,10 +8,12 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import SchedulerRun, Source
+from app.db.session import get_engine, get_sessionmaker
 from app.ingestion.lifecycle import run_with_lifecycle
 from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
 from app.ingestion.types import IngestionResult
 from app.scheduler.runs import finish_run_error, finish_run_ok, start_run
+from app.scoring import batch
 
 logger = logging.getLogger(__name__)
 
@@ -97,3 +99,36 @@ def run_source_sync(connector: str, *, trigger_type: str) -> SchedulerRunRecord:
 
 async def run_source(connector: str, *, trigger_type: str) -> SchedulerRunRecord:
     return await asyncio.to_thread(run_source_sync, connector, trigger_type=trigger_type)
+
+
+async def _run_scoring_job_async() -> batch.BatchScoringSummary:
+    """One tick of the dedicated backlog-draining job (own engine/session, like
+    `_run_source_async`). Runs on a fixed interval independent of any source's own
+    ingestion cadence, so the active profile's backlog keeps draining even when no
+    connector happens to fire -- see BUG24.
+    """
+    engine = get_engine()
+    try:
+        sessionmaker = get_sessionmaker(engine)
+        async with sessionmaker() as session:
+            try:
+                summary = await batch.run_batch_scoring(session)
+                await session.commit()
+                logger.info(
+                    "scheduled backlog scoring: scored=%d skipped=%d failed=%d remaining=%d",
+                    summary.scored,
+                    summary.skipped,
+                    summary.failed,
+                    summary.remaining,
+                )
+                return summary
+            except Exception:
+                await session.rollback()
+                logger.exception("scheduled backlog scoring failed")
+                raise
+    finally:
+        await engine.dispose()
+
+
+def run_scoring_job_sync() -> batch.BatchScoringSummary:
+    return asyncio.run(_run_scoring_job_async())
