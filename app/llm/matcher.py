@@ -1,10 +1,10 @@
 import logging
 import re
 from collections.abc import Callable
+from typing import Protocol
 
 import httpx
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langchain_core.runnables import Runnable
 from langchain_ollama import ChatOllama
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -153,7 +153,17 @@ def _build_llm() -> ChatOllama:
     )
 
 
-def _build_chain() -> Runnable[list[BaseMessage], _MatcherOutput]:
+class MatcherChain(Protocol):
+    """The narrow surface score_offer_with_langchain needs from an LLM chain.
+
+    A structural protocol rather than langchain's Runnable itself, so test
+    fakes only need to implement ainvoke, without inheriting from Runnable.
+    """
+
+    async def ainvoke(self, messages: list[BaseMessage]) -> _MatcherOutput: ...
+
+
+def _build_chain() -> MatcherChain:
     return _build_llm().with_structured_output(_MatcherOutput, method="json_schema")  # type: ignore[return-value]
 
 
@@ -220,9 +230,10 @@ async def score_offer_with_langchain(
     profile: Profile,
     offer: Offer,
     grade_scale: GradeScale = _DEFAULT_GRADE_SCALE,
+    chain_factory: Callable[[], MatcherChain] = _build_chain,
 ) -> MatchScore:
     try:
-        output = await _build_chain().ainvoke(_build_messages(profile, offer))
+        output = await chain_factory().ainvoke(_build_messages(profile, offer))
     except (httpx.HTTPError, OSError) as exc:
         logger.error("LangChain matcher LLM call failed: %s", exc, exc_info=True)
         raise MatcherError(f"LangChain matcher failed: {_describe(exc)}") from exc
@@ -261,6 +272,7 @@ async def score_offers_with_langchain(
     offers: list[tuple[OfferModel, str]],
     *,
     grade_scale: GradeScale = _DEFAULT_GRADE_SCALE,
+    chain_factory: Callable[[], MatcherChain] = _build_chain,
     on_progress: Callable[[int], None] | None = None,
 ) -> list[MatchScoreModel]:
     profile = Profile(**profile_row.data)
@@ -280,6 +292,7 @@ async def score_offers_with_langchain(
                 profile=profile,
                 offer=offer,
                 grade_scale=grade_scale,
+                chain_factory=chain_factory,
             )
         except MatcherError as exc:
             logger.warning("LangChain matcher failed for offer_id=%s: %s", offer_row.id, exc)

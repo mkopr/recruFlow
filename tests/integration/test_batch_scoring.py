@@ -1,10 +1,12 @@
 import logging
 from collections.abc import AsyncGenerator, Iterator
+from functools import partial
 from uuid import uuid4
 
 import httpx
 import pytest
 import pytest_asyncio
+from app.api.routes import scoring as scoring_routes
 from app.connectors import justjoinit
 from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
@@ -108,10 +110,6 @@ async def test_run_batch_scoring_scores_all_unscored_offers_across_all_three_sou
 ) -> None:
     jj, nfj, sj = _fake_connector("jj"), _fake_connector("nfj"), _fake_connector("sj")
     _isolate_langchain_sources(monkeypatch, jj, nfj, sj)
-    monkeypatch.setattr(
-        "app.llm.matcher._build_chain",
-        lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
-    )
 
     await _deactivate_all_profiles(db_session)
     jj_source = await _create_source(db_session, connector=jj)
@@ -124,7 +122,10 @@ async def test_run_batch_scoring_scores_all_unscored_offers_across_all_three_sou
         profile = await _create_profile(db_session)
         await db_session.commit()
 
-        summary = await run_batch_scoring(db_session)
+        summary = await run_batch_scoring(
+            db_session,
+            chain_factory=lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
+        )
         await db_session.commit()
 
         assert summary == BatchScoringSummary(scored=3, skipped=0, failed=0)
@@ -151,10 +152,9 @@ async def test_run_batch_scoring_does_not_rescore_already_scored_pairs(
 ) -> None:
     jj, nfj, sj = _fake_connector("jj"), _fake_connector("nfj"), _fake_connector("sj")
     _isolate_langchain_sources(monkeypatch, jj, nfj, sj)
-    monkeypatch.setattr(
-        "app.llm.matcher._build_chain",
-        lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
-    )
+
+    def chain_factory() -> _FakeChain:
+        return _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS))
 
     await _deactivate_all_profiles(db_session)
     jj_source = await _create_source(db_session, connector=jj)
@@ -179,13 +179,13 @@ async def test_run_batch_scoring_does_not_rescore_already_scored_pairs(
         )
         await db_session.commit()
 
-        summary = await run_batch_scoring(db_session)
+        summary = await run_batch_scoring(db_session, chain_factory=chain_factory)
         await db_session.commit()
 
         assert summary.scored == 2
         assert summary.skipped == 1
 
-        summary_2 = await run_batch_scoring(db_session)
+        summary_2 = await run_batch_scoring(db_session, chain_factory=chain_factory)
         await db_session.commit()
 
         assert summary_2.scored == 0
@@ -212,9 +212,16 @@ async def test_post_score_batch_scores_unscored_offers_via_http(
 ) -> None:
     connector = _fake_connector()
     _isolate_langchain_sources(monkeypatch, connector)
+    # /score/batch has no request field for injecting a chain factory (nor should it -- that's
+    # an internal collaborator, not part of the HTTP contract), so this test binds one via the
+    # real chain_factory parameter and swaps in the bound callable for the route's own reference.
     monkeypatch.setattr(
-        "app.llm.matcher._build_chain",
-        lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
+        scoring_routes,
+        "run_batch_scoring",
+        partial(
+            run_batch_scoring,
+            chain_factory=lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
+        ),
     )
 
     await _deactivate_all_profiles(db_session)
@@ -264,10 +271,9 @@ async def test_profile_switch_causes_previously_scored_offers_to_be_picked_up_ag
 ) -> None:
     connector = _fake_connector()
     _isolate_langchain_sources(monkeypatch, connector)
-    monkeypatch.setattr(
-        "app.llm.matcher._build_chain",
-        lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
-    )
+
+    def chain_factory() -> _FakeChain:
+        return _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS))
 
     await _deactivate_all_profiles(db_session)
     source_id = await _create_source(db_session, connector=connector)
@@ -276,7 +282,7 @@ async def test_profile_switch_causes_previously_scored_offers_to_be_picked_up_ag
         profile_a = await _create_profile(db_session)
         await db_session.commit()
 
-        summary_a = await run_batch_scoring(db_session)
+        summary_a = await run_batch_scoring(db_session, chain_factory=chain_factory)
         await db_session.commit()
         assert summary_a.scored == 1
         assert summary_a.skipped == 0
@@ -285,7 +291,7 @@ async def test_profile_switch_causes_previously_scored_offers_to_be_picked_up_ag
         profile_b = await _create_profile(db_session)
         await db_session.commit()
 
-        summary_b = await run_batch_scoring(db_session)
+        summary_b = await run_batch_scoring(db_session, chain_factory=chain_factory)
         await db_session.commit()
         assert summary_b.scored == 1
         assert summary_b.skipped == 0
@@ -315,10 +321,9 @@ async def test_run_batch_scoring_partial_failure_does_not_abort_batch(
 ) -> None:
     connector = _fake_connector()
     _isolate_langchain_sources(monkeypatch, connector)
-    chains: Iterator[object] = iter(
+    chains: Iterator[_FakeChain | _FailingChain] = iter(
         [_FailingChain(), _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS))]
     )
-    monkeypatch.setattr("app.llm.matcher._build_chain", _SequencedChainBuilder(chains))
 
     await _deactivate_all_profiles(db_session)
     source_id = await _create_source(db_session, connector=connector)
@@ -328,7 +333,7 @@ async def test_run_batch_scoring_partial_failure_does_not_abort_batch(
         profile = await _create_profile(db_session)
         await db_session.commit()
 
-        summary = await run_batch_scoring(db_session)
+        summary = await run_batch_scoring(db_session, chain_factory=_SequencedChainBuilder(chains))
         await db_session.commit()
 
         assert summary.scored == 1
@@ -361,10 +366,6 @@ async def test_run_batch_scoring_logs_per_run_summary(
     _enable_logger()
     connector = _fake_connector()
     _isolate_langchain_sources(monkeypatch, connector)
-    monkeypatch.setattr(
-        "app.llm.matcher._build_chain",
-        lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
-    )
 
     await _deactivate_all_profiles(db_session)
     source_id = await _create_source(db_session, connector=connector)
@@ -374,7 +375,10 @@ async def test_run_batch_scoring_logs_per_run_summary(
         await db_session.commit()
 
         with caplog.at_level(logging.INFO, logger="app.scoring.batch"):
-            await run_batch_scoring(db_session)
+            await run_batch_scoring(
+                db_session,
+                chain_factory=lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
+            )
         await db_session.commit()
 
         assert any(
@@ -445,10 +449,6 @@ async def test_run_batch_scoring_uses_persisted_scoring_config_thresholds(
 ) -> None:
     connector = _fake_connector()
     _isolate_langchain_sources(monkeypatch, connector)
-    monkeypatch.setattr(
-        "app.llm.matcher._build_chain",
-        lambda: _FakeChain(_MatcherOutput(**_MID_RANGE_OUTPUT_KWARGS)),
-    )
 
     await _reset_scoring_config(db_session)
     db_session.add(ScoringConfigModel(grade_a=0.5, grade_b=0.4, grade_c=0.3, grade_d=0.2))
@@ -459,7 +459,10 @@ async def test_run_batch_scoring_uses_persisted_scoring_config_thresholds(
         profile = await _create_profile(db_session)
         await db_session.commit()
 
-        summary = await run_batch_scoring(db_session)
+        summary = await run_batch_scoring(
+            db_session,
+            chain_factory=lambda: _FakeChain(_MatcherOutput(**_MID_RANGE_OUTPUT_KWARGS)),
+        )
         await db_session.commit()
 
         assert summary.scored == 1
@@ -481,10 +484,6 @@ async def test_changing_scoring_config_does_not_rewrite_existing_match_score_gra
 ) -> None:
     connector = _fake_connector()
     _isolate_langchain_sources(monkeypatch, connector)
-    monkeypatch.setattr(
-        "app.llm.matcher._build_chain",
-        lambda: _FakeChain(_MatcherOutput(**_MID_RANGE_OUTPUT_KWARGS)),
-    )
 
     await _reset_scoring_config(db_session)
     db_session.add(ScoringConfigModel(grade_a=0.85, grade_b=0.70, grade_c=0.55, grade_d=0.40))
@@ -495,7 +494,10 @@ async def test_changing_scoring_config_does_not_rewrite_existing_match_score_gra
         profile = await _create_profile(db_session)
         await db_session.commit()
 
-        summary = await run_batch_scoring(db_session)
+        summary = await run_batch_scoring(
+            db_session,
+            chain_factory=lambda: _FakeChain(_MatcherOutput(**_MID_RANGE_OUTPUT_KWARGS)),
+        )
         await db_session.commit()
         assert summary.scored == 1
 
@@ -546,10 +548,6 @@ async def test_run_batch_scoring_caps_work_per_run_and_reports_remaining_backlog
     # run_batch_scoring caps how much it scores per call and reports how much is left.
     connector = _fake_connector()
     _isolate_langchain_sources(monkeypatch, connector)
-    monkeypatch.setattr(
-        "app.llm.matcher._build_chain",
-        lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
-    )
 
     await _deactivate_all_profiles(db_session)
     source_id = await _create_source(db_session, connector=connector)
@@ -559,7 +557,11 @@ async def test_run_batch_scoring_caps_work_per_run_and_reports_remaining_backlog
         await _create_profile(db_session)
         await db_session.commit()
 
-        summary = await run_batch_scoring(db_session, limit=2)
+        summary = await run_batch_scoring(
+            db_session,
+            limit=2,
+            chain_factory=lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
+        )
         await db_session.commit()
 
         assert summary.scored == 2
@@ -576,10 +578,6 @@ async def test_scoring_status_reflects_last_completed_run(
 ) -> None:
     connector = _fake_connector()
     _isolate_langchain_sources(monkeypatch, connector)
-    monkeypatch.setattr(
-        "app.llm.matcher._build_chain",
-        lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
-    )
 
     await _deactivate_all_profiles(db_session)
     source_id = await _create_source(db_session, connector=connector)
@@ -588,7 +586,10 @@ async def test_scoring_status_reflects_last_completed_run(
         await _create_profile(db_session)
         await db_session.commit()
 
-        await run_batch_scoring(db_session)
+        await run_batch_scoring(
+            db_session,
+            chain_factory=lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
+        )
         await db_session.commit()
 
         response = await client.get("/scoring/status")

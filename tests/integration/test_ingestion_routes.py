@@ -1,4 +1,5 @@
 import asyncio
+from functools import partial
 from typing import Any
 from uuid import uuid4
 
@@ -289,11 +290,16 @@ async def test_ingest_triggers_batch_scoring_for_newly_persisted_offer(
     _isolate_langchain_sources(monkeypatch, connector)
     # conftest.py's `_stub_post_ingestion_batch_scoring` no-ops real scoring by default for
     # every other ingestion/scheduler test; this test is specifically about observing a real
-    # MatchScore appear, so it restores the real implementation for its own duration.
-    monkeypatch.setattr(batch, "run_batch_scoring", run_batch_scoring)
+    # MatchScore appear, so it restores the real implementation for its own duration, binding a
+    # fake chain via the real chain_factory parameter instead of reaching into the matcher's
+    # private LLM-chain builder.
     monkeypatch.setattr(
-        "app.llm.matcher._build_chain",
-        lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
+        batch,
+        "run_batch_scoring",
+        partial(
+            run_batch_scoring,
+            chain_factory=lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
+        ),
     )
 
     canonical_url = _unique_url("justjoinit-scoring-offer")

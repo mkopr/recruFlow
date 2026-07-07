@@ -25,23 +25,23 @@ _STRONG_OUTPUT_KWARGS = {
 
 
 class _FakeChain:
-    def __init__(self, output: object) -> None:
+    def __init__(self, output: _MatcherOutput) -> None:
         self._output = output
 
-    async def ainvoke(self, messages: list[BaseMessage]) -> object:
+    async def ainvoke(self, messages: list[BaseMessage]) -> _MatcherOutput:
         return self._output
 
 
 class _FailingChain:
-    async def ainvoke(self, messages: list[BaseMessage]) -> None:
+    async def ainvoke(self, messages: list[BaseMessage]) -> _MatcherOutput:
         raise RuntimeError("simulated matcher failure")
 
 
 class _SequencedChainBuilder:
-    def __init__(self, chains: Iterator[object]) -> None:
+    def __init__(self, chains: "Iterator[_FakeChain | _FailingChain]") -> None:
         self._chains = chains
 
-    def __call__(self) -> object:
+    def __call__(self) -> "_FakeChain | _FailingChain":
         return next(self._chains)
 
 
@@ -55,13 +55,8 @@ async def _create_profile(session: AsyncSession) -> ProfileModel:
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_score_offers_with_langchain_scores_all_three_sources_including_solid_jobs(
-    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    db_session: AsyncSession,
 ) -> None:
-    monkeypatch.setattr(
-        "app.llm.matcher._build_chain",
-        lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
-    )
-
     jj_source = await _create_source(db_session, connector=JUSTJOINIT)
     nfj_source = await _create_source(db_session, connector=NOFLUFFJOBS)
     sj_source = await _create_source(db_session, connector=SOLID_JOBS)
@@ -85,6 +80,7 @@ async def test_score_offers_with_langchain_scores_all_three_sources_including_so
             (nfj_offer, NOFLUFFJOBS),
             (sj_offer, SOLID_JOBS),
         ],
+        chain_factory=lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
     )
 
     rows = (
@@ -105,12 +101,11 @@ async def test_score_offers_with_langchain_scores_all_three_sources_including_so
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_score_offers_with_langchain_continues_batch_after_one_offer_fails(
-    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    db_session: AsyncSession,
 ) -> None:
-    chains: Iterator[object] = iter(
+    chains: Iterator[_FakeChain | _FailingChain] = iter(
         [_FailingChain(), _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS))]
     )
-    monkeypatch.setattr("app.llm.matcher._build_chain", _SequencedChainBuilder(chains))
 
     jj_source = await _create_source(db_session, connector=JUSTJOINIT)
     offer_1_id = await _create_offer(db_session, jj_source)
@@ -125,6 +120,7 @@ async def test_score_offers_with_langchain_continues_batch_after_one_offer_fails
         db_session,
         profile,
         [(offer_1, JUSTJOINIT), (offer_2, JUSTJOINIT)],
+        chain_factory=_SequencedChainBuilder(chains),
     )
 
     rows = (

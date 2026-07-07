@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -11,7 +12,12 @@ from app.db.models import Offer as OfferModel
 from app.db.models import Source
 from app.db.profile_repo import get_active_profile
 from app.db.scoring_config_repo import get_or_create_scoring_config
-from app.llm.matcher import LANGCHAIN_SOURCES, build_grade_scale, score_offers_with_langchain
+from app.llm.matcher import (
+    LANGCHAIN_SOURCES,
+    MatcherChain,
+    build_grade_scale,
+    score_offers_with_langchain,
+)
 from app.schemas.scoring_config import ScoringConfig
 
 logger = logging.getLogger(__name__)
@@ -99,7 +105,10 @@ async def _count_unscored_offers(session: AsyncSession, profile_id: int) -> int:
 
 
 async def run_batch_scoring(
-    session: AsyncSession, *, limit: int | None = None
+    session: AsyncSession,
+    *,
+    limit: int | None = None,
+    chain_factory: Callable[[], MatcherChain] | None = None,
 ) -> BatchScoringSummary:
     profile_row = await get_active_profile(session)
     if profile_row is None:
@@ -126,13 +135,23 @@ async def run_batch_scoring(
     _progress.started_at = datetime.now(UTC)
     _progress.finished_at = None
     try:
-        results = await score_offers_with_langchain(
-            session,
-            profile_row,
-            unscored,
-            grade_scale=grade_scale,
-            on_progress=_record_progress,
-        )
+        if chain_factory is not None:
+            results = await score_offers_with_langchain(
+                session,
+                profile_row,
+                unscored,
+                grade_scale=grade_scale,
+                chain_factory=chain_factory,
+                on_progress=_record_progress,
+            )
+        else:
+            results = await score_offers_with_langchain(
+                session,
+                profile_row,
+                unscored,
+                grade_scale=grade_scale,
+                on_progress=_record_progress,
+            )
     finally:
         _progress.running = False
         _progress.finished_at = datetime.now(UTC)

@@ -67,10 +67,10 @@ def _offer(**overrides: object) -> Offer:
 
 
 class _FakeChain:
-    def __init__(self, output: object) -> None:
+    def __init__(self, output: _MatcherOutput) -> None:
         self._output = output
 
-    async def ainvoke(self, messages: list[BaseMessage]) -> object:
+    async def ainvoke(self, messages: list[BaseMessage]) -> _MatcherOutput:
         return self._output
 
 
@@ -78,19 +78,22 @@ class _FailingChain:
     def __init__(self, exc: Exception) -> None:
         self._exc = exc
 
-    async def ainvoke(self, messages: list[BaseMessage]) -> None:
+    async def ainvoke(self, messages: list[BaseMessage]) -> _MatcherOutput:
         raise self._exc
 
 
 @pytest.mark.asyncio
-async def test_score_offer_with_langchain_produces_valid_match_score_with_langchain_engine(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_score_offer_with_langchain_produces_valid_match_score_with_langchain_engine() -> (
+    None
+):
     output = _MatcherOutput(**_STRONG_OUTPUT_KWARGS)
-    monkeypatch.setattr("app.llm.matcher._build_chain", lambda: _FakeChain(output))
 
     score = await score_offer_with_langchain(
-        offer_id=1, profile_id=2, profile=_profile(), offer=_offer()
+        offer_id=1,
+        profile_id=2,
+        profile=_profile(),
+        offer=_offer(),
+        chain_factory=lambda: _FakeChain(output),
     )
 
     assert score.engine == "langchain"
@@ -98,60 +101,64 @@ async def test_score_offer_with_langchain_produces_valid_match_score_with_langch
 
 
 @pytest.mark.asyncio
-async def test_score_offer_with_langchain_caps_grade_at_d_when_deal_breaker_matched(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_score_offer_with_langchain_caps_grade_at_d_when_deal_breaker_matched() -> None:
     output = _MatcherOutput(**_STRONG_OUTPUT_KWARGS)
-    monkeypatch.setattr("app.llm.matcher._build_chain", lambda: _FakeChain(output))
-
     profile = _profile(deal_breakers=["on-site only"])
     offer = _offer(description="This is an On-Site Only role, no exceptions.")
 
-    score = await score_offer_with_langchain(offer_id=1, profile_id=2, profile=profile, offer=offer)
+    score = await score_offer_with_langchain(
+        offer_id=1,
+        profile_id=2,
+        profile=profile,
+        offer=offer,
+        chain_factory=lambda: _FakeChain(output),
+    )
 
     assert score.grade in ("D", "F")
     assert "on-site only" in score.rationale.lower()
 
 
 @pytest.mark.asyncio
-async def test_score_offer_with_langchain_no_deal_breaker_high_fit_scores_well(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_score_offer_with_langchain_no_deal_breaker_high_fit_scores_well() -> None:
     output = _MatcherOutput(**_STRONG_OUTPUT_KWARGS)
-    monkeypatch.setattr("app.llm.matcher._build_chain", lambda: _FakeChain(output))
 
     score = await score_offer_with_langchain(
-        offer_id=1, profile_id=2, profile=_profile(), offer=_offer()
+        offer_id=1,
+        profile_id=2,
+        profile=_profile(),
+        offer=_offer(),
+        chain_factory=lambda: _FakeChain(output),
     )
 
     assert score.grade in ("A", "B")
 
 
 @pytest.mark.asyncio
-async def test_score_offer_with_langchain_low_fit_scores_poorly(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_score_offer_with_langchain_low_fit_scores_poorly() -> None:
     output = _MatcherOutput(**_LOW_OUTPUT_KWARGS)
-    monkeypatch.setattr("app.llm.matcher._build_chain", lambda: _FakeChain(output))
 
     score = await score_offer_with_langchain(
-        offer_id=1, profile_id=2, profile=_profile(), offer=_offer()
+        offer_id=1,
+        profile_id=2,
+        profile=_profile(),
+        offer=_offer(),
+        chain_factory=lambda: _FakeChain(output),
     )
 
     assert score.grade in ("D", "F")
 
 
 @pytest.mark.asyncio
-async def test_score_offer_with_langchain_missing_salary_scores_conservatively(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_score_offer_with_langchain_missing_salary_scores_conservatively() -> None:
     output = _MatcherOutput(**{**_STRONG_OUTPUT_KWARGS, "salary_fit": 0.95})
-    monkeypatch.setattr("app.llm.matcher._build_chain", lambda: _FakeChain(output))
-
     profile = _profile(salary_min=None, salary_target=None)
 
     score = await score_offer_with_langchain(
-        offer_id=1, profile_id=2, profile=profile, offer=_offer()
+        offer_id=1,
+        profile_id=2,
+        profile=profile,
+        offer=_offer(),
+        chain_factory=lambda: _FakeChain(output),
     )
 
     assert score.dimensions["salary_fit"] <= 0.5
@@ -159,32 +166,26 @@ async def test_score_offer_with_langchain_missing_salary_scores_conservatively(
 
 
 @pytest.mark.asyncio
-async def test_score_offer_with_langchain_wraps_llm_connection_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "app.llm.matcher._build_chain",
-        lambda: _FailingChain(httpx.HTTPError("connection refused")),
-    )
-
+async def test_score_offer_with_langchain_wraps_llm_connection_failure() -> None:
     with pytest.raises(MatcherError):
         await score_offer_with_langchain(
-            offer_id=1, profile_id=2, profile=_profile(), offer=_offer()
+            offer_id=1,
+            profile_id=2,
+            profile=_profile(),
+            offer=_offer(),
+            chain_factory=lambda: _FailingChain(httpx.HTTPError("connection refused")),
         )
 
 
 @pytest.mark.asyncio
-async def test_score_offer_with_langchain_wraps_unexpected_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "app.llm.matcher._build_chain",
-        lambda: _FailingChain(RuntimeError("something broke")),
-    )
-
+async def test_score_offer_with_langchain_wraps_unexpected_failure() -> None:
     with pytest.raises(MatcherError):
         await score_offer_with_langchain(
-            offer_id=1, profile_id=2, profile=_profile(), offer=_offer()
+            offer_id=1,
+            profile_id=2,
+            profile=_profile(),
+            offer=_offer(),
+            chain_factory=lambda: _FailingChain(RuntimeError("something broke")),
         )
 
 
@@ -284,18 +285,21 @@ def test_is_langchain_source_true_for_all_three_connectors_false_for_unknown(
 
 
 @pytest.mark.asyncio
-async def test_score_offer_with_langchain_handles_solid_jobs_offer_missing_optional_fields(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_score_offer_with_langchain_handles_solid_jobs_offer_missing_optional_fields() -> (
+    None
+):
     raw = {"title": "Backend Engineer", "company": "Acme"}
     mapped_fields = map_solid_jobs_offer(1, raw)
     offer = Offer(**mapped_fields)
 
     output = _MatcherOutput(**_STRONG_OUTPUT_KWARGS)
-    monkeypatch.setattr("app.llm.matcher._build_chain", lambda: _FakeChain(output))
 
     score = await score_offer_with_langchain(
-        offer_id=1, profile_id=2, profile=_profile(), offer=offer
+        offer_id=1,
+        profile_id=2,
+        profile=_profile(),
+        offer=offer,
+        chain_factory=lambda: _FakeChain(output),
     )
 
     assert score.engine == "langchain"
