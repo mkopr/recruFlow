@@ -5,26 +5,27 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class GradeAEvent:
+class ScoreEvent:
     score_id: int
     offer_id: int
     title: str
     company: str
+    score_percent: int
 
 
-_subscribers: set[asyncio.Queue[GradeAEvent]] = set()
+_subscribers: set[asyncio.Queue[ScoreEvent]] = set()
 
 
-def subscribe() -> asyncio.Queue[GradeAEvent]:
-    queue: asyncio.Queue[GradeAEvent] = asyncio.Queue()
+def subscribe() -> asyncio.Queue[ScoreEvent]:
+    queue: asyncio.Queue[ScoreEvent] = asyncio.Queue()
     _subscribers.add(queue)
     return queue
 
 
-def unsubscribe(queue: asyncio.Queue[GradeAEvent]) -> None:
+def unsubscribe(queue: asyncio.Queue[ScoreEvent]) -> None:
     _subscribers.discard(queue)
 
 
-def publish_grade_a(event: GradeAEvent) -> None:
+def publish_score(event: ScoreEvent) -> None:
     for queue in _subscribers:
         queue.put_nowait(event)

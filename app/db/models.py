@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -82,25 +82,6 @@ class Profile(Base):
     )
 
 
-class ScoringConfig(Base):
-    __tablename__ = "scoring_config"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    grade_a: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.85")
-    grade_b: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.70")
-    grade_c: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.55")
-    grade_d: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.40")
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-
 class CVVersion(Base):
     __tablename__ = "cv_versions"
     __table_args__ = (Index("ix_cv_versions_offer_id_profile_id", "offer_id", "profile_id"),)
@@ -125,7 +106,7 @@ class MatchScore(Base):
     offer_id: Mapped[int] = mapped_column(Integer, ForeignKey("offers.id"), nullable=False)
     profile_id: Mapped[int] = mapped_column(Integer, ForeignKey("profiles.id"), nullable=False)
     engine: Mapped[str] = mapped_column(String(20), nullable=False)
-    grade: Mapped[str] = mapped_column(String(1), nullable=False)
+    score_percent: Mapped[int] = mapped_column(Integer, nullable=False)
     dimensions: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

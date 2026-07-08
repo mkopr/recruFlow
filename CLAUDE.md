@@ -73,7 +73,7 @@ Use these terms consistently in code, schemas, and PR descriptions:
 | **Source** | A job board connector (SOLID.Jobs, JustJoin.it, NoFluffJobs) |
 | **Raw Payload** | Unmodified API/scrape response stored at ingest time |
 | **Profile** | Candidate's structured facts: skills, experience, preferences, constraints |
-| **Match Score** | Structured evaluation of one Offer against the active Profile (grade A–F + dimensions) |
+| **Match Score** | Structured evaluation of one Offer against the active Profile (score_percent 0-100 + dimensions) |
 | **Application** | Record of intent/action to apply; statuses: `drafted` · `reviewed` · `sent` · `failed` · `interview` · `offer` · `rejected` |
 | **Tailored CV** | Profile rendered as CV, adjusted in phrasing/emphasis for a specific Offer — facts only, no fabrication |
 | **Cover Letter** | Generated letter alongside Tailored CV — same facts-only constraint |

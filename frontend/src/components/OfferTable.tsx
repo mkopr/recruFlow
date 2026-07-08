@@ -2,14 +2,13 @@ import { useState } from 'react';
 
 import type { OfferSummary } from '../api/offers';
 import { useOfferScoreDetail } from '../hooks/useOfferScoreDetail';
-import { gradeRank, isGrade, type Grade } from '../lib/grade';
-import { GradeBadge } from './GradeBadge';
+import { ScoreBadge } from './ScoreBadge';
 import { ScoreDrawer } from './ScoreDrawer';
 
 interface OfferTableProps {
   offers: OfferSummary[];
   loading: boolean;
-  minGrade: Grade | '';
+  minScore: number | '';
 }
 
 function formatSalary(offer: OfferSummary): string {
@@ -39,22 +38,24 @@ function sortByPostedDateDesc(offers: OfferSummary[]): OfferSummary[] {
   });
 }
 
-function sortByGrade(offers: OfferSummary[], direction: 'asc' | 'desc'): OfferSummary[] {
-  const scored: Array<{ offer: OfferSummary; rank: number }> = [];
+function sortByScore(offers: OfferSummary[], direction: 'asc' | 'desc'): OfferSummary[] {
+  const scored: OfferSummary[] = [];
   const unscored: OfferSummary[] = [];
 
   for (const offer of offers) {
-    const grade = offer.grade;
-    if (grade != null && isGrade(grade)) {
-      scored.push({ offer, rank: gradeRank(grade) });
+    if (offer.score_percent != null) {
+      scored.push(offer);
     } else {
       unscored.push(offer);
     }
   }
 
-  scored.sort((a, b) => (direction === 'asc' ? a.rank - b.rank : b.rank - a.rank));
+  scored.sort((a, b) => {
+    const diff = (a.score_percent as number) - (b.score_percent as number);
+    return direction === 'asc' ? diff : -diff;
+  });
 
-  return [...scored.map((entry) => entry.offer), ...unscored];
+  return [...scored, ...unscored];
 }
 
 function NoOffersEmptyState() {
@@ -65,39 +66,39 @@ function NoOffersEmptyState() {
   );
 }
 
-function FilteredEmptyState({ minGrade }: { minGrade: Grade }) {
+function FilteredEmptyState({ minScore }: { minScore: number }) {
   return (
     <div className="card flex flex-col items-center justify-center gap-1 py-16 text-center text-[var(--color-text-muted)]">
-      <span>No offers meet the minimum grade filter ({minGrade}).</span>
+      <span>No offers meet the minimum score filter ({minScore}%).</span>
     </div>
   );
 }
 
-function getEmptyState(offers: OfferSummary[], minGrade: Grade | '', loading: boolean) {
+function getEmptyState(offers: OfferSummary[], minScore: number | '', loading: boolean) {
   if (loading) return null;
   if (offers.length > 0) return null;
-  if (minGrade) return <FilteredEmptyState minGrade={minGrade} />;
+  if (minScore !== '') return <FilteredEmptyState minScore={minScore} />;
   return <NoOffersEmptyState />;
 }
 
-export function OfferTable({ offers, loading, minGrade }: OfferTableProps) {
+export function OfferTable({ offers, loading, minScore }: OfferTableProps) {
   const [selectedOfferId, setSelectedOfferId] = useState<number | null>(null);
-  const [gradeSort, setGradeSort] = useState<'asc' | 'desc' | null>(null);
+  const [scoreSort, setScoreSort] = useState<'asc' | 'desc' | null>(null);
   const { score: selectedScore } = useOfferScoreDetail(selectedOfferId);
 
-  const emptyState = getEmptyState(offers, minGrade, loading);
+  const emptyState = getEmptyState(offers, minScore, loading);
   if (emptyState) {
     return emptyState;
   }
 
   const sortedOffers =
-    gradeSort !== null ? sortByGrade(offers, gradeSort) : sortByPostedDateDesc(offers);
+    scoreSort !== null ? sortByScore(offers, scoreSort) : sortByPostedDateDesc(offers);
 
   const selectedOffer =
     selectedOfferId != null ? offers.find((offer) => offer.id === selectedOfferId) : undefined;
 
-  const handleGradeHeaderClick = () => {
-    setGradeSort((current) => (current === 'asc' ? 'desc' : 'asc'));
+  const handleScoreHeaderClick = () => {
+    setScoreSort((current) => (current === 'asc' ? 'desc' : 'asc'));
   };
 
   return (
@@ -114,8 +115,8 @@ export function OfferTable({ offers, loading, minGrade }: OfferTableProps) {
               <th className="px-4 py-3 font-medium">Seniority</th>
               <th className="px-4 py-3 font-medium">Posted</th>
               <th className="px-4 py-3 font-medium">
-                <button type="button" className="font-medium" onClick={handleGradeHeaderClick}>
-                  Grade
+                <button type="button" className="font-medium" onClick={handleScoreHeaderClick}>
+                  Score
                 </button>
               </th>
             </tr>
@@ -147,7 +148,10 @@ export function OfferTable({ offers, loading, minGrade }: OfferTableProps) {
                 <td className="px-4 py-3">{offer.seniority ?? '-'}</td>
                 <td className="px-4 py-3">{formatPostedDate(offer.posted_at)}</td>
                 <td className="px-4 py-3">
-                  <GradeBadge grade={offer.grade} onClick={() => setSelectedOfferId(offer.id)} />
+                  <ScoreBadge
+                    scorePercent={offer.score_percent}
+                    onClick={() => setSelectedOfferId(offer.id)}
+                  />
                 </td>
               </tr>
             ))}

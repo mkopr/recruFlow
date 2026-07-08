@@ -4,11 +4,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 MatchEngine = Literal["langchain", "sjctl"]
-MatchGrade = Literal["A", "B", "C", "D", "F"]
-
-# Best-to-worst grade ordering; a "minimum grade" filter keeps grades at or
-# before its index here (e.g. min_grade="B" keeps A and B).
-GRADE_ORDER: tuple[MatchGrade, ...] = ("A", "B", "C", "D", "F")
 
 
 class MatchScore(BaseModel):
@@ -17,7 +12,7 @@ class MatchScore(BaseModel):
     offer_id: int = Field(gt=0)
     profile_id: int = Field(gt=0)
     engine: MatchEngine
-    grade: MatchGrade
+    score_percent: int = Field(ge=0, le=100)
     dimensions: dict[str, float] = Field(default_factory=dict)
     rationale: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -30,7 +25,7 @@ class MatchScoreResponse(BaseModel):
     offer_id: int
     profile_id: int
     engine: str
-    grade: str
+    score_percent: int
     dimensions: dict[str, float]
     rationale: str | None
     created_at: datetime

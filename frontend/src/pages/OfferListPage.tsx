@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 
 import type { OfferListFilters } from '../api/offers';
-import { GradeFilter } from '../components/GradeFilter';
 import { OfferFilters } from '../components/OfferFilters';
 import { OfferTable } from '../components/OfferTable';
+import { ScoreFilter } from '../components/ScoreFilter';
 import { ScoreNowButton } from '../components/ScoreNowButton';
 import { ScoringStatusBanner } from '../components/ScoringStatusBanner';
 import { SourceFetchCard } from '../components/SourceFetchCard';
@@ -11,16 +11,18 @@ import { KNOWN_SOURCES } from '../constants';
 import { useOffers } from '../hooks/useOffers';
 import { useSchedulerStatus } from '../hooks/useSchedulerStatus';
 import { useScoringStatus } from '../hooks/useScoringStatus';
-import type { Grade } from '../lib/grade';
 
 const PAGE_SIZE = 50;
 
 export function OfferListPage() {
   const [filters, setFilters] = useState<OfferListFilters>({});
-  const [minGrade, setMinGrade] = useState<Grade | ''>('');
+  const [minScore, setMinScore] = useState<number | ''>('');
   const [page, setPage] = useState(0);
 
-  const activeFilters: OfferListFilters = { ...filters, minGrade: minGrade || undefined };
+  const activeFilters: OfferListFilters = {
+    ...filters,
+    minScore: minScore === '' ? undefined : minScore,
+  };
   const { offers, total, loading, error, refetch } = useOffers(activeFilters, {
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
@@ -40,13 +42,13 @@ export function OfferListPage() {
     setFilters(next);
   };
 
-  const handleMinGradeChange = (next: Grade | '') => {
+  const handleMinScoreChange = (next: number | '') => {
     setPage(0);
-    setMinGrade(next);
+    setMinScore(next);
   };
 
   // A background scoring run can complete well after the ingest response comes back
-  // (BUG16) — this re-pulls the current page each time a run finishes, so grade
+  // (BUG16) — this re-pulls the current page each time a run finishes, so score
   // badges (now inline on each offer, BUG26) can appear without a manual reload.
   useEffect(() => {
     if (scoringStatus?.finished_at) {
@@ -77,7 +79,7 @@ export function OfferListPage() {
 
       <div className="flex flex-wrap items-end gap-4">
         <OfferFilters filters={filters} onChange={handleFiltersChange} />
-        <GradeFilter value={minGrade} onChange={handleMinGradeChange} />
+        <ScoreFilter value={minScore} onChange={handleMinScoreChange} />
       </div>
 
       {error && (
@@ -86,7 +88,7 @@ export function OfferListPage() {
         </div>
       )}
 
-      <OfferTable offers={offers} loading={loading} minGrade={minGrade} />
+      <OfferTable offers={offers} loading={loading} minScore={minScore} />
 
       {total > 0 && (
         <div className="flex items-center justify-between text-sm text-[var(--color-text-muted)]">

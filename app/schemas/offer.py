@@ -58,9 +58,11 @@ class OfferSummary(BaseModel):
     posted_at: datetime | None
     industry_tags: list[str]
     created_at: datetime
-    grade: str | None = Field(
+    score_percent: int | None = Field(
         default=None,
-        description="Active profile's most recent match grade for this offer, if scored",
+        ge=0,
+        le=100,
+        description="Active profile's most recent match score (0-100) for this offer, if scored",
     )
 
 

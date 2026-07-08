@@ -16,7 +16,7 @@ from app.ingestion.registry import resolve_source_by_connector
 from app.ingestion.types import IngestionResult
 from app.scheduler.runs import finish_run_error, finish_run_ok, start_run
 from app.scoring import batch
-from app.scoring.events import publish_grade_a
+from app.scoring.events import publish_score
 
 logger = logging.getLogger(__name__)
 
@@ -117,8 +117,8 @@ async def _run_scoring_job_async() -> batch.BatchScoringSummary:
             try:
                 summary = await batch.run_batch_scoring(session)
                 await session.commit()
-                for event in summary.grade_a_events:
-                    publish_grade_a(event)
+                for event in summary.score_events:
+                    publish_score(event)
                 logger.info(
                     "scheduled backlog scoring: scored=%d skipped=%d failed=%d remaining=%d",
                     summary.scored,

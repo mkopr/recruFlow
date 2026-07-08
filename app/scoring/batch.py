@@ -11,11 +11,9 @@ from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
 from app.db.models import Source
 from app.db.profile_repo import get_active_profile
-from app.db.scoring_config_repo import get_or_create_scoring_config
 from app.llm import matcher
-from app.llm.matcher import MatcherChain, build_grade_scale, score_offers_with_langchain
-from app.schemas.scoring_config import ScoringConfig
-from app.scoring.events import GradeAEvent
+from app.llm.matcher import MatcherChain, score_offers_with_langchain
+from app.scoring.events import ScoreEvent
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +24,7 @@ class BatchScoringSummary:
     skipped: int
     failed: int
     remaining: int = 0
-    grade_a_events: tuple[GradeAEvent, ...] = ()
+    score_events: tuple[ScoreEvent, ...] = ()
 
 
 @dataclass
@@ -134,15 +132,6 @@ async def run_batch_scoring(
     total_unscored = await _count_unscored_offers(session, profile_row.id)
     unscored = await _fetch_unscored_offers(session, profile_row.id, limit=batch_limit)
     skipped = await _count_already_scored(session, profile_row.id)
-    scoring_config_row = await get_or_create_scoring_config(session)
-    grade_scale = build_grade_scale(
-        ScoringConfig(
-            grade_a=scoring_config_row.grade_a,
-            grade_b=scoring_config_row.grade_b,
-            grade_c=scoring_config_row.grade_c,
-            grade_d=scoring_config_row.grade_d,
-        )
-    )
 
     _progress.running = True
     _progress.processed = 0
@@ -155,7 +144,6 @@ async def run_batch_scoring(
                 session,
                 profile_row,
                 unscored,
-                grade_scale=grade_scale,
                 chain_factory=chain_factory,
                 on_progress=_record_progress,
             )
@@ -164,7 +152,6 @@ async def run_batch_scoring(
                 session,
                 profile_row,
                 unscored,
-                grade_scale=grade_scale,
                 on_progress=_record_progress,
             )
     finally:
@@ -173,15 +160,15 @@ async def run_batch_scoring(
 
     await session.flush()
     offer_by_id = {offer.id: offer for offer, _ in unscored}
-    grade_a_events = tuple(
-        GradeAEvent(
+    score_events = tuple(
+        ScoreEvent(
             score_id=row.id,
             offer_id=row.offer_id,
             title=offer_by_id[row.offer_id].title,
             company=offer_by_id[row.offer_id].company,
+            score_percent=row.score_percent,
         )
         for row in results
-        if row.grade == "A"
     )
 
     failed = len(unscored) - len(results)
@@ -203,7 +190,7 @@ async def run_batch_scoring(
         skipped=skipped,
         failed=failed,
         remaining=remaining,
-        grade_a_events=grade_a_events,
+        score_events=score_events,
     )
 
 

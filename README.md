@@ -490,7 +490,7 @@ filtering by query parameter, all combinable (AND semantics):
 | `remote` | `true`/`false` |
 | `seniority` | Canonical level (`junior`/`mid`/`senior`/`lead`/`expert`) — substring match |
 | `min_salary` | Minimum salary (PLN, monthly gross); an offer's `salary_max` must meet or exceed it, falling back to `salary_min` when `salary_max` is unknown |
-| `grade` | Single-letter match grade (A–F); matches if any `MatchScore` row for the offer has it (table is empty until Phase 3 ships a scorer) |
+| `min_score` | Minimum acceptable match score (0-100) for the active profile; keeps offers scored at least this well, excluding not-yet-scored offers whenever set |
 
 ```bash
 curl "http://localhost:8000/offers?source=justjoinit&remote=true&min_salary=15000"
@@ -513,7 +513,8 @@ curl "http://localhost:8000/offers?source=justjoinit&remote=true&min_salary=1500
     "salary_currency": "PLN",
     "contract_type": "B2B",
     "posted_at": "2026-06-20T09:00:00Z",
-    "created_at": "2026-06-21T08:00:00Z"
+    "created_at": "2026-06-21T08:00:00Z",
+    "score_percent": 92
   }
 ]
 ```
@@ -549,7 +550,7 @@ curl http://localhost:8000/offers/42/score
   "offer_id": 42,
   "profile_id": 1,
   "engine": "langchain",
-  "grade": "B",
+  "score_percent": 77,
   "dimensions": {"skill_match": 0.8, "salary_fit": 0.6},
   "rationale": "Strong skill overlap, salary slightly below target.",
   "created_at": "2026-06-21T08:00:00Z"
@@ -584,57 +585,26 @@ same "steady state, not an error" convention as `GET /profile` and `GET /offers/
 If the active Profile changes, offers already scored against the previous Profile are picked up
 for scoring against the new one on the next run; their old `MatchScore` rows are never deleted.
 
-### `GET /scoring-config`
-
-Returns the current grade thresholds used by every scoring run. Seeds a default row
-(`0.85`/`0.70`/`0.55`/`0.40`) on first call if none exists yet — never `404`s.
-
-```bash
-curl http://localhost:8000/scoring-config
-```
-
-```json
-{"grade_a": 0.85, "grade_b": 0.70, "grade_c": 0.55, "grade_d": 0.40}
-```
-
-### `PUT /scoring-config`
-
-Updates the grade thresholds. Takes effect starting with the next batch-scoring run; never
-retroactively rewrites the `grade` on any already-persisted `MatchScore` row.
-
-```bash
-curl -X PUT http://localhost:8000/scoring-config \
-  -H "Content-Type: application/json" \
-  -d '{"grade_a": 0.9, "grade_b": 0.75, "grade_c": 0.6, "grade_d": 0.45}'
-```
-
-```json
-{"grade_a": 0.9, "grade_b": 0.75, "grade_c": 0.6, "grade_d": 0.45}
-```
-
-Returns `422` if the four values aren't strictly descending (`grade_a > grade_b > grade_c >
-grade_d > 0`) or any value is outside `(0, 1]` — the existing row, if any, is left untouched.
-
 ### `GET /scoring/events`
 
-Server-Sent Events (SSE) stream. Emits a `grade_a` event the moment a Grade A `MatchScore` row
-commits (from either `POST /score/batch` or the scheduler's own recurring backlog-draining job).
-This is the app's first SSE endpoint.
+Server-Sent Events (SSE) stream. Emits a `score` event the moment any `MatchScore` row commits
+(from either `POST /score/batch` or the scheduler's own recurring backlog-draining job). This is
+the app's first SSE endpoint.
 
 ```bash
 curl -N http://localhost:8000/scoring/events
 ```
 
 ```
-event: grade_a
-data: {"score_id": 42, "offer_id": 17, "title": "Backend Engineer", "company": "Acme"}
+event: score
+data: {"score_id": 42, "offer_id": 17, "title": "Backend Engineer", "company": "Acme", "score_percent": 92}
 ```
 
 A freshly opened connection only ever receives events published after it connects — there is no
-replay or "seen id" bookkeeping, so a Grade A score that already existed before you connected never
-fires. The connection stays open indefinitely; the browser's native `EventSource` handles
-reconnection on a dropped connection automatically, and a reconnect never replays anything missed
-in the gap (this is a live notification stream, not an audit log).
+replay or "seen id" bookkeeping, so a score that already existed before you connected never fires.
+The connection stays open indefinitely; the browser's native `EventSource` handles reconnection on
+a dropped connection automatically, and a reconnect never replays anything missed in the gap (this
+is a live notification stream, not an audit log).
 
 ## Offer list page
 
@@ -656,21 +626,22 @@ the API directly.
 
 ## Offer list with scores
 
-Every offer row in the offer list page (above) also shows a **Grade** column, one call to
-`GET /offers/{id}/score` per visible offer against the active profile:
+Every offer row in the offer list page (above) also shows a **Score** column, populated inline by
+`GET /offers` itself against the active profile:
 
-- **Grade badge** — colour-coded by letter grade: A green, B teal, C yellow, D orange, F red. An
-  offer with no `MatchScore` yet (not yet processed by the batch scoring job) shows a neutral grey
-  "Not yet scored" badge instead of a blank cell or an error.
+- **Score badge** — shows the numeric match percentage (e.g. `"82%"`), with a colour interpolated
+  continuously from red to yellow to green based on the percentage — no fixed buckets, no
+  configuration. An offer with no `MatchScore` yet (not yet processed by the batch scoring job)
+  shows a neutral grey "Not yet scored" badge instead of a blank cell or an error.
 - **Score drawer** — clicking a scored badge opens a right-anchored drawer with that offer's
   per-dimension breakdown and rationale text. It closes on Escape or by clicking the backdrop. The
   "not yet scored" badge is not clickable.
-- **Sort by grade** — clicking the Grade column header sorts the table by grade client-side
-  (ascending, then descending on the next click); offers with no score yet always sort last
-  regardless of direction.
-- **Minimum grade filter** — a separate "Minimum grade" control hides offers below the chosen
-  grade. While active, it also hides not-yet-scored offers; clearing it back to "Any" brings both
-  back.
+- **Sort by score** — clicking the Score column header sorts the table numerically by score
+  percentage (ascending, then descending on the next click); offers with no score yet always sort
+  last regardless of direction.
+- **Minimum score filter** — a "Minimum score %" numeric input hides offers below the typed
+  percentage. While active, it also hides not-yet-scored offers; clearing the field back to empty
+  brings both back.
 
 ## CV upload
 
@@ -744,28 +715,20 @@ a profile by hand, without calling the API directly.
 
 ## Scoring settings
 
-With `make up` running, open `http://localhost:5173/settings` to view or change the four grade
-cutoffs the matcher uses (`GET`/`PUT /scoring-config` above), without calling the API directly.
-
-- **Four numeric inputs** — Grade A/B/C/D cutoff, pre-filled with the currently persisted values
-  on page load.
-- **Descending-order validation** — the same `grade_a > grade_b > grade_c > grade_d > 0` rule the
-  backend enforces is checked client-side too; clicking **Save** with an out-of-order or
-  out-of-range value highlights the offending field(s) in red and blocks the request entirely — no
-  network call is made until the thresholds are valid.
-- **Save** persists the four values via `PUT /scoring-config`; a subsequent page reload shows the
-  saved values, not the defaults, since they're read back from `GET /scoring-config`.
-
-The same page also has two more sections:
+With `make up` running, open `http://localhost:5173/settings`. There is nothing to configure at
+the domain level for scoring itself — a plain percentage needs no shared calibration table — so
+this page has two sections:
 
 - **Fetch cadence** — one row per connector (sourced from `GET /scheduler/status`), a minutes input
   pre-filled with that connector's current interval, each saved independently via
   `PUT /scheduler/sources/{source}/interval`, plus an "apply to all" control that pushes one value
   to every connector via `PUT /scheduler/sources/interval`. Saving reschedules the live job
   immediately — no restart needed.
-- **Notifications** — a preset retro alert sound dropdown, a "Test sound" preview button, a volume
-  slider, and a mute toggle. These three settings persist in `localStorage` only (no backend table)
-  and take effect immediately, with no separate Save step. When a new offer is scored Grade A, the
-  app plays the selected sound once via the `GET /scoring/events` SSE stream — every open browser
-  tab connects and plays independently, and muting stops playback without closing the underlying
-  SSE connection.
+- **Notifications** — a "Minimum score for alert (%)" numeric input (default `90`), a preset retro
+  alert sound dropdown, a "Test sound" preview button, a volume slider, and a mute toggle. These
+  settings persist in `localStorage` only (no backend table) and take effect immediately, with no
+  separate Save step. The app plays the selected sound once per `score` event received over the
+  `GET /scoring/events` SSE stream whose `score_percent` meets or exceeds the configured
+  threshold — every open browser tab connects and evaluates independently, and muting stops
+  playback without closing the underlying SSE connection. Lowering the threshold takes effect on
+  the very next event, with no reconnect needed.

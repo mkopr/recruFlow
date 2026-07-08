@@ -11,7 +11,6 @@ def test_models_register_all_v1_tables() -> None:
         "match_scores",
         "applications",
         "scheduler_runs",
-        "scoring_config",
     }
 
 

@@ -174,7 +174,7 @@ repeated foundational migration:
 | `offers` | A normalised job posting with exactly one Source | `dedup_hash` unique + indexed (dedup on canonical URL, P1US1 fallback to title+company+location); `canonical_url` nullable (P1US1 — not every source guarantees a stable URL); `description` nullable `Text` (P1US1); `raw_payload` (JSONB, ELT raw payload always populated at ingest) |
 | `profiles` | Candidate's structured facts: skills, experience, preferences | `name` unique; `is_active` (only one row active at a time, enforced by application logic, not a DB constraint); `data` (JSONB) |
 | `cv_versions` | Tailored CV + cover letter drafted for one Offer/Profile pair | FKs to `offers`/`profiles`; `status` string (no DB enum, so later statuses need no migration) |
-| `match_scores` | Structured evaluation of one Offer against a Profile (grade A–F + dimensions) | FKs to `offers`/`profiles`; `engine` distinguishes LangChain vs. `sjctl` scoring; `GET /offers?grade=` (P1US7) is its first read-side consumer, but the table remains write-side-empty until Phase 3 ships a scorer |
+| `match_scores` | Structured evaluation of one Offer against a Profile (`score_percent` 0-100 + dimensions, P3US29) | FKs to `offers`/`profiles`; `engine` distinguishes LangChain vs. `sjctl` scoring; `score_percent` `Integer` not null (replaced `grade` `String(1)`, P3US29) |
 | `applications` | Record of intent/action to apply | FKs to `offers`/`profiles`/`cv_versions`; `status` one of `drafted`/`reviewed`/`sent`/`failed`/`interview`/`offer`/`rejected` (unconstrained string, not a DB enum) |
 | `scheduler_runs` (P1US6) | One row per ingestion run, automatic or manual — the scheduler's audit trail | FK to `sources`; index on `(source_id, started_at)` for cheap "latest row per source" lookups; `status` one of `running`/`ok`/`error` (unconstrained string, same no-DB-enum convention as `applications.status`); `fetched_count`/`created_count` nullable `Integer` (null only while `status="running"`); `warning` `Boolean` (zero-result flag, see below); see "Scheduler" below |
 
@@ -827,12 +827,13 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   applied to `_fetch_unscored_offers` (`app/scoring/batch.py`), so "top of the table" and "scored
   first" are finally the same offers. The response is now an envelope,
   `{"items": [...], "total": <count ignoring limit/offset>}`, so a client can page without a
-  second request. Each item also now carries `grade: str | null` — the active profile's most
-  recent `MatchScore.grade` for that offer, joined in via a `ROW_NUMBER() OVER (PARTITION BY
-  offer_id ORDER BY created_at DESC)` subquery scoped to the active profile (or to a sentinel `-1`
-  profile id when there's no active profile, so the query shape never branches) — eliminating the
-  one-`GET /offers/{id}/score`-request-per-offer fan-out the frontend previously did to render
-  grade badges for a loaded page.
+  second request. Each item also now carries `score_percent: int | null` (renamed/retyped from
+  `grade: str | null` by P3US29, see that section below) — the active profile's most
+  recent `MatchScore.score_percent` for that offer, joined in via a `ROW_NUMBER() OVER (PARTITION
+  BY offer_id ORDER BY created_at DESC)` subquery scoped to the active profile (or to a sentinel
+  `-1` profile id when there's no active profile, so the query shape never branches) — eliminating
+  the one-`GET /offers/{id}/score`-request-per-offer fan-out the frontend previously did to render
+  score badges for a loaded page.
 
   **`source`**: the response's `source` field is the connector identity string
   (`Source.connector`), falling back to `Source.name` when `connector` is `NULL` (covers
@@ -851,25 +852,21 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   **`min_salary`**: "meets or exceeds" semantics — matches when `salary_max >= min_salary`, or,
   when `salary_max` is unknown, falls back to `salary_min >= min_salary`.
 
-  **`grade`**: an `EXISTS`-style subquery — `Offer.id IN (SELECT offer_id FROM match_scores WHERE
-  grade = :grade)` — against `match_scores`, a table that has no writer until Phase 3 ships (so this
-  filter matches nothing against real data today). Deliberately **not** scoped to the active
-  `Profile` (`Profile.is_active`) or to a specific `engine`: it matches if *any* recorded
-  `MatchScore` row for the offer has the given grade, regardless of which profile or engine produced
-  it. Revisit this scoping once Phase 3 defines how `MatchScore` rows actually relate to
-  profiles/engines over time (e.g. whether a profile edit re-scores or leaves stale grades behind).
-  Left as-is by BUG26, which added a separate `min_grade` param instead of changing `grade`'s
-  existing (tested) semantics.
+  **`grade`** (deleted by P3US29): originally an `EXISTS`-style subquery — `Offer.id IN (SELECT
+  offer_id FROM match_scores WHERE grade = :grade)` — against `match_scores`. Deliberately **not**
+  scoped to the active `Profile` (`Profile.is_active`) or to a specific `engine`, and never
+  consumed by the frontend; P3US29 removed the param outright rather than inventing a
+  percentage-equivalent "exact match" concept nobody had asked for.
 
-  **`min_grade`** (BUG26): a "minimum acceptable grade" filter — `min_grade=B` keeps offers graded
-  A or B, dropping C/D/F and not-yet-scored offers. Unlike `grade`, this **is** scoped to the
-  active profile only (it reuses the same inline-grade join described above), matching what the
-  frontend's "Minimum grade" selector conceptually means: the active profile's own bar, not any
-  profile's. `GRADE_ORDER = ("A", "B", "C", "D", "F")` (`app/schemas/match_score.py`) is the
-  best-to-worst ordering both this filter and the frontend's `lib/grade.ts` agree on.
+  **`min_score`** (renamed from `min_grade` by P3US29, int 0–100): a "minimum acceptable score"
+  filter — `min_score=50` keeps offers scored 50 or higher, dropping lower and not-yet-scored
+  offers. Scoped to the active profile only (it reuses the same inline-score join described
+  above), matching what the frontend's "Minimum score %" input conceptually means: the active
+  profile's own bar, not any profile's. Before P3US29 this was `min_grade` (BUG26), a five-value
+  `GRADE_ORDER` slice; the underlying comparison is now a plain `score_percent >= min_score`.
 
   ```bash
-  curl "http://localhost:8000/offers?source=justjoinit&remote=true&seniority=senior&min_salary=15000&min_grade=B&limit=50&offset=0"
+  curl "http://localhost:8000/offers?source=justjoinit&remote=true&seniority=senior&min_salary=15000&min_score=50&limit=50&offset=0"
   ```
 
   ```json
@@ -891,7 +888,7 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
         "contract_type": "B2B",
         "posted_at": "2026-06-20T09:00:00Z",
         "created_at": "2026-06-21T08:00:00Z",
-        "grade": "A"
+        "score_percent": 92
       }
     ],
     "total": 1
@@ -1262,14 +1259,15 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   `OfferSummary` exactly — `MatchScore` is the domain-input model an engine constructs before
   persistence (no `id`, since the DB assigns it on insert), `MatchScoreResponse`
   (`from_attributes=True`) is the plain, already-validated read model `GET /offers/{id}/score`
-  returns straight off an ORM row (`engine`/`grade` as plain `str`, no re-validation on the way out).
-- **`grade` is `Literal["A", "B", "C", "D", "F"]`, not A–F inclusive of E** — matches the five
-  letters actually used elsewhere in this codebase's own user stories (US22's "D or F"/"A or B"
-  outcomes, US26's badge colours: A=green, B=teal, C=yellow, D=orange, F=red, no E). `engine` is
-  `Literal["langchain", "sjctl"]`. Both use `Literal` rather than a bare `str` plus a hand-rolled
-  validator specifically so an out-of-vocabulary value is rejected by the type system itself,
-  mirroring this codebase's existing preference for validators/types doing the rejecting (e.g.
-  `Offer`'s `_check_salary_range`).
+  returns straight off an ORM row (`engine`/`score_percent` as plain values, no re-validation on
+  the way out).
+- **`score_percent: int` (`ge=0, le=100`), not a letter grade** — as of P3US29, `MatchScore`
+  reports the Matcher's rounded `weighted_total` directly rather than bucketing it into a
+  five-letter grade; see the P3US29 section below for the full rationale and the migration off the
+  original `Literal["A", "B", "C", "D", "F"]` design this bullet used to describe. `engine` is
+  `Literal["langchain", "sjctl"]`, still a `Literal` for the same "let the type system reject an
+  out-of-vocabulary value" reason (e.g. `Offer`'s `_check_salary_range`) — only `grade`'s
+  categorical shape went away, not that general preference.
 - **`dimensions: dict[str, float]` is an open dict by design** — no fixed key set, so either
   scoring engine can populate whatever per-dimension breakdown it produces without a schema change
   or migration, satisfying the acceptance criterion directly.
@@ -1317,18 +1315,18 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   mapping.
 - **Dimension weights** (`DIMENSION_WEIGHTS`, mirrors `sjctl`'s rubric): skill match 30%, salary fit
   25%, seniority fit 15%, work mode/location 15%, contract type 10%, red flags 5%.
-- **`GradeScale`** (not a bare threshold tuple) pairs the weighted-total-to-grade cutoffs with the
-  `grade_for(weighted_total)` method that applies them: `>= 0.85` → A, `>= 0.70` → B, `>= 0.55` → C,
-  `>= 0.40` → D, else F. This is a deliberate seam: P3US27 (configurable grade thresholds) will
-  construct a `GradeScale` from a persisted, user-editable `scoring_config` singleton and pass it
-  into `score_offer_with_langchain`/`score_offers_with_langchain`, which default to the module-level
-  `_DEFAULT_GRADE_SCALE` today. `DIMENSION_WEIGHTS` stays a plain dict, not a similarly-wrapped
-  object — no story currently needs configurable weights, and wrapping it now would be an
-  abstraction with no consumer.
+- **`score_percent = round(_weighted_total(output) * 100)`** (as of P3US29) — the Matcher's
+  internal 0.0–1.0 weighted total is surfaced directly as a 0–100 integer, with no threshold table
+  or letter-grade bucketing in between. This module originally shaped a `GradeScale` class (a
+  seam explicitly built for P3US27's later configurable grade thresholds) here; P3US29 deleted
+  both `GradeScale` and P3US27's `scoring_config` entirely once there was no letter left to
+  calibrate — see the P3US29 section below. `DIMENSION_WEIGHTS` stays a plain dict, unaffected by
+  that change — no story has ever needed configurable weights.
 - **Deal-breaker cap, enforced in code, not left to the LLM**: any `Profile.deal_breakers` entry
-  matched in the offer's text caps the grade at D (`_cap_grade_for_deal_breaker`, only ever lowers,
-  never raises — F stays F). This is the fact US24's cross-engine consistency comparison needs to
-  treat as "verified in code" rather than model-dependent.
+  matched in the offer's text caps `score_percent` at a fixed `40` (`_cap_score_for_deal_breaker`,
+  only ever lowers, never raises — an already-low score is left unchanged). Before P3US29 this
+  capped a letter grade at `D`; the mechanism changed to a numeric ceiling but the rule itself
+  (deterministic, code-level, never LLM-judged) did not.
 - **Deal-breaker detection is itself deterministic, never an LLM-judged field** — see
   `docs/adr/0014-deal-breaker-detection-deterministic-not-llm.md`. Folding detection into
   `_MatcherOutput` was considered and rejected: `Offer.description`/`title`/`company` are adversarial
@@ -1480,12 +1478,10 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   no story since P3US21 had regenerated it, so it predated the score endpoint/type entirely. This
   story ran `make generate-types` against a live API before writing any code that imports
   `MatchScoreResponse` or calls the score endpoint.
-- **`frontend/src/lib/grade.ts`**: pure, React-free single source of truth for grade
-  ordering/colour, shared by `GradeBadge`/`OfferTable`/`GradeFilter` so none of them duplicate it.
-  `GRADE_ORDER` is `['A', 'B', 'C', 'D', 'F']` (index 0 = best); `isGrade` is the system-boundary
-  type guard validating the widened `grade: str` that `MatchScoreResponse` returns (the write path
-  validates a `Literal`, the read path does not); `gradeRank`/`meetsMinimumGrade` back both the
-  sort and the minimum-grade filter.
+- **`frontend/src/lib/grade.ts`** (deleted by P3US29, see below): originally a pure, React-free
+  single source of truth for grade ordering/colour, shared by `GradeBadge`/`OfferTable`/
+  `GradeFilter`. Its replacement, `frontend/src/lib/scoreColor.ts`, is described in the P3US29
+  section below.
 - **`frontend/src/api/offerScore.ts`**: mirrors `offers.ts`'s shape exactly —
   `fetchOfferScore(offerId): Promise<MatchScoreResponse | null>` collapses `openapi-fetch`'s
   `{data, error}` into throw-on-error, but a `null` body (no active Profile, or no MatchScore yet)
@@ -1500,7 +1496,7 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   score) without discarding any other offer's already-resolved score. `refetch` (BUG16) exists
   because the effect above only re-runs when the *offer-id list itself* changes, never just
   because a score for one of those same offers arrived later — `OfferListPage` calls it whenever
-  `useScoringStatus`'s `finished_at` changes, so a grade badge can appear once background scoring
+  `useScoringStatus`'s `finished_at` changes, so a score badge can appear once background scoring
   completes without the user reloading the page.
 - **`frontend/src/api/scoring.ts`, `frontend/src/hooks/useScoringStatus.ts`,
   `frontend/src/components/ScoringStatusBanner.tsx` (BUG16)**: `useScoringStatus` self-paces its
@@ -1514,42 +1510,43 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   previously-silent "no active profile" / "LLM call failed" no-ops from
   `run_batch_scoring`/`score_offers_with_langchain` as something a user can actually see, per
   this bug's suggested fix.
-- **`frontend/src/components/GradeBadge.tsx`**: renders the neutral "Not yet scored" state for
-  `null`/`undefined`/any string that fails `isGrade` (defensive against the widened `grade: str`),
-  otherwise a coloured badge — a `<button>` when the caller passes `onClick` (a scored offer), a
-  non-interactive `<span>` otherwise (used standalone inside `ScoreDrawer`).
+- **`frontend/src/components/GradeBadge.tsx`** (replaced by `ScoreBadge.tsx`, see the P3US29
+  section below): originally rendered the neutral "Not yet scored" state for
+  `null`/`undefined`/any string that failed `isGrade`, otherwise a coloured badge — a `<button>`
+  when the caller passes `onClick` (a scored offer), a non-interactive `<span>` otherwise (used
+  standalone inside `ScoreDrawer`).
 - **`frontend/src/components/ScoreDrawer.tsx`**: the first drawer/modal in this codebase, built
   with no new npm dependency — a fixed backdrop (click closes) plus a right-anchored `.card`
   panel (`role="dialog" aria-modal="true"`), an `Escape`-key listener via a `window` `keydown`
-  effect, the offer title, a non-clickable `GradeBadge`, the rationale text (falling back to `"No
-  rationale recorded."` when `null`, since the backend schema allows it), and a per-dimension
-  breakdown formatted as a percentage.
-- **`frontend/src/components/GradeFilter.tsx`**: the minimum-grade control, deliberately a
-  separate component from `OfferFilters`/`OfferListFilters` rather than a new field on either —
-  minimum-grade filtering is a client-side derived concern over already-fetched scores, not a
-  `GET /offers` query parameter (see below), so folding it into `OfferFilters` would blur that
-  boundary. Markup mirrors `OfferFilters.tsx`'s `<label>`/`<select className="input">` pattern.
+  effect, the offer title, a non-clickable score badge (`ScoreBadge` as of P3US29), the rationale
+  text (falling back to `"No rationale recorded."` when `null`, since the backend schema allows
+  it), and a per-dimension breakdown formatted as a percentage — unaffected by P3US29, since
+  per-dimension scores stayed 0–1 floats throughout.
+- **`frontend/src/components/GradeFilter.tsx`** (replaced by `ScoreFilter.tsx`, see the P3US29
+  section below): originally the minimum-grade control, deliberately a separate component from
+  `OfferFilters`/`OfferListFilters` rather than a new field on either.
 - **`frontend/src/components/OfferTable.tsx`**: gained `scores`/`minGrade` props plus two new
-  pure helpers. `filterByMinGrade` runs first, then either `sortByGrade` (if the Grade column
-  header has been clicked at least once) or the existing `sortByPostedDateDesc` — filter-then-sort
-  so the two compose correctly. `sortByGrade` always appends unscored offers last regardless of
+  pure helpers. `filterByMinGrade` ran first, then either `sortByGrade` (if the Grade column
+  header had been clicked at least once) or the existing `sortByPostedDateDesc` — filter-then-sort
+  so the two composed correctly. `sortByGrade` always appended unscored offers last regardless of
   direction, mirroring `sortByPostedDateDesc`'s existing nulls-last convention; the Grade header
-  is a two-state ascending/descending toggle (never back to "no sort"), matching the acceptance
-  criterion's own "ascending then descending" wording without inventing an untested third state.
-  Clicking a scored badge sets `selectedOfferId`, rendering a `ScoreDrawer` alongside the table.
+  was a two-state ascending/descending toggle (never back to "no sort"). Clicking a scored badge
+  sets `selectedOfferId`, rendering a `ScoreDrawer` alongside the table — this part is unchanged by
+  P3US29, only the badge/sort helper underneath it (see below).
 - **Client-side filter/sort, not a backend change**: mirrors US17's own "sort `GET /offers`
-  client-side rather than add an `ORDER BY`" precedent. `GET /offers` already has an incidental
-  exact-match `grade` query parameter from P3US21, but it is unrelated to this story's
+  client-side rather than add an `ORDER BY`" precedent. `GET /offers` already had an incidental
+  exact-match `grade` query parameter from P3US21, but it was unrelated to this story's
   minimum-grade filter (exact-match vs. minimum-grade are different semantics) and was
-  deliberately not reused.
+  deliberately not reused; P3US29 later deleted the exact-match param outright (see below).
 - **`frontend/src/pages/OfferListPage.tsx`**: now owns `minGrade` state alongside `filters`,
   calls `useOfferScores(offers.map(o => o.id))`, and renders `GradeFilter` next to `OfferFilters`.
   The hook's own `loading` flag is intentionally not surfaced as a separate page-level loading
-  state — `GradeBadge`'s neutral state already covers the in-flight case.
+  state — the score badge's neutral state already covers the in-flight case.
 - **Theme (`frontend/src/index.css`)**: new `--color-grade-a`/`-b`/`-c`/`-d`/`-f`/`-none` custom
   properties (A reuses the existing accent green, F reuses the existing danger red) plus a
   `.badge` base class and `.badge-grade-*` variants in the existing `@layer components` block —
-  no one-off Tailwind colour utilities, per this story's own acceptance criterion.
+  no one-off Tailwind colour utilities, per this story's own acceptance criterion. P3US29 later
+  replaced the five fixed variants with a single continuous colour function (see below).
 - **Superseded by BUG26**: the "client-side filter/sort, not a backend change" design above (`grade`
   vs. minimum-grade being "different semantics" so `GradeFilter`/`minGrade` deliberately stayed
   client-only) held only while `GET /offers` returned every offer unpaginated. Once the backlog
@@ -1559,10 +1556,11 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   comments predicted was possible: partial data masquerading as complete). BUG26 added a real,
   server-side `min_grade` query param (scoped to the active profile, distinct from the pre-existing
   exact-match `grade` param, which is unchanged) and moved grade data onto `GET /offers` itself, so
-  `GradeFilter`/`minGrade` now drive a real API filter instead of a client-side derived one, and
-  `OfferTable` no longer takes `scores`/runs `filterByMinGrade` at all — see the BUG26 notes on
-  `GET /offers`, `useOffers.ts`, `useOfferScoreDetail.ts`, and `OfferTable.tsx` above for the
-  current shape.
+  `GradeFilter`/`minGrade` now drove a real API filter instead of a client-side derived one, and
+  `OfferTable` no longer took `scores`/ran `filterByMinGrade` at all. **Superseded again by
+  P3US29**: `min_grade` became `min_score`, and the exact-match `grade` param was deleted outright
+  (no percentage-equivalent "exact match" concept was ever requested) — see the P3US29 section
+  below for the current shape.
 
 React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
 
@@ -1588,70 +1586,15 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
   `schema.d.ts`'s `paths` export — every future frontend feature reuses this single client rather
   than hand-rolling `fetch()` calls with hand-written response types.
 
-### Configurable grade thresholds (P3US27)
+### Configurable grade thresholds (P3US27) — superseded by P3US29
 
-- **Purpose**: every prior Phase 3 story hardcoded, or consumed without any way to change,
-  US22's 0.85/0.70/0.55/0.40 grade cutoffs. US22 deliberately shaped `GradeScale` and both
-  `score_offer_with_langchain`/`score_offers_with_langchain`'s `grade_scale` parameter as a seam
-  for exactly this story; this is the story that finally plugs something into that seam.
-- **`scoring_config` table / `app.db.models.ScoringConfig`**: one row, four `Float` columns
-  (`grade_a`/`grade_b`/`grade_c`/`grade_d`, `server_default` 0.85/0.70/0.55/0.40) plus the usual
-  `created_at`/`updated_at`. "Exactly one row" is an application-layer invariant only — no
-  uniqueness constraint, no activation flag — mirroring `profiles.is_active`'s own
-  "enforced by application logic, not a DB constraint" precedent rather than introducing a new
-  one for a table that never needs a second row. Added in migration `8e2c1a6f9d3b` (down-revision
-  `4d99f6acbb29`), which creates the table only — no row is seeded there; seeding happens lazily
-  on first read, matching `Profile`'s own no-seed-data precedent from P2US1.
-- **`app/schemas/scoring_config.py`**: a single `ScoringConfig` Pydantic model reused for both the
-  request and response body (unlike `Profile`/`Offer`/`MatchScore`, there is no id/status/timestamp
-  envelope — the acceptance criteria only ever mention the four thresholds themselves). Each field
-  is `Field(gt=0, le=1)`; a `model_validator(mode="after")` enforces
-  `grade_a > grade_b > grade_c > grade_d` in one comparison chain, covering both the descending-order
-  and pairwise-distinct requirements at once — FastAPI turns a `ValueError` here into a `422`
-  automatically, the same way `Profile`'s own `model_validator` already backs `PUT /profile`'s
-  `422`s. `DEFAULT_SCORING_CONFIG` is the single source of truth for the default thresholds; the
-  migration's column `server_default` literals and `get_or_create_scoring_config`'s seed both derive
-  from it so the two can never drift apart.
-- **`app/db/scoring_config_repo.py`**: mirrors `profile_repo.py`'s "one row, created lazily on read"
-  idiom. `get_or_create_scoring_config(session)` selects the first row by id, creating one from
-  `DEFAULT_SCORING_CONFIG` if none exists. `update_scoring_config(session, config)` calls
-  `get_or_create_scoring_config` first (so a `PUT` on a fresh, empty table still works, mirroring
-  `PUT /profile`'s own upsert semantics) then assigns the four fields. Neither function commits —
-  same transaction-boundary convention as every other repo/service function in this codebase; the
-  route commits.
-- **`app/llm/matcher.py`'s `build_grade_scale(config: ScoringConfig) -> GradeScale`**: the pure
-  builder this story adds next to `GradeScale` so callers never need to know its constructor shape.
-  `_GRADE_THRESHOLDS`/`_DEFAULT_GRADE_SCALE` are untouched and remain the fallback for any caller
-  that doesn't pass `grade_scale` explicitly (direct unit tests, any future ad-hoc scoring call) —
-  only `app.scoring.batch`'s call site changes.
-- **`app/scoring/batch.py`'s `run_batch_scoring`**: now fetches the persisted `ScoringConfig` via
-  `get_or_create_scoring_config`, builds a `GradeScale` via `build_grade_scale`, and passes
-  `grade_scale=...` into `score_offers_with_langchain` — for every LANGCHAIN_SOURCES-eligible
-  source, including SOLID.Jobs (US23), since all three already share this one call path.
-  `run_batch_scoring`'s own signature is unchanged, so neither `POST /score/batch` nor the
-  post-ingestion scheduler hook needed to change. A threshold change therefore takes effect on the
-  very next batch-scoring run; it never rewrites `MatchScore.grade` on any already-persisted row,
-  since this code path only ever inserts new `MatchScore` rows (US21's original design), never
-  updates existing ones.
-- **`GET /scoring-config` / `PUT /scoring-config`** (`app/api/routes/scoring.py`, same router as
-  `POST /score/batch`, no new `include_router` needed): `GET` calls
-  `get_or_create_scoring_config`, commits (seeding a default row on an empty table is itself a
-  write, so it must be), and returns the four thresholds — mirrors `GET /profile`'s "200 with
-  defaults instead of 404" convention. `PUT` calls `update_scoring_config`, commits, returns the
-  updated thresholds; FastAPI's own request-body validation against `ScoringConfig` produces the
-  `422` for a bad ordering before the handler body ever runs, so no manual `try`/`except` is needed
-  here (unlike `PUT /profile`, which needs one for `ProfileNotFoundError`).
-- **Frontend `/settings` page**: layered exactly like the Profile editor (P2US3) —
-  `frontend/src/api/scoringConfig.ts` (the `fetchScoringConfig`/`saveScoringConfig` throw-on-error
-  wrappers, mirroring `profile.ts`), `frontend/src/lib/scoringConfigValidation.ts` (a pure,
-  React-free module implementing the same descending-order/range rule client-side, so the UI can
-  show inline errors before ever calling the API), `frontend/src/hooks/useScoringConfig.ts` (owns
-  all state/validation/persistence — no `localStorage` caching, unlike `useProfileEditor.ts`, since
-  `GET /scoring-config` is always cheap and always returns a real row, so there's no
-  "in-between save and activate" state to bridge), and `frontend/src/pages/SettingsPage.tsx` (a page
-  shell only, rendering four `.input` numeric fields plus a `.btn-primary` Save button, reusing
-  `--color-danger` for inline errors — no new CSS). `App.tsx` gained a third route/nav link,
-  `/settings`, alongside the existing two.
+This story added a `scoring_config` table, `ScoringConfig` schema, `scoring_config_repo.py`, a
+`GET`/`PUT /scoring-config` pair, `app/llm/matcher.py`'s `build_grade_scale`, and a "Grade cutoffs"
+Settings card, all in service of making US22's letter-grade thresholds user-editable. P3US29
+deleted every piece of it outright rather than migrating it: once `MatchScore` reports a plain
+0–100 percentage instead of a letter, there is no shared "what does B mean" calibration left for a
+threshold table to hold — a minimum-score filter and an alert threshold are now each just a
+number the user types in, no persisted config in between. See the P3US29 section below.
 
 ### Configurable auto-fetch cadence + Grade A sound alert (P3US28)
 
@@ -1701,68 +1644,139 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
   scoring config"` purely to keep it distinguishable from each cadence row's own "Save" button in
   tests, with no visible UI change.
 
-- **Grade A sound alert — `app/scoring/events.py`** (new module): the in-process Grade A
-  broadcaster, and the reference implementation for OD-8's SSE-not-WebSocket seam. A module-level
-  `_subscribers: set[asyncio.Queue[GradeAEvent]]`, `subscribe()`/`unsubscribe()`/`publish_grade_a()`
-  — deliberately a plain global, the same "local single-user tool, one API process" justification
-  `app/scoring/batch.py`'s `ScoringProgress` singleton already uses. `publish_grade_a` uses
-  `put_nowait` on an unbounded `asyncio.Queue`, so it never blocks and never raises — a
-  slow/stalled SSE client can never stall the scoring pipeline that publishes to it.
+- **Grade A sound alert — `app/scoring/events.py`** (new module; renamed/generalised by P3US29,
+  see below): the in-process Grade A broadcaster, and the reference implementation for OD-8's
+  SSE-not-WebSocket seam. A module-level `_subscribers: set[asyncio.Queue[GradeAEvent]]`,
+  `subscribe()`/`unsubscribe()`/`publish_grade_a()` — deliberately a plain global, the same "local
+  single-user tool, one API process" justification `app/scoring/batch.py`'s `ScoringProgress`
+  singleton already uses. `publish_grade_a` used `put_nowait` on an unbounded `asyncio.Queue`, so
+  it never blocked and never raised — a slow/stalled SSE client could never stall the scoring
+  pipeline that publishes to it. P3US29 kept this exact mechanism and only renamed the
+  dataclass/functions and added a field — see below.
 - **Publish call sites**: `BatchScoringSummary` (`app/scoring/batch.py`) gained a fifth field,
   `grade_a_events: tuple[GradeAEvent, ...] = ()`, following the exact precedent BUG16 set when it
-  added `remaining: int = 0` to this same frozen dataclass — every existing construction site keeps
-  compiling unchanged. `run_batch_scoring` computes it after scoring completes, via an explicit
-  `await session.flush()` (required: `score_offers_with_langchain` only `session.add()`s each new
-  `MatchScore`, never flushes, so `row.id` is `None` until something forces a flush; `flush()` is
-  not a `commit()`, so this stays inside the existing "caller commits" convention). The two places
-  that already call `run_batch_scoring` and commit — `POST /score/batch`
-  (`app/api/routes/scoring.py`) and the dedicated backlog-draining job's `_run_scoring_job_async`
-  (`app/scheduler/service.py`, BUG24) — both now loop over `summary.grade_a_events` and call
-  `publish_grade_a` immediately after their existing `await session.commit()`. No third call site
-  exists.
+  added `remaining: int = 0` to this same frozen dataclass. `run_batch_scoring` computed it after
+  scoring completes, via an explicit `await session.flush()` (required: `score_offers_with_langchain`
+  only `session.add()`s each new `MatchScore`, never flushes, so `row.id` is `None` until something
+  forces a flush). The two places that already call `run_batch_scoring` and commit —
+  `POST /score/batch` and the dedicated backlog-draining job's `_run_scoring_job_async` (BUG24) —
+  both looped over `summary.grade_a_events` and called `publish_grade_a`. P3US29 renamed the field
+  to `score_events` and dropped the Grade-A-only filter — see below.
 - **`GET /scoring/events`** (`app/api/routes/scoring.py`): an `EventSourceResponse`
   (`sse-starlette`) whose generator `subscribe()`s on connect, loops on
   `asyncio.wait_for(queue.get(), timeout=15)` (the timeout only bounds how often it re-checks
   `request.is_disconnected()` when nothing has been published — it does not add latency to a
   genuinely published event, since `queue.get()` returns immediately once something is enqueued),
-  and `unsubscribe()`s in a `finally` so a disconnected client's queue is always removed — without
-  that, `publish_grade_a` would keep enqueueing onto a queue nobody drains, leaking memory for the
-  life of the process. Each `grade_a` event's `data` is `{score_id, offer_id, title, company}` as
-  JSON. Deliberately **no replay/catch-up/baseline bookkeeping**: because SSE only delivers events
-  published after a client connects, a freshly opened connection naturally receives nothing for
-  Grade A scores that already existed, and each event fires exactly once per subscriber — this is a
-  live notification stream, not an audit log, so a reconnect after a dropped connection (handled by
-  the browser's native `EventSource` auto-reconnect) never needs to catch up on anything missed.
+  and `unsubscribe()`s in a `finally` so a disconnected client's queue is always removed. This SSE
+  mechanism, the "no replay/catch-up/baseline" delivery guarantee, and the timeout/disconnect
+  handling are all unchanged by P3US29 — only the event's name and payload shape changed (see
+  below).
 - **Frontend**: `frontend/src/api/client.ts`'s `baseUrl` constant is now exported (the only change
   to that file) since `EventSource` cannot go through `openapi-fetch` and needs the same base URL
-  `apiClient` already uses. `frontend/src/hooks/useGradeAAlerts.ts` opens exactly one
-  `new EventSource(`${baseUrl}/scoring/events`)` in a `useEffect` with an empty dependency array,
-  called once from `App.tsx` above the `<Routes>` switch (not from any one page) — so exactly one
-  connection exists per browser tab regardless of which page is active, and it closes on unmount.
-  On each `grade_a` event it reads prefs fresh via `loadGradeAlertPrefs()` (not from closed-over
-  state, so a change saved from the Settings page takes effect on the very next event without this
-  hook needing to re-subscribe) and calls `playAlertSound(prefs.sound, prefs.muted ? 0 :
-  prefs.volume)` — muting passes volume `0` through rather than skipping the call, so the SSE
-  stream and its side effects keep running identically whether muted or not.
+  `apiClient` already uses. `frontend/src/hooks/useGradeAAlerts.ts` (replaced by `useScoreAlerts.ts`
+  in P3US29, see below) opened exactly one `new EventSource(`${baseUrl}/scoring/events`)` in a
+  `useEffect` with an empty dependency array, called once from `App.tsx` above the `<Routes>`
+  switch — so exactly one connection exists per browser tab regardless of which page is active, and
+  it closes on unmount. This connection-lifecycle shape is unchanged by P3US29.
 - **`frontend/src/lib/sound.ts`**: a small, dependency-free Web Audio synth (not a literal port of
   ZzFX, which optimizes for byte count over readability) — `playAlertSound(sound, volume)`
   constructs a `new AudioContext()`, schedules 1–3 short square/triangle-wave oscillator notes via a
   `GainNode` set from `volume`, and closes the context once the last note's envelope ends; `volume
   <= 0` is a no-op guard (belt-and-braces alongside the caller's own mute gate) that never
-  constructs an `AudioContext` at all.
-- **`frontend/src/lib/gradeAlertPrefs.ts`**: pure, React-free `localStorage` read/write, mirroring
-  the precedent set by `grade.ts`/`scoringConfigValidation.ts`. Sound choice, volume, and mute live
-  under a single JSON blob at `localStorage["recruflow.gradeAlertPrefs"]` — **client-only UX
-  preference, not server-side domain state** (unlike `Source.config_json.schedule` above, which is
-  persisted server-side and shared across browser sessions) — there is deliberately no backend
-  table or endpoint for these three fields. `loadGradeAlertPrefs()` falls back to defaults
-  (`{sound: 'chime', volume: 0.5, muted: false}`) on missing or malformed stored JSON rather than
-  throwing.
+  constructs an `AudioContext` at all. Completely untouched by P3US29 — only its caller changed
+  what gates the call.
+- **`frontend/src/lib/gradeAlertPrefs.ts`** (replaced by `scoreAlertPrefs.ts` in P3US29, see
+  below): pure, React-free `localStorage` read/write, mirroring the precedent set by
+  `grade.ts`/`scoringConfigValidation.ts`. Sound choice, volume, and mute lived under a single JSON
+  blob at `localStorage["recruflow.gradeAlertPrefs"]` — **client-only UX preference, not
+  server-side domain state** — there was deliberately no backend table or endpoint for these three
+  fields, a design P3US29 kept and extended.
 - **`frontend/src/components/NotificationsSection.tsx`**: a sound dropdown (`ALERT_SOUNDS`), a
   volume slider, a mute checkbox, and a "Test sound" button that calls `playAlertSound` directly —
   bypassing the SSE stream entirely, since it's a local preview, not a simulated event. Every change
-  handler updates local state and calls `saveGradeAlertPrefs` immediately; unlike the scoring-config
-  and cadence sections, there is no separate explicit Save step for this section.
+  handler updates local state and persists immediately; unlike the scoring-config and cadence
+  sections, there is no separate explicit Save step for this section. P3US29 added a fourth control
+  (minimum score for alert) to this same pattern — see below.
+
+### Percentage-based match score (P3US29)
+
+- **Purpose**: every prior Phase 3 story hardcoded, threaded through, or built UI around a
+  five-bucket letter grade, even though the Matcher already computed a continuous 0.0–1.0
+  `weighted_total` internally (P3US22) and discarded it the moment a letter was picked. This story
+  stops discarding it: `MatchScore.score_percent = round(weighted_total * 100)` is now the
+  headline field everywhere a `grade` used to be. It fully supersedes P3US27 (a plain percentage
+  needs no shared calibration table) and revises the grade-shaped acceptance criteria of
+  P3US21/P3US26/P3US28 to their percentage equivalents, without reopening any of their unrelated
+  design decisions (the "200 with null body" convention, the deal-breaker-detection-is-deterministic
+  ADR, the SSE broadcaster mechanism, the bounded-batch-plus-drain-job design) — those all stay
+  exactly as described above.
+- **Schema/DB**: `match_scores.grade` (`String(1)`) is dropped and `match_scores.score_percent`
+  (`Integer`, not null) added via two chained Alembic migrations
+  (`ae533f38f5b2_match_scores_score_percent`, `ae9db2ab1e4a_drop_scoring_config`). Because this
+  repo's real dev database already carried scored rows with no persisted `weighted_total` (only
+  the letter), the first migration backfills `score_percent` from a deterministic midpoint of each
+  grade's original default threshold band (A→92, B→77, C→62, D→47, F→20) before adding the
+  `NOT NULL` constraint — a one-time, documented approximation for pre-existing rows only; every
+  row scored after this migration runs gets a real computed value, and old rows are treated as
+  immutable historical records either way (this codebase's existing "never rewrite a persisted
+  score" convention). The second migration drops the now-orphaned `scoring_config` table outright
+  (no backfill needed — nothing downstream reads it anymore). `MatchGrade`/`GRADE_ORDER`
+  (`app/schemas/match_score.py`) are deleted; `GradeScale`/`_GRADE_THRESHOLDS`/`build_grade_scale`
+  and the `grade_scale` parameter on both `score_offer_with_langchain`/`score_offers_with_langchain`
+  (`app/llm/matcher.py`) are deleted outright — nothing constructs a grade from a threshold table
+  anymore. `_cap_grade_for_deal_breaker` is replaced by a pure `_cap_score_for_deal_breaker`, which
+  does exactly `min(score_percent, 40)` — the old grade-D cutoff, now a plain constant
+  (`_DEAL_BREAKER_SCORE_CAP`), not user-configurable.
+- **`scoring_config` deleted outright, not migrated**: the `ScoringConfig` schema,
+  `scoring_config_repo.py`, and `GET`/`PUT /scoring-config` are all removed — see the P3US27
+  section above.
+- **Offer list**: `app/schemas/offer.py`'s `OfferSummary.grade: str | None` is renamed/retyped to
+  `score_percent: int | None` (`ge=0, le=100`); `GET /offers`'s exact-match `grade` query param is
+  deleted outright (never consumed by the frontend, and no percentage-equivalent "exact match"
+  concept was ever requested); `min_grade` is replaced by `min_score: int` (0–100). The
+  `min_score` filter reuses the existing `latest_score` per-offer subquery, just comparing
+  `score_percent >= min_score` instead of a `GRADE_ORDER`-slice membership check — simpler than the
+  letter-grade version, and correct by construction for "unscored offers excluded": SQL's
+  `NULL >= min_score` evaluates to unknown/false, so no separate `IS NOT NULL` clause is needed.
+  Frontend: `GradeBadge`/`GradeFilter`/`lib/grade.ts` are deleted; `ScoreBadge`
+  (`frontend/src/components/ScoreBadge.tsx`) renders the numeric percentage (`"82%"`) with a
+  colour computed by a new `frontend/src/lib/scoreColor.ts` — a continuous
+  red→yellow→green HSL interpolation (`hue = score/100 * 120`, fixed 70%/42% saturation/lightness)
+  computed directly from `score_percent`, not a five-bucket class lookup, so no configuration is
+  involved in what colour a score renders. `ScoreFilter` replaces `GradeFilter` with a plain
+  0–100 numeric input (defaulting to unset). `OfferTable.tsx`'s `sortByGrade` becomes `sortByScore`
+  — a pure numeric comparison, still appending unscored offers last regardless of sort direction,
+  matching the prior nulls-last convention. The score drawer (`ScoreDrawer.tsx`) is otherwise
+  untouched: per-dimension scores stay 0–1 floats, rationale text is unaffected.
+- **Sound alert generalised, not just renamed**: `app/scoring/events.py`'s `GradeAEvent`/
+  `publish_grade_a` become `ScoreEvent`/`publish_score`, keeping the exact same
+  `asyncio.Queue`-per-subscriber broadcaster mechanism, plus one new field, `score_percent`. The
+  behavioural change is in *when* an event fires: `run_batch_scoring`'s `score_events` tuple
+  (renamed from `grade_a_events`) is now built unconditionally over every scored result, not
+  filtered to `row.grade == "A"` — every `MatchScore` committed by the batch job or
+  `POST /score/batch` now publishes exactly one `score` SSE event (renamed from `grade_a`),
+  carrying `{score_id, offer_id, title, company, score_percent}`. The "what counts as worth
+  alerting on" decision moves entirely to the client: `useScoreAlerts.ts` (replacing
+  `useGradeAAlerts.ts`) still opens exactly one `EventSource`, but now parses every event's JSON
+  payload and only calls `playAlertSound` when `score_percent >= ` the user's configured threshold,
+  read fresh from `localStorage` via `loadScoreAlertPrefs()` on *each* incoming event (not once at
+  mount) — this is what makes a threshold change in Settings take effect on the very next event
+  without the hook reconnecting. `frontend/src/lib/scoreAlertPrefs.ts` (renamed from
+  `gradeAlertPrefs.ts`, storage key `recruflow.scoreAlertPrefs` — a hard rename, not a migration;
+  any value under the old key is simply orphaned) gains a fourth field, `minScorePercent`
+  (default `90`). `NotificationsSection.tsx` gains a matching "Minimum score for alert (%)" numeric
+  input, using the same load-merge-persist pattern as the existing sound/volume/mute controls.
+  Muting and "Test sound" behave exactly as before — the threshold only gates whether an incoming
+  event plays a sound, never whether the SSE stream itself runs.
+- **Settings page cleanup**: the entire "Grade cutoffs" card (four `grade_a`..`grade_d` inputs,
+  `useScoringConfig`, `scoringConfigValidation.ts`) is removed from `SettingsPage.tsx` — there is
+  nothing left to configure at the domain level once grading is gone. The page now renders only
+  Fetch cadence (P3US28, unchanged) and Notifications (this story's updated section).
+- **Theme (`frontend/src/index.css`)**: the five `--color-grade-*` custom properties and
+  `.badge-grade-*` classes are removed (colour is now computed inline via a `style` prop, not a
+  CSS class); `--color-grade-none`/`.badge-grade-none` are renamed to `--color-score-none`/
+  `.badge-score-none`, keeping their declarations unchanged — the neutral "not yet scored" state
+  itself is unaffected by this story.
 
 ### Makefile targets
 

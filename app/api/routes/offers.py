@@ -6,7 +6,7 @@ from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
 from app.db.models import Source
 from app.db.profile_repo import get_active_profile
-from app.schemas.match_score import GRADE_ORDER, MatchScoreResponse
+from app.schemas.match_score import MatchScoreResponse
 from app.schemas.offer import OfferDetail, OfferListResponse, OfferSummary
 
 router = APIRouter()
@@ -20,7 +20,9 @@ MAX_PAGE_SIZE = 200
 _NO_ACTIVE_PROFILE_ID = -1
 
 
-def _offer_summary(offer: OfferModel, source: str, grade: str | None = None) -> OfferSummary:
+def _offer_summary(
+    offer: OfferModel, source: str, score_percent: int | None = None
+) -> OfferSummary:
     return OfferSummary(
         id=offer.id,
         source=source,
@@ -38,13 +40,13 @@ def _offer_summary(offer: OfferModel, source: str, grade: str | None = None) -> 
         posted_at=offer.posted_at,
         industry_tags=offer.industry_tags or [],
         created_at=offer.created_at,
-        grade=grade,
+        score_percent=score_percent,
     )
 
 
-def _offer_detail(offer: OfferModel, source: str, grade: str | None = None) -> OfferDetail:
+def _offer_detail(offer: OfferModel, source: str, score_percent: int | None = None) -> OfferDetail:
     return OfferDetail(
-        **_offer_summary(offer, source, grade).model_dump(),
+        **_offer_summary(offer, source, score_percent).model_dump(),
         description=offer.description,
         raw_payload=offer.raw_payload,
         updated_at=offer.updated_at,
@@ -57,7 +59,7 @@ def _match_score_response(row: MatchScoreModel) -> MatchScoreResponse:
         offer_id=row.offer_id,
         profile_id=row.profile_id,
         engine=row.engine,
-        grade=row.grade,
+        score_percent=row.score_percent,
         dimensions=row.dimensions,
         rationale=row.rationale,
         created_at=row.created_at,
@@ -84,21 +86,13 @@ async def list_offers(
         ge=0,
         description="Minimum salary (PLN, monthly gross) an offer's range must meet or exceed",
     ),
-    grade: str | None = Query(
+    min_score: int | None = Query(
         default=None,
-        min_length=1,
-        max_length=1,
+        ge=0,
+        le=100,
         description=(
-            "Single-letter match grade (A-F) to filter by; "
-            "matches against any recorded MatchScore for the offer"
-        ),
-    ),
-    min_grade: str | None = Query(
-        default=None,
-        pattern="^[ABCDF]$",
-        description=(
-            "Minimum acceptable match grade (A-F) for the active profile; keeps offers "
-            "graded at least this well (e.g. min_grade=B keeps A and B, drops C/D/F/unscored)"
+            "Minimum acceptable match score percentage for the active profile; keeps offers "
+            "scored at least this well (unscored offers are excluded whenever this is set)"
         ),
     ),
     limit: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
@@ -110,7 +104,7 @@ async def list_offers(
     ranked_scores = (
         select(
             MatchScoreModel.offer_id,
-            MatchScoreModel.grade,
+            MatchScoreModel.score_percent,
             func.row_number()
             .over(
                 partition_by=MatchScoreModel.offer_id,
@@ -122,13 +116,13 @@ async def list_offers(
         .subquery()
     )
     latest_score = (
-        select(ranked_scores.c.offer_id, ranked_scores.c.grade)
+        select(ranked_scores.c.offer_id, ranked_scores.c.score_percent)
         .where(ranked_scores.c.rn == 1)
         .subquery()
     )
 
     stmt = (
-        select(OfferModel, Source.connector, Source.name, latest_score.c.grade)
+        select(OfferModel, Source.connector, Source.name, latest_score.c.score_percent)
         .join(Source, OfferModel.source_id == Source.id)
         .outerjoin(latest_score, latest_score.c.offer_id == OfferModel.id)
     )
@@ -146,15 +140,8 @@ async def list_offers(
                 and_(OfferModel.salary_max.is_(None), OfferModel.salary_min >= min_salary),
             )
         )
-    if grade is not None:
-        stmt = stmt.where(
-            OfferModel.id.in_(
-                select(MatchScoreModel.offer_id).where(MatchScoreModel.grade == grade)
-            )
-        )
-    if min_grade is not None:
-        allowed_grades = GRADE_ORDER[: GRADE_ORDER.index(min_grade) + 1]
-        stmt = stmt.where(latest_score.c.grade.in_(allowed_grades))
+    if min_score is not None:
+        stmt = stmt.where(latest_score.c.score_percent >= min_score)
 
     total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
 
@@ -170,8 +157,8 @@ async def list_offers(
 
     rows = (await session.execute(page_stmt)).all()
     items = [
-        _offer_summary(offer, connector or name, offer_grade)
-        for offer, connector, name, offer_grade in rows
+        _offer_summary(offer, connector or name, offer_score_percent)
+        for offer, connector, name, offer_score_percent in rows
     ]
     return OfferListResponse(items=items, total=total)
 

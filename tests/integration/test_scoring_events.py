@@ -81,8 +81,7 @@ def _patch_matcher_for_fake_connector(
 async def _activate_fresh_profile(session: AsyncSession) -> None:
     # salary_min/salary_target must be set: score_offer_with_langchain caps
     # salary_fit at 0.5 for a profile with no salary preference, which would
-    # otherwise pull a "strong" 0.9-across-the-board fake LLM output below the
-    # grade A threshold.
+    # otherwise pull a "strong" 0.9-across-the-board fake LLM output down.
     await reset_test_profiles(session, [_TEST_PROFILE_NAME])
     profile = ProfileModel(
         name=_TEST_PROFILE_NAME,
@@ -94,14 +93,12 @@ async def _activate_fresh_profile(session: AsyncSession) -> None:
     await session.commit()
 
 
-async def _next_grade_a_event(
-    lines: AsyncIterator[str], *, timeout: float = 5
-) -> dict[str, object]:
+async def _next_score_event(lines: AsyncIterator[str], *, timeout: float = 5) -> dict[str, object]:
     async def _read() -> dict[str, object]:
         async for line in lines:
             if line.startswith("data:"):
                 return json.loads(line.removeprefix("data:").strip())  # type: ignore[no-any-return]
-        raise AssertionError("SSE stream ended before a grade_a event arrived")
+        raise AssertionError("SSE stream ended before a score event arrived")
 
     return await asyncio.wait_for(_read(), timeout=timeout)
 
@@ -133,7 +130,7 @@ async def sse_client() -> AsyncGenerator[httpx.AsyncClient, None]:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_grade_a_event_fires_exactly_once_on_new_grade_a_score(
+async def test_score_event_fires_exactly_once_on_new_score(
     sse_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     connector = f"fake-{uuid4()}"
@@ -156,17 +153,18 @@ async def test_grade_a_event_fires_exactly_once_on_new_grade_a_score(
             assert batch_response.status_code == 200
             assert batch_response.json()["scored"] == 1
 
-            event = await _next_grade_a_event(lines)
+            event = await _next_score_event(lines)
             assert event["offer_id"] == offer_id
             assert event["title"] == "Backend Engineer"
             assert event["company"] == "Acme"
+            assert isinstance(event["score_percent"], int)
 
             second_response = await sse_client.post("/score/batch")
             assert second_response.status_code == 200
             assert second_response.json()["scored"] == 0
 
             with pytest.raises(asyncio.TimeoutError):
-                await _next_grade_a_event(lines, timeout=1)
+                await _next_score_event(lines, timeout=1)
     finally:
         async with sessionmaker() as session:
             await _delete_sources_with_offers(session, [source_id])
@@ -174,7 +172,7 @@ async def test_grade_a_event_fires_exactly_once_on_new_grade_a_score(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_preexisting_grade_a_scores_do_not_fire_on_connect(
+async def test_preexisting_scores_do_not_fire_on_connect(
     sse_client: httpx.AsyncClient,
 ) -> None:
     engine = get_engine()
@@ -189,7 +187,7 @@ async def test_preexisting_grade_a_scores_do_not_fire_on_connect(
             offer_id=offer_id,
             profile_id=profile.id,
             engine="langchain",
-            grade="A",
+            score_percent=92,
             dimensions={},
         )
         session.add(score)
@@ -198,7 +196,7 @@ async def test_preexisting_grade_a_scores_do_not_fire_on_connect(
     try:
         async with sse_client.stream("GET", "/scoring/events") as stream:
             with pytest.raises(asyncio.TimeoutError):
-                await _next_grade_a_event(stream.aiter_lines(), timeout=1)
+                await _next_score_event(stream.aiter_lines(), timeout=1)
     finally:
         async with sessionmaker() as session:
             await _delete_sources_with_offers(session, [source_id])
@@ -230,8 +228,8 @@ async def test_multiple_subscribers_each_receive_the_event(
             batch_response = await sse_client.post("/score/batch")
             assert batch_response.status_code == 200
 
-            event_a = await _next_grade_a_event(stream_a.aiter_lines())
-            event_b = await _next_grade_a_event(stream_b.aiter_lines())
+            event_a = await _next_score_event(stream_a.aiter_lines())
+            event_b = await _next_score_event(stream_b.aiter_lines())
             assert event_a["offer_id"] == offer_id
             assert event_b["offer_id"] == offer_id
     finally:
@@ -241,7 +239,7 @@ async def test_multiple_subscribers_each_receive_the_event(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_non_grade_a_score_does_not_publish(
+async def test_low_score_still_publishes_an_event(
     sse_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     connector = f"fake-{uuid4()}"
@@ -252,7 +250,7 @@ async def test_non_grade_a_score_does_not_publish(
     async with sessionmaker() as session:
         await _activate_fresh_profile(session)
         source_id = await _create_source(session, connector=connector)
-        await _create_offer(session, source_id)
+        offer_id = await _create_offer(session, source_id)
         await session.commit()
 
     try:
@@ -263,8 +261,47 @@ async def test_non_grade_a_score_does_not_publish(
             assert batch_response.status_code == 200
             assert batch_response.json()["scored"] == 1
 
-            with pytest.raises(asyncio.TimeoutError):
-                await _next_grade_a_event(stream.aiter_lines(), timeout=1)
+            event = await _next_score_event(stream.aiter_lines())
+            assert event["offer_id"] == offer_id
+            score_percent = event["score_percent"]
+            assert isinstance(score_percent, int)
+            assert score_percent <= 40
+    finally:
+        async with sessionmaker() as session:
+            await _delete_sources_with_offers(session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_every_scored_offer_in_a_batch_publishes_its_own_event(
+    sse_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connector = f"fake-{uuid4()}"
+    _patch_matcher_for_fake_connector(monkeypatch, connector, _STRONG_OUTPUT_KWARGS)
+
+    engine = get_engine()
+    sessionmaker = get_sessionmaker(engine)
+    async with sessionmaker() as session:
+        await _activate_fresh_profile(session)
+        source_id = await _create_source(session, connector=connector)
+        offer_ids = {
+            await _create_offer(session, source_id),
+            await _create_offer(session, source_id),
+            await _create_offer(session, source_id),
+        }
+        await session.commit()
+
+    try:
+        async with sse_client.stream("GET", "/scoring/events") as stream:
+            lines = stream.aiter_lines()
+            await asyncio.sleep(0.1)
+
+            batch_response = await sse_client.post("/score/batch")
+            assert batch_response.status_code == 200
+            assert batch_response.json()["scored"] == 3
+
+            received_offer_ids = {(await _next_score_event(lines))["offer_id"] for _ in range(3)}
+            assert received_offer_ids == offer_ids
     finally:
         async with sessionmaker() as session:
             await _delete_sources_with_offers(session, [source_id])

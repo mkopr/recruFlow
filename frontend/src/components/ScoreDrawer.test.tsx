@@ -11,7 +11,7 @@ function makeScore(overrides: Partial<MatchScoreResponse> = {}): MatchScoreRespo
     offer_id: 1,
     profile_id: 1,
     engine: 'langchain',
-    grade: 'A',
+    score_percent: 92,
     dimensions: { skill_match: 0.8, salary_fit: 0.55 },
     rationale: 'Strong match on core skills.',
     created_at: '2026-01-01T00:00:00Z',

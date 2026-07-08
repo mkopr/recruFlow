@@ -12,7 +12,6 @@ from app.connectors import justjoinit
 from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
 from app.db.models import Profile as ProfileModel
-from app.db.models import ScoringConfig as ScoringConfigModel
 from app.db.models import Source
 from app.ingestion.types import IngestionResult
 from app.llm.matcher import _MatcherOutput
@@ -84,26 +83,6 @@ async def _create_profile(session: AsyncSession, *, is_active: bool = True) -> P
     return profile
 
 
-async def _reset_scoring_config(session: AsyncSession) -> None:
-    await session.execute(delete(ScoringConfigModel))
-    await session.commit()
-
-
-# All six dimensions at 0.6; the missing-salary conservatism cap (applied because the test
-# profile has no salary_min/salary_target) pulls salary_fit down to 0.5, giving a weighted
-# total of 0.575 -- "C" under the module's default thresholds but "A" under a custom scale
-# with grade_a=0.5, proving the grade actually came from persisted config, not the default.
-_MID_RANGE_OUTPUT_KWARGS = {
-    "skill_match": 0.6,
-    "salary_fit": 0.6,
-    "seniority_fit": 0.6,
-    "work_mode_location": 0.6,
-    "contract_type": 0.6,
-    "red_flags": 0.6,
-    "rationale": "Middling fit across all six dimensions.",
-}
-
-
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_run_batch_scoring_scores_all_unscored_offers_across_all_three_sources(
@@ -129,7 +108,10 @@ async def test_run_batch_scoring_scores_all_unscored_offers_across_all_three_sou
         )
         await db_session.commit()
 
-        assert summary == BatchScoringSummary(scored=3, skipped=0, failed=0)
+        assert summary.scored == 3
+        assert summary.skipped == 0
+        assert summary.failed == 0
+        assert len(summary.score_events) == 3
 
         rows = (
             (
@@ -173,7 +155,7 @@ async def test_run_batch_scoring_does_not_rescore_already_scored_pairs(
                 offer_id=already_scored_offer_id,
                 profile_id=profile.id,
                 engine="langchain",
-                grade="B",
+                score_percent=77,
                 dimensions={},
                 rationale="pre-existing score",
             )
@@ -444,102 +426,6 @@ async def test_post_scheduler_run_triggers_batch_scoring_even_when_connector_err
     assert response.status_code == 200
     assert response.json()["status"] == "error"
     assert len(calls) == 1
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_run_batch_scoring_uses_persisted_scoring_config_thresholds(
-    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    connector = _fake_connector()
-    _isolate_langchain_sources(monkeypatch, connector)
-
-    await _reset_scoring_config(db_session)
-    db_session.add(ScoringConfigModel(grade_a=0.5, grade_b=0.4, grade_c=0.3, grade_d=0.2))
-    await _deactivate_all_profiles(db_session)
-    source_id = await _create_source(db_session, connector=connector)
-    try:
-        await _create_offer(db_session, source_id)
-        profile = await _create_profile(db_session)
-        await db_session.commit()
-
-        summary = await run_batch_scoring(
-            db_session,
-            chain_factory=lambda: _FakeChain(_MatcherOutput(**_MID_RANGE_OUTPUT_KWARGS)),
-        )
-        await db_session.commit()
-
-        assert summary.scored == 1
-        row = (
-            await db_session.execute(
-                select(MatchScoreModel).where(MatchScoreModel.profile_id == profile.id)
-            )
-        ).scalar_one()
-        assert row.grade == "A"
-    finally:
-        await _delete_sources_and_dependents(db_session, [source_id])
-        await _reset_scoring_config(db_session)
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_changing_scoring_config_does_not_rewrite_existing_match_score_grade(
-    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    connector = _fake_connector()
-    _isolate_langchain_sources(monkeypatch, connector)
-
-    await _reset_scoring_config(db_session)
-    db_session.add(ScoringConfigModel(grade_a=0.85, grade_b=0.70, grade_c=0.55, grade_d=0.40))
-    await _deactivate_all_profiles(db_session)
-    source_id = await _create_source(db_session, connector=connector)
-    try:
-        await _create_offer(db_session, source_id)
-        profile = await _create_profile(db_session)
-        await db_session.commit()
-
-        summary = await run_batch_scoring(
-            db_session,
-            chain_factory=lambda: _FakeChain(_MatcherOutput(**_MID_RANGE_OUTPUT_KWARGS)),
-        )
-        await db_session.commit()
-        assert summary.scored == 1
-
-        rows_before = (
-            (
-                await db_session.execute(
-                    select(MatchScoreModel).where(MatchScoreModel.profile_id == profile.id)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        assert len(rows_before) == 1
-        match_score_id = rows_before[0].id
-        original_grade = rows_before[0].grade
-
-        config_row = (await db_session.execute(select(ScoringConfigModel))).scalar_one()
-        config_row.grade_a, config_row.grade_b = 0.2, 0.15
-        config_row.grade_c, config_row.grade_d = 0.1, 0.05
-        await db_session.commit()
-
-        refetched = await db_session.get(MatchScoreModel, match_score_id)
-        assert refetched is not None
-        assert refetched.grade == original_grade
-
-        rows_after = (
-            (
-                await db_session.execute(
-                    select(MatchScoreModel).where(MatchScoreModel.profile_id == profile.id)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        assert len(rows_after) == 1
-    finally:
-        await _delete_sources_and_dependents(db_session, [source_id])
-        await _reset_scoring_config(db_session)
 
 
 @pytest.mark.integration

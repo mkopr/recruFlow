@@ -243,24 +243,6 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  '/scoring-config': {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    /** Get Scoring Config */
-    get: operations['get_scoring_config_scoring_config_get'];
-    /** Put Scoring Config */
-    put: operations['put_scoring_config_scoring_config_put'];
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
   '/scoring/events': {
     parameters: {
       query?: never;
@@ -386,8 +368,8 @@ export interface components {
       profile_id: number;
       /** Engine */
       engine: string;
-      /** Grade */
-      grade: string;
+      /** Score Percent */
+      score_percent: number;
       /** Dimensions */
       dimensions: {
         [key: string]: number;
@@ -438,10 +420,10 @@ export interface components {
        */
       created_at: string;
       /**
-       * Grade
-       * @description Active profile's most recent match grade for this offer, if scored
+       * Score Percent
+       * @description Active profile's most recent match score (0-100) for this offer, if scored
        */
-      grade?: string | null;
+      score_percent?: number | null;
       /** Description */
       description: string | null;
       /** Raw Payload */
@@ -502,10 +484,10 @@ export interface components {
        */
       created_at: string;
       /**
-       * Grade
-       * @description Active profile's most recent match grade for this offer, if scored
+       * Score Percent
+       * @description Active profile's most recent match score (0-100) for this offer, if scored
        */
-      grade?: string | null;
+      score_percent?: number | null;
     };
     /** PastRole */
     PastRole: {
@@ -600,17 +582,6 @@ export interface components {
     SchedulerStatusResponse: {
       /** Sources */
       sources: components['schemas']['SourceStatus'][];
-    };
-    /** ScoringConfig */
-    ScoringConfig: {
-      /** Grade A */
-      grade_a: number;
-      /** Grade B */
-      grade_b: number;
-      /** Grade C */
-      grade_c: number;
-      /** Grade D */
-      grade_d: number;
     };
     /** ScoringStatusResponse */
     ScoringStatusResponse: {
@@ -903,10 +874,8 @@ export interface operations {
         seniority?: string | null;
         /** @description Minimum salary (PLN, monthly gross) an offer's range must meet or exceed */
         min_salary?: number | null;
-        /** @description Single-letter match grade (A-F) to filter by; matches against any recorded MatchScore for the offer */
-        grade?: string | null;
-        /** @description Minimum acceptable match grade (A-F) for the active profile; keeps offers graded at least this well (e.g. min_grade=B keeps A and B, drops C/D/F/unscored) */
-        min_grade?: string | null;
+        /** @description Minimum acceptable match score percentage for the active profile; keeps offers scored at least this well (unscored offers are excluded whenever this is set) */
+        min_score?: number | null;
         limit?: number;
         offset?: number;
       };
@@ -1125,59 +1094,6 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ScoringStatusResponse'];
-        };
-      };
-    };
-  };
-  get_scoring_config_scoring_config_get: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['ScoringConfig'];
-        };
-      };
-    };
-  };
-  put_scoring_config_scoring_config_put: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        'application/json': components['schemas']['ScoringConfig'];
-      };
-    };
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['ScoringConfig'];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['HTTPValidationError'];
         };
       };
     };

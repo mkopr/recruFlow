@@ -1,5 +1,4 @@
 import { apiClient } from './client';
-import type { Grade } from '../lib/grade';
 import type { components } from './schema';
 
 export type OfferSummary = components['schemas']['OfferSummary'];
@@ -11,7 +10,7 @@ export interface OfferListFilters {
   remote?: boolean;
   seniority?: string;
   minSalary?: number;
-  minGrade?: Grade;
+  minScore?: number;
 }
 
 export interface OfferListPage {
@@ -30,7 +29,7 @@ export async function fetchOffers(
         remote: filters.remote,
         seniority: filters.seniority,
         min_salary: filters.minSalary,
-        min_grade: filters.minGrade,
+        min_score: filters.minScore,
         limit: page.limit,
         offset: page.offset,
       },

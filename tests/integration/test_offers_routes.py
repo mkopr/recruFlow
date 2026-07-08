@@ -190,35 +190,6 @@ async def test_list_offers_filters_by_min_salary_meets_or_exceeds(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_list_offers_filters_by_grade(
-    client: httpx.AsyncClient, db_session: AsyncSession
-) -> None:
-    source_id = await _create_source(db_session)
-    scored_offer = await _create_offer(db_session, source_id)
-    unscored_offer = await _create_offer(db_session, source_id)
-    profile = Profile(name=f"profile-{uuid4()}", data={})
-    db_session.add(profile)
-    await db_session.flush()
-    db_session.add(
-        MatchScore(
-            offer_id=scored_offer,
-            profile_id=profile.id,
-            engine="langchain",
-            grade="A",
-            dimensions={},
-        )
-    )
-    await db_session.commit()
-
-    response = await client.get("/offers", params={"grade": "A"})
-
-    ids = {entry["id"] for entry in response.json()["items"]}
-    assert scored_offer in ids
-    assert unscored_offer not in ids
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
 async def test_list_offers_unknown_source_filter_returns_empty_list_not_error(
     client: httpx.AsyncClient,
 ) -> None:
@@ -312,11 +283,11 @@ async def test_list_offers_rejects_page_size_above_max(client: httpx.AsyncClient
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_list_offers_includes_active_profile_grade_inline(
+async def test_list_offers_includes_active_profile_score_percent_inline(
     client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
     await _deactivate_all_profiles(db_session)
-    connector = f"grade-inline-{uuid4()}"
+    connector = f"score-inline-{uuid4()}"
     source_id = await _create_source(db_session, connector=connector)
     scored_offer = await _create_offer(db_session, source_id)
     unscored_offer = await _create_offer(db_session, source_id)
@@ -328,7 +299,7 @@ async def test_list_offers_includes_active_profile_grade_inline(
             offer_id=scored_offer,
             profile_id=profile.id,
             engine="langchain",
-            grade="B",
+            score_percent=77,
             dimensions={},
         )
     )
@@ -337,8 +308,8 @@ async def test_list_offers_includes_active_profile_grade_inline(
     try:
         response = await client.get("/offers", params={"source": connector})
 
-        by_id = {entry["id"]: entry["grade"] for entry in response.json()["items"]}
-        assert by_id[scored_offer] == "B"
+        by_id = {entry["id"]: entry["score_percent"] for entry in response.json()["items"]}
+        assert by_id[scored_offer] == 77
         assert by_id[unscored_offer] is None
     finally:
         await _delete_sources_with_offers(db_session, [source_id])
@@ -346,11 +317,11 @@ async def test_list_offers_includes_active_profile_grade_inline(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_list_offers_inline_grade_uses_most_recent_score_for_active_profile(
+async def test_list_offers_inline_score_percent_uses_most_recent_score_for_active_profile(
     client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
     await _deactivate_all_profiles(db_session)
-    connector = f"grade-latest-{uuid4()}"
+    connector = f"score-latest-{uuid4()}"
     source_id = await _create_source(db_session, connector=connector)
     offer_id = await _create_offer(db_session, source_id)
     profile = Profile(name=f"profile-{uuid4()}", is_active=True, data={})
@@ -362,7 +333,7 @@ async def test_list_offers_inline_grade_uses_most_recent_score_for_active_profil
                 offer_id=offer_id,
                 profile_id=profile.id,
                 engine="langchain",
-                grade="C",
+                score_percent=62,
                 dimensions={},
                 created_at=datetime(2026, 6, 1, tzinfo=UTC),
             ),
@@ -370,7 +341,7 @@ async def test_list_offers_inline_grade_uses_most_recent_score_for_active_profil
                 offer_id=offer_id,
                 profile_id=profile.id,
                 engine="langchain",
-                grade="A",
+                score_percent=92,
                 dimensions={},
                 created_at=datetime(2026, 6, 2, tzinfo=UTC),
             ),
@@ -381,23 +352,23 @@ async def test_list_offers_inline_grade_uses_most_recent_score_for_active_profil
     try:
         response = await client.get("/offers", params={"source": connector})
 
-        by_id = {entry["id"]: entry["grade"] for entry in response.json()["items"]}
-        assert by_id[offer_id] == "A"
+        by_id = {entry["id"]: entry["score_percent"] for entry in response.json()["items"]}
+        assert by_id[offer_id] == 92
     finally:
         await _delete_sources_with_offers(db_session, [source_id])
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_list_offers_min_grade_keeps_offers_at_or_better(
+async def test_list_offers_min_score_keeps_offers_at_or_better(
     client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
     await _deactivate_all_profiles(db_session)
-    connector = f"min-grade-{uuid4()}"
+    connector = f"min-score-{uuid4()}"
     source_id = await _create_source(db_session, connector=connector)
-    grade_a = await _create_offer(db_session, source_id)
-    grade_b = await _create_offer(db_session, source_id)
-    grade_d = await _create_offer(db_session, source_id)
+    score_90 = await _create_offer(db_session, source_id)
+    score_55 = await _create_offer(db_session, source_id)
+    score_20 = await _create_offer(db_session, source_id)
     unscored = await _create_offer(db_session, source_id)
     profile = Profile(name=f"profile-{uuid4()}", is_active=True, data={})
     db_session.add(profile)
@@ -405,24 +376,24 @@ async def test_list_offers_min_grade_keeps_offers_at_or_better(
     db_session.add_all(
         [
             MatchScore(
-                offer_id=grade_a,
+                offer_id=score_90,
                 profile_id=profile.id,
                 engine="langchain",
-                grade="A",
+                score_percent=90,
                 dimensions={},
             ),
             MatchScore(
-                offer_id=grade_b,
+                offer_id=score_55,
                 profile_id=profile.id,
                 engine="langchain",
-                grade="B",
+                score_percent=55,
                 dimensions={},
             ),
             MatchScore(
-                offer_id=grade_d,
+                offer_id=score_20,
                 profile_id=profile.id,
                 engine="langchain",
-                grade="D",
+                score_percent=20,
                 dimensions={},
             ),
         ]
@@ -430,11 +401,11 @@ async def test_list_offers_min_grade_keeps_offers_at_or_better(
     await db_session.commit()
 
     try:
-        response = await client.get("/offers", params={"source": connector, "min_grade": "B"})
+        response = await client.get("/offers", params={"source": connector, "min_score": 50})
 
         ids = {entry["id"] for entry in response.json()["items"]}
-        assert ids == {grade_a, grade_b}
-        assert grade_d not in ids
+        assert ids == {score_90, score_55}
+        assert score_20 not in ids
         assert unscored not in ids
     finally:
         await _delete_sources_with_offers(db_session, [source_id])
@@ -442,7 +413,7 @@ async def test_list_offers_min_grade_keeps_offers_at_or_better(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_list_offers_min_grade_scopes_to_active_profile_only(
+async def test_list_offers_min_score_scopes_to_active_profile_only(
     client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
     await _deactivate_all_profiles(db_session)
@@ -458,14 +429,14 @@ async def test_list_offers_min_grade_scopes_to_active_profile_only(
             offer_id=offer_id,
             profile_id=other_profile.id,
             engine="langchain",
-            grade="A",
+            score_percent=95,
             dimensions={},
         )
     )
     await db_session.commit()
 
     try:
-        response = await client.get("/offers", params={"source": connector, "min_grade": "A"})
+        response = await client.get("/offers", params={"source": connector, "min_score": 90})
 
         ids = {entry["id"] for entry in response.json()["items"]}
         assert offer_id not in ids
@@ -535,7 +506,7 @@ async def test_get_offer_score_returns_most_recent_score_for_active_profile(
         offer_id=offer_id,
         profile_id=profile.id,
         engine="langchain",
-        grade="C",
+        score_percent=62,
         dimensions={},
         rationale="earlier",
         created_at=datetime(2026, 6, 1, tzinfo=UTC),
@@ -544,7 +515,7 @@ async def test_get_offer_score_returns_most_recent_score_for_active_profile(
         offer_id=offer_id,
         profile_id=profile.id,
         engine="langchain",
-        grade="A",
+        score_percent=92,
         dimensions={},
         rationale="later",
         created_at=datetime(2026, 6, 2, tzinfo=UTC),
@@ -557,7 +528,7 @@ async def test_get_offer_score_returns_most_recent_score_for_active_profile(
     assert response.status_code == 200
     body = response.json()
     assert body["id"] == later.id
-    assert body["grade"] == "A"
+    assert body["score_percent"] == 92
 
 
 @pytest.mark.integration
@@ -620,7 +591,7 @@ async def test_rescoring_offer_inserts_new_row_without_overwriting_existing(
             offer_id=offer_id,
             profile_id=profile.id,
             engine="langchain",
-            grade="B",
+            score_percent=77,
             dimensions={},
             rationale="first",
             created_at=datetime(2026, 6, 1, tzinfo=UTC),
@@ -633,7 +604,7 @@ async def test_rescoring_offer_inserts_new_row_without_overwriting_existing(
             offer_id=offer_id,
             profile_id=profile.id,
             engine="langchain",
-            grade="A",
+            score_percent=92,
             dimensions={},
             rationale="second",
             created_at=datetime(2026, 6, 1, tzinfo=UTC) + timedelta(hours=1),

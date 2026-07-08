@@ -62,7 +62,7 @@ describe('useOffers', () => {
           remote: undefined,
           seniority: undefined,
           minSalary: 150,
-          minGrade: undefined,
+          minScore: undefined,
         },
         PAGE,
       );
@@ -91,7 +91,7 @@ describe('useOffers', () => {
           remote: undefined,
           seniority: undefined,
           minSalary: undefined,
-          minGrade: undefined,
+          minScore: undefined,
         },
         { limit: 50, offset: 50 },
       );

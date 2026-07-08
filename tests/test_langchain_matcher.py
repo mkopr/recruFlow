@@ -3,19 +3,16 @@ import pytest
 from app.connectors.solid_jobs import map_solid_jobs_offer
 from app.llm.matcher import (
     DIMENSION_WEIGHTS,
-    GradeScale,
     MatcherError,
-    _cap_grade_for_deal_breaker,
+    _cap_score_for_deal_breaker,
     _deal_breaker_hit,
     _MatcherOutput,
     _weighted_total,
-    build_grade_scale,
     is_langchain_source,
     score_offer_with_langchain,
 )
 from app.schemas.offer import Offer
 from app.schemas.profile import Profile
-from app.schemas.scoring_config import ScoringConfig
 from langchain_core.messages import BaseMessage
 
 _STRONG_OUTPUT_KWARGS = {
@@ -40,6 +37,16 @@ _LOW_OUTPUT_KWARGS = {
     "contract_type": 0.1,
     "red_flags": 0.1,
     "rationale": "Poor fit across every dimension.",
+}
+
+_MODERATELY_LOW_OUTPUT_KWARGS = {
+    "skill_match": 0.15,
+    "salary_fit": 0.15,
+    "seniority_fit": 0.15,
+    "work_mode_location": 0.15,
+    "contract_type": 0.15,
+    "red_flags": 0.15,
+    "rationale": "Weak fit across every dimension.",
 }
 
 
@@ -97,11 +104,29 @@ async def test_score_offer_with_langchain_produces_valid_match_score_with_langch
     )
 
     assert score.engine == "langchain"
+    assert 0 <= score.score_percent <= 100
     assert set(score.dimensions) == set(DIMENSION_WEIGHTS)
 
 
 @pytest.mark.asyncio
-async def test_score_offer_with_langchain_caps_grade_at_d_when_deal_breaker_matched() -> None:
+async def test_score_offer_with_langchain_computes_score_percent_from_weighted_total() -> None:
+    output = _MatcherOutput(**_STRONG_OUTPUT_KWARGS)
+
+    score = await score_offer_with_langchain(
+        offer_id=1,
+        profile_id=2,
+        profile=_profile(),
+        offer=_offer(),
+        chain_factory=lambda: _FakeChain(output),
+    )
+
+    assert score.score_percent == round(
+        _weighted_total(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)) * 100
+    )
+
+
+@pytest.mark.asyncio
+async def test_score_offer_with_langchain_caps_score_at_40_when_deal_breaker_matched() -> None:
     output = _MatcherOutput(**_STRONG_OUTPUT_KWARGS)
     profile = _profile(deal_breakers=["on-site only"])
     offer = _offer(description="This is an On-Site Only role, no exceptions.")
@@ -114,8 +139,30 @@ async def test_score_offer_with_langchain_caps_grade_at_d_when_deal_breaker_matc
         chain_factory=lambda: _FakeChain(output),
     )
 
-    assert score.grade in ("D", "F")
+    assert score.score_percent == 40
     assert "on-site only" in score.rationale.lower()
+
+
+@pytest.mark.asyncio
+async def test_score_offer_with_langchain_deal_breaker_cap_leaves_already_low_score_unchanged() -> (
+    None
+):
+    output = _MatcherOutput(**_MODERATELY_LOW_OUTPUT_KWARGS)
+    profile = _profile(deal_breakers=["on-site only"])
+    offer = _offer(description="This is an On-Site Only role, no exceptions.")
+
+    uncapped = round(_weighted_total(_MatcherOutput(**_MODERATELY_LOW_OUTPUT_KWARGS)) * 100)
+    assert uncapped < 40
+
+    score = await score_offer_with_langchain(
+        offer_id=1,
+        profile_id=2,
+        profile=profile,
+        offer=offer,
+        chain_factory=lambda: _FakeChain(output),
+    )
+
+    assert score.score_percent == uncapped
 
 
 @pytest.mark.asyncio
@@ -130,7 +177,7 @@ async def test_score_offer_with_langchain_no_deal_breaker_high_fit_scores_well()
         chain_factory=lambda: _FakeChain(output),
     )
 
-    assert score.grade in ("A", "B")
+    assert score.score_percent >= 70
 
 
 @pytest.mark.asyncio
@@ -145,7 +192,7 @@ async def test_score_offer_with_langchain_low_fit_scores_poorly() -> None:
         chain_factory=lambda: _FakeChain(output),
     )
 
-    assert score.grade in ("D", "F")
+    assert score.score_percent <= 40
 
 
 @pytest.mark.asyncio
@@ -205,53 +252,29 @@ def test_weighted_total_matches_manual_calculation() -> None:
     assert _weighted_total(output) == pytest.approx(expected)
 
 
-@pytest.mark.parametrize(
-    ("weighted_total", "expected_grade"),
-    [
-        (0.85, "A"),
-        (0.849999, "B"),
-        (0.70, "B"),
-        (0.699999, "C"),
-        (0.55, "C"),
-        (0.549999, "D"),
-        (0.40, "D"),
-        (0.399999, "F"),
-        (0.0, "F"),
-    ],
-)
-def test_grade_scale_boundaries(weighted_total: float, expected_grade: str) -> None:
-    assert GradeScale().grade_for(weighted_total) == expected_grade
+@pytest.mark.asyncio
+async def test_score_offer_with_langchain_rejects_unknown_grade_scale_kwarg() -> None:
+    output = _MatcherOutput(**_STRONG_OUTPUT_KWARGS)
 
-
-def test_grade_scale_accepts_custom_thresholds() -> None:
-    custom_scale = GradeScale(thresholds=((0.5, "A"), (0.3, "B")))
-
-    assert custom_scale.grade_for(0.5) == "A"
-    assert custom_scale.grade_for(0.35) == "B"
-    assert custom_scale.grade_for(0.1) == "F"
-
-
-def test_build_grade_scale_uses_config_thresholds() -> None:
-    config = ScoringConfig(grade_a=0.9, grade_b=0.75, grade_c=0.6, grade_d=0.45)
-    scale = build_grade_scale(config)
-
-    assert scale.grade_for(0.9) == "A"
-    assert scale.grade_for(0.5) == "D"
-
-
-def test_build_grade_scale_below_grade_d_returns_f() -> None:
-    config = ScoringConfig(grade_a=0.9, grade_b=0.75, grade_c=0.6, grade_d=0.45)
-    scale = build_grade_scale(config)
-
-    assert scale.grade_for(0.4) == "F"
+    with pytest.raises(TypeError):
+        await score_offer_with_langchain(
+            offer_id=1,
+            profile_id=2,
+            profile=_profile(),
+            offer=_offer(),
+            chain_factory=lambda: _FakeChain(output),
+            grade_scale=object(),  # type: ignore[call-arg]
+        )
 
 
 @pytest.mark.parametrize(
-    ("grade", "expected"),
-    [("A", "D"), ("B", "D"), ("C", "D"), ("D", "D"), ("F", "F")],
+    ("score_percent", "expected"),
+    [(10, 10), (39, 39), (40, 40), (60, 40), (92, 40)],
 )
-def test_cap_grade_for_deal_breaker_only_lowers_never_raises(grade: str, expected: str) -> None:
-    assert _cap_grade_for_deal_breaker(grade) == expected  # type: ignore[arg-type]
+def test_cap_score_for_deal_breaker_only_lowers_never_raises(
+    score_percent: int, expected: int
+) -> None:
+    assert _cap_score_for_deal_breaker(score_percent) == expected
 
 
 def test_deal_breaker_word_boundary_avoids_java_javascript_false_positive() -> None:

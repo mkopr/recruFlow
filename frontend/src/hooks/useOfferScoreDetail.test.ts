@@ -16,7 +16,7 @@ function makeScore(overrides: Partial<offerScoreApi.MatchScoreResponse> = {}) {
     offer_id: 1,
     profile_id: 1,
     engine: 'langchain',
-    grade: 'A',
+    score_percent: 92,
     dimensions: { skill_match: 0.9 },
     rationale: 'Great fit',
     created_at: '2026-01-01T00:00:00Z',
@@ -51,18 +51,18 @@ describe('useOfferScoreDetail', () => {
 
   it('refetches when the offer id changes', async () => {
     fetchOfferScoreMock.mockImplementation((id: number) =>
-      Promise.resolve(makeScore({ offer_id: id, grade: id === 1 ? 'A' : 'B' })),
+      Promise.resolve(makeScore({ offer_id: id, score_percent: id === 1 ? 92 : 62 })),
     );
 
     const { result, rerender } = renderHook((id: number | null) => useOfferScoreDetail(id), {
       initialProps: 1,
     });
 
-    await waitFor(() => expect(result.current.score?.grade).toBe('A'));
+    await waitFor(() => expect(result.current.score?.score_percent).toBe(92));
 
     rerender(2);
 
-    await waitFor(() => expect(result.current.score?.grade).toBe('B'));
+    await waitFor(() => expect(result.current.score?.score_percent).toBe(62));
     expect(fetchOfferScoreMock).toHaveBeenCalledTimes(2);
   });
 

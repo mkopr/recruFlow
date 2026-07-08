@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 
 import type { MatchScoreResponse } from '../api/offerScore';
-import { GradeBadge } from './GradeBadge';
+import { ScoreBadge } from './ScoreBadge';
 
 interface ScoreDrawerProps {
   score: MatchScoreResponse;
@@ -43,7 +43,7 @@ export function ScoreDrawer({ score, offerTitle, onClose }: ScoreDrawerProps) {
           <div>
             <h2 className="text-lg font-semibold">{offerTitle}</h2>
             <div className="mt-2">
-              <GradeBadge grade={score.grade} />
+              <ScoreBadge scorePercent={score.score_percent} />
             </div>
           </div>
           <button type="button" className="btn" onClick={onClose} aria-label="Close">

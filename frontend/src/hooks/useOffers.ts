@@ -31,7 +31,7 @@ export function useOffers(filters: OfferListFilters, page: OfferListPage): UseOf
   const [error, setError] = useState<string | null>(null);
   const isFirstRun = useRef(true);
 
-  const { source, remote, seniority, minSalary, minGrade } = filters;
+  const { source, remote, seniority, minSalary, minScore } = filters;
   const { limit, offset } = page;
 
   // react-hooks/set-state-in-effect forbids an effect calling a hoisted
@@ -45,7 +45,7 @@ export function useOffers(filters: OfferListFilters, page: OfferListPage): UseOf
       setLoading(true);
       try {
         const result = await fetchOffers(
-          { source, remote, seniority, minSalary, minGrade },
+          { source, remote, seniority, minSalary, minScore },
           { limit, offset },
         );
         if (!ignore) {
@@ -77,11 +77,11 @@ export function useOffers(filters: OfferListFilters, page: OfferListPage): UseOf
       ignore = true;
       clearTimeout(timer);
     };
-  }, [source, remote, seniority, minSalary, minGrade, limit, offset]);
+  }, [source, remote, seniority, minSalary, minScore, limit, offset]);
 
   const refetch = useCallback(() => {
     setLoading(true);
-    fetchOffers({ source, remote, seniority, minSalary, minGrade }, { limit, offset })
+    fetchOffers({ source, remote, seniority, minSalary, minScore }, { limit, offset })
       .then((result) => {
         setOffers(result.items);
         setTotal(result.total);
@@ -93,7 +93,7 @@ export function useOffers(filters: OfferListFilters, page: OfferListPage): UseOf
       .finally(() => {
         setLoading(false);
       });
-  }, [source, remote, seniority, minSalary, minGrade, limit, offset]);
+  }, [source, remote, seniority, minSalary, minScore, limit, offset]);
 
   return { offers, total, loading, error, refetch };
 }

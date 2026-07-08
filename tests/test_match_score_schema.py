@@ -10,7 +10,7 @@ def test_match_score_accepts_valid_payload_with_langchain_engine() -> None:
         offer_id=1,
         profile_id=1,
         engine="langchain",
-        grade="B",
+        score_percent=75,
         dimensions={"skill_match": 0.8},
         rationale="Good skill overlap",
     )
@@ -23,7 +23,7 @@ def test_match_score_accepts_valid_payload_with_sjctl_engine() -> None:
         offer_id=1,
         profile_id=1,
         engine="sjctl",
-        grade="B",
+        score_percent=75,
         dimensions={"skill_match": 0.8},
         rationale="Good skill overlap",
     )
@@ -37,19 +37,31 @@ def test_match_score_rejects_invalid_engine() -> None:
             offer_id=1,
             profile_id=1,
             engine="other",
-            grade="B",
+            score_percent=75,
             dimensions={},
             rationale="text",
         )
 
 
-def test_match_score_rejects_invalid_grade() -> None:
+def test_match_score_rejects_score_percent_below_zero() -> None:
     with pytest.raises(ValidationError):
         MatchScore(
             offer_id=1,
             profile_id=1,
             engine="langchain",
-            grade="Z",
+            score_percent=-1,
+            dimensions={},
+            rationale="text",
+        )
+
+
+def test_match_score_rejects_score_percent_above_100() -> None:
+    with pytest.raises(ValidationError):
+        MatchScore(
+            offer_id=1,
+            profile_id=1,
+            engine="langchain",
+            score_percent=101,
             dimensions={},
             rationale="text",
         )
@@ -62,7 +74,7 @@ def test_match_score_accepts_arbitrary_dimension_keys_without_dropping() -> None
         offer_id=1,
         profile_id=1,
         engine="langchain",
-        grade="A",
+        score_percent=90,
         dimensions=dimensions,
         rationale="text",
     )
@@ -76,7 +88,7 @@ def test_match_score_rejects_non_positive_offer_id() -> None:
             offer_id=0,
             profile_id=1,
             engine="langchain",
-            grade="A",
+            score_percent=90,
             dimensions={},
             rationale="text",
         )
@@ -88,7 +100,7 @@ def test_match_score_rejects_non_positive_profile_id() -> None:
             offer_id=1,
             profile_id=0,
             engine="langchain",
-            grade="A",
+            score_percent=90,
             dimensions={},
             rationale="text",
         )
@@ -99,7 +111,7 @@ def test_match_score_created_at_defaults_when_omitted() -> None:
         offer_id=1,
         profile_id=1,
         engine="langchain",
-        grade="A",
+        score_percent=90,
         dimensions={},
         rationale="text",
     )
@@ -113,7 +125,24 @@ def test_match_score_rejects_non_numeric_dimension_value() -> None:
             offer_id=1,
             profile_id=1,
             engine="langchain",
-            grade="A",
+            score_percent=90,
             dimensions={"skill_match": "high"},
             rationale="text",
         )
+
+
+def test_match_score_has_no_grade_field() -> None:
+    score = MatchScore.model_validate(
+        {
+            "offer_id": 1,
+            "profile_id": 1,
+            "engine": "langchain",
+            "score_percent": 80,
+            "dimensions": {},
+            "rationale": "text",
+            "grade": "B",
+        }
+    )
+
+    assert hasattr(score, "grade") is False
+    assert "grade" not in score.model_dump()

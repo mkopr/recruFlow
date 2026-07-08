@@ -84,7 +84,7 @@ async def test_reset_test_profiles_succeeds_when_a_match_score_references_the_de
             offer_id=offer_id,
             profile_id=profile_id,
             engine="langchain",
-            grade="A",
+            score_percent=92,
             dimensions={},
             rationale="test",
         )

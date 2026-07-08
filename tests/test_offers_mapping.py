@@ -30,10 +30,10 @@ def test_offer_summary_maps_all_scalar_fields() -> None:
         created_at=created_at,
     )
 
-    result = _offer_summary(offer, "justjoinit", "B")
+    result = _offer_summary(offer, "justjoinit", 77)
 
     assert result.id == 1
-    assert result.grade == "B"
+    assert result.score_percent == 77
     assert result.source == "justjoinit"
     assert result.external_id == "ext-1"
     assert result.canonical_url == "https://example.com/jobs/1"
@@ -72,7 +72,7 @@ def test_offer_summary_uses_given_source_label_verbatim() -> None:
     assert result.contract_type is None
     assert result.posted_at is None
     assert result.industry_tags == []
-    assert result.grade is None
+    assert result.score_percent is None
 
 
 def test_offer_detail_includes_description_and_raw_payload() -> None:
@@ -119,7 +119,7 @@ def test_match_score_response_maps_all_fields() -> None:
         offer_id=2,
         profile_id=3,
         engine="sjctl",
-        grade="C",
+        score_percent=62,
         dimensions={"salary_fit": 0.6},
         rationale="text",
         created_at=created_at,
@@ -131,7 +131,7 @@ def test_match_score_response_maps_all_fields() -> None:
     assert result.offer_id == 2
     assert result.profile_id == 3
     assert result.engine == "sjctl"
-    assert result.grade == "C"
+    assert result.score_percent == 62
     assert result.dimensions == {"salary_fit": 0.6}
     assert result.rationale == "text"
     assert result.created_at == created_at
@@ -143,7 +143,7 @@ def test_match_score_response_allows_null_rationale() -> None:
         offer_id=2,
         profile_id=3,
         engine="langchain",
-        grade="A",
+        score_percent=92,
         dimensions={},
         rationale=None,
         created_at=datetime(2026, 6, 2, tzinfo=UTC),

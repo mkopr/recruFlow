@@ -16,12 +16,7 @@
   --color-accent-hover: #2bbd8a;
   --color-danger: #f87171;
 
-  --color-grade-a: #34d399;
-  --color-grade-b: #2dd4bf;
-  --color-grade-c: #facc15;
-  --color-grade-d: #fb923c;
-  --color-grade-f: #f87171;
-  --color-grade-none: #6b7280;
+  --color-score-none: #6b7280;
 
   --radius-md: 0.5rem;
 }
@@ -145,32 +140,11 @@
     font-size: 0.75rem;
   }
 
-  .badge-grade-a {
-    background-color: var(--color-grade-a);
-    color: #05261c;
+  .badge-score {
+    color: #f8fafc;
   }
 
-  .badge-grade-b {
-    background-color: var(--color-grade-b);
-    color: #042f2c;
-  }
-
-  .badge-grade-c {
-    background-color: var(--color-grade-c);
-    color: #3f2f04;
-  }
-
-  .badge-grade-d {
-    background-color: var(--color-grade-d);
-    color: #3f1f04;
-  }
-
-  .badge-grade-f {
-    background-color: var(--color-grade-f);
-    color: #3f0505;
-  }
-
-  .badge-grade-none {
+  .badge-score-none {
     background-color: transparent;
     border: 1px solid var(--color-border);
     color: var(--color-text-muted);

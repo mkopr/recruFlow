@@ -1,19 +1,32 @@
 import { useState } from 'react';
 
-import { loadGradeAlertPrefs, saveGradeAlertPrefs } from '../lib/gradeAlertPrefs';
+import { loadScoreAlertPrefs, saveScoreAlertPrefs } from '../lib/scoreAlertPrefs';
 import { ALERT_SOUNDS, playAlertSound, type AlertSound } from '../lib/sound';
 
 export function NotificationsSection() {
-  const [prefs, setPrefs] = useState(() => loadGradeAlertPrefs());
+  const [prefs, setPrefs] = useState(() => loadScoreAlertPrefs());
 
   const update = (next: Partial<typeof prefs>) => {
     const merged = { ...prefs, ...next };
     setPrefs(merged);
-    saveGradeAlertPrefs(merged);
+    saveScoreAlertPrefs(merged);
   };
 
   return (
     <div className="card flex flex-col gap-4 p-4">
+      <label className="flex flex-col gap-1 text-sm">
+        Minimum score for alert (%)
+        <input
+          type="number"
+          min={0}
+          max={100}
+          step={1}
+          className="input"
+          value={prefs.minScorePercent}
+          onChange={(e) => update({ minScorePercent: Number(e.target.value) })}
+        />
+      </label>
+
       <label className="flex flex-col gap-1 text-sm">
         Alert sound
         <select

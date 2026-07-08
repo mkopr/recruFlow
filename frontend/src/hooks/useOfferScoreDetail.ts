@@ -10,7 +10,7 @@ export interface UseOfferScoreDetailResult {
 // Fetches the full score breakdown (rationale, dimensions) for a single offer,
 // on demand — used when a user opens the score drawer, not on every row of the
 // offer list (BUG26: bulk per-row fetching is what made the list page fire one
-// HTTP request per offer). The list itself already carries each offer's grade
+// HTTP request per offer). The list itself already carries each offer's score
 // inline via GET /offers, so this hook is only needed for the drawer's detail.
 export function useOfferScoreDetail(offerId: number | null): UseOfferScoreDetailResult {
   const [score, setScore] = useState<MatchScoreResponse | null>(null);

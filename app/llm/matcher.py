@@ -14,10 +14,9 @@ from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
 from app.db.models import Profile as ProfileModel
 from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
-from app.schemas.match_score import MatchGrade, MatchScore
+from app.schemas.match_score import MatchScore
 from app.schemas.offer import Offer
 from app.schemas.profile import Profile
-from app.schemas.scoring_config import ScoringConfig
 
 logger = logging.getLogger(__name__)
 
@@ -32,15 +31,7 @@ DIMENSION_WEIGHTS: dict[str, float] = {
 
 LANGCHAIN_SOURCES = frozenset({SOLID_JOBS, JUSTJOINIT, NOFLUFFJOBS})
 
-# Weighted-total-to-grade cutoffs. A future story (P3US27) persists these as
-# user-editable configuration and constructs a GradeScale from it; this
-# module-level default is what every scoring run uses until that lands.
-_GRADE_THRESHOLDS: tuple[tuple[float, MatchGrade], ...] = (
-    (0.85, "A"),
-    (0.70, "B"),
-    (0.55, "C"),
-    (0.40, "D"),
-)
+_DEAL_BREAKER_SCORE_CAP: int = 40
 
 _CONSERVATIVE_SALARY_SCORE_CAP: float = 0.5
 
@@ -49,41 +40,6 @@ _LLM_REQUEST_TIMEOUT_SECONDS = 120.0
 # Deal-breaker words/phrases and offer text are normalized before matching so that
 # punctuation variants of the same fact ("on-site" / "onsite" / "on site") compare equal.
 _WORD_SEPARATOR_RE = re.compile(r"[\s\-_/]+")
-
-
-class GradeScale:
-    """Pairs grade-threshold data with the behavior that applies it.
-
-    Exists as a seam: P3US27 will construct one of these from a persisted,
-    user-editable scoring configuration and pass it into the scoring calls
-    below, without those calls needing any awareness of where the thresholds
-    came from.
-    """
-
-    def __init__(
-        self, thresholds: tuple[tuple[float, MatchGrade], ...] = _GRADE_THRESHOLDS
-    ) -> None:
-        self._thresholds = thresholds
-
-    def grade_for(self, weighted_total: float) -> MatchGrade:
-        for threshold, grade in self._thresholds:
-            if weighted_total >= threshold:
-                return grade
-        return "F"
-
-
-_DEFAULT_GRADE_SCALE = GradeScale()
-
-
-def build_grade_scale(config: ScoringConfig) -> GradeScale:
-    return GradeScale(
-        (
-            (config.grade_a, "A"),
-            (config.grade_b, "B"),
-            (config.grade_c, "C"),
-            (config.grade_d, "D"),
-        )
-    )
 
 
 class _MatcherOutput(BaseModel):
@@ -204,8 +160,8 @@ def _deal_breaker_hit(profile: Profile, offer: Offer) -> str | None:
     return None
 
 
-def _cap_grade_for_deal_breaker(grade: MatchGrade) -> MatchGrade:
-    return "D" if grade in ("A", "B", "C") else grade
+def _cap_score_for_deal_breaker(score_percent: int) -> int:
+    return min(score_percent, _DEAL_BREAKER_SCORE_CAP)
 
 
 def _apply_missing_salary_conservatism(output: _MatcherOutput, profile: Profile) -> _MatcherOutput:
@@ -229,7 +185,6 @@ async def score_offer_with_langchain(
     profile_id: int,
     profile: Profile,
     offer: Offer,
-    grade_scale: GradeScale = _DEFAULT_GRADE_SCALE,
     chain_factory: Callable[[], MatcherChain] = _build_chain,
 ) -> MatchScore:
     try:
@@ -242,13 +197,16 @@ async def score_offer_with_langchain(
         raise MatcherError(f"LangChain matcher failed: {_describe(exc)}") from exc
 
     output = _apply_missing_salary_conservatism(output, profile)
-    grade = grade_scale.grade_for(_weighted_total(output))
+    score_percent = round(_weighted_total(output) * 100)
     rationale = output.rationale
 
     deal_breaker = _deal_breaker_hit(profile, offer)
     if deal_breaker is not None:
-        grade = _cap_grade_for_deal_breaker(grade)
-        rationale = f"{rationale} Deal-breaker matched: '{deal_breaker}'; grade capped at D."
+        score_percent = _cap_score_for_deal_breaker(score_percent)
+        rationale = (
+            f"{rationale} Deal-breaker matched: '{deal_breaker}'; "
+            f"score capped at {_DEAL_BREAKER_SCORE_CAP}."
+        )
 
     dimensions = {dim: getattr(output, dim) for dim in DIMENSION_WEIGHTS}
 
@@ -256,7 +214,7 @@ async def score_offer_with_langchain(
         offer_id=offer_id,
         profile_id=profile_id,
         engine="langchain",
-        grade=grade,
+        score_percent=score_percent,
         dimensions=dimensions,
         rationale=rationale,
     )
@@ -271,7 +229,6 @@ async def score_offers_with_langchain(
     profile_row: ProfileModel,
     offers: list[tuple[OfferModel, str]],
     *,
-    grade_scale: GradeScale = _DEFAULT_GRADE_SCALE,
     chain_factory: Callable[[], MatcherChain] = _build_chain,
     on_progress: Callable[[int], None] | None = None,
 ) -> list[MatchScoreModel]:
@@ -291,7 +248,6 @@ async def score_offers_with_langchain(
                 profile_id=profile_row.id,
                 profile=profile,
                 offer=offer,
-                grade_scale=grade_scale,
                 chain_factory=chain_factory,
             )
         except MatcherError as exc:
@@ -304,7 +260,7 @@ async def score_offers_with_langchain(
             offer_id=score.offer_id,
             profile_id=score.profile_id,
             engine=score.engine,
-            grade=score.grade,
+            score_percent=score.score_percent,
             dimensions=score.dimensions,
             rationale=score.rationale,
         )

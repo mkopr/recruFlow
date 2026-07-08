@@ -2,13 +2,13 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import * as gradeAlertPrefsModule from '../lib/gradeAlertPrefs';
+import * as scoreAlertPrefsModule from '../lib/scoreAlertPrefs';
 import * as soundModule from '../lib/sound';
 import { NotificationsSection } from './NotificationsSection';
 
-vi.mock('../lib/gradeAlertPrefs', () => ({
-  loadGradeAlertPrefs: vi.fn(),
-  saveGradeAlertPrefs: vi.fn(),
+vi.mock('../lib/scoreAlertPrefs', () => ({
+  loadScoreAlertPrefs: vi.fn(),
+  saveScoreAlertPrefs: vi.fn(),
 }));
 
 vi.mock('../lib/sound', () => ({
@@ -16,15 +16,20 @@ vi.mock('../lib/sound', () => ({
   playAlertSound: vi.fn(),
 }));
 
-const loadGradeAlertPrefsMock = vi.mocked(gradeAlertPrefsModule.loadGradeAlertPrefs);
-const saveGradeAlertPrefsMock = vi.mocked(gradeAlertPrefsModule.saveGradeAlertPrefs);
+const loadScoreAlertPrefsMock = vi.mocked(scoreAlertPrefsModule.loadScoreAlertPrefs);
+const saveScoreAlertPrefsMock = vi.mocked(scoreAlertPrefsModule.saveScoreAlertPrefs);
 const playAlertSoundMock = vi.mocked(soundModule.playAlertSound);
 
 beforeEach(() => {
-  loadGradeAlertPrefsMock.mockReset();
-  saveGradeAlertPrefsMock.mockReset();
+  loadScoreAlertPrefsMock.mockReset();
+  saveScoreAlertPrefsMock.mockReset();
   playAlertSoundMock.mockReset();
-  loadGradeAlertPrefsMock.mockReturnValue({ sound: 'chime', volume: 0.5, muted: false });
+  loadScoreAlertPrefsMock.mockReturnValue({
+    sound: 'chime',
+    volume: 0.5,
+    muted: false,
+    minScorePercent: 90,
+  });
 });
 
 describe('NotificationsSection', () => {
@@ -36,28 +41,30 @@ describe('NotificationsSection', () => {
     expect(playAlertSoundMock).toHaveBeenCalledWith('chime', 0.5);
   });
 
-  it('changing the volume persists immediately via saveGradeAlertPrefs', async () => {
+  it('changing the volume persists immediately via saveScoreAlertPrefs', async () => {
     render(<NotificationsSection />);
 
     fireEvent.change(screen.getByRole('slider'), { target: { value: '0.9' } });
 
-    expect(saveGradeAlertPrefsMock).toHaveBeenCalledWith({
+    expect(saveScoreAlertPrefsMock).toHaveBeenCalledWith({
       sound: 'chime',
       volume: 0.9,
       muted: false,
+      minScorePercent: 90,
     });
   });
 
-  it('changing the sound persists immediately via saveGradeAlertPrefs', async () => {
+  it('changing the sound persists immediately via saveScoreAlertPrefs', async () => {
     render(<NotificationsSection />);
 
     const select = screen.getByRole('combobox');
     await userEvent.selectOptions(select, 'arpeggio');
 
-    expect(saveGradeAlertPrefsMock).toHaveBeenCalledWith({
+    expect(saveScoreAlertPrefsMock).toHaveBeenCalledWith({
       sound: 'arpeggio',
       volume: 0.5,
       muted: false,
+      minScorePercent: 90,
     });
   });
 
@@ -66,10 +73,26 @@ describe('NotificationsSection', () => {
 
     await userEvent.click(screen.getByRole('checkbox'));
 
-    expect(saveGradeAlertPrefsMock).toHaveBeenCalledWith({
+    expect(saveScoreAlertPrefsMock).toHaveBeenCalledWith({
       sound: 'chime',
       volume: 0.5,
       muted: true,
+      minScorePercent: 90,
+    });
+  });
+
+  it('changing the minimum score for alert persists immediately', async () => {
+    render(<NotificationsSection />);
+
+    fireEvent.change(screen.getByLabelText('Minimum score for alert (%)'), {
+      target: { value: '75' },
+    });
+
+    expect(saveScoreAlertPrefsMock).toHaveBeenCalledWith({
+      sound: 'chime',
+      volume: 0.5,
+      muted: false,
+      minScorePercent: 75,
     });
   });
 });

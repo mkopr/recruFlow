@@ -1,22 +1,23 @@
 import { ALERT_SOUNDS, type AlertSound } from './sound';
 
-export interface GradeAlertPrefs {
+export interface ScoreAlertPrefs {
   sound: AlertSound;
   volume: number;
   muted: boolean;
+  minScorePercent: number;
 }
 
-const STORAGE_KEY = 'recruflow.gradeAlertPrefs';
+const STORAGE_KEY = 'recruflow.scoreAlertPrefs';
 
-function defaultPrefs(): GradeAlertPrefs {
-  return { sound: 'chime', volume: 0.5, muted: false };
+function defaultPrefs(): ScoreAlertPrefs {
+  return { sound: 'chime', volume: 0.5, muted: false, minScorePercent: 90 };
 }
 
 function isAlertSound(value: unknown): value is AlertSound {
   return typeof value === 'string' && (ALERT_SOUNDS as string[]).includes(value);
 }
 
-function isValidPrefs(value: unknown): value is GradeAlertPrefs {
+function isValidPrefs(value: unknown): value is ScoreAlertPrefs {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as Record<string, unknown>;
   return (
@@ -24,11 +25,14 @@ function isValidPrefs(value: unknown): value is GradeAlertPrefs {
     typeof candidate.volume === 'number' &&
     candidate.volume >= 0 &&
     candidate.volume <= 1 &&
-    typeof candidate.muted === 'boolean'
+    typeof candidate.muted === 'boolean' &&
+    typeof candidate.minScorePercent === 'number' &&
+    candidate.minScorePercent >= 0 &&
+    candidate.minScorePercent <= 100
   );
 }
 
-export function loadGradeAlertPrefs(): GradeAlertPrefs {
+export function loadScoreAlertPrefs(): ScoreAlertPrefs {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (raw === null) return defaultPrefs();
 
@@ -40,6 +44,6 @@ export function loadGradeAlertPrefs(): GradeAlertPrefs {
   }
 }
 
-export function saveGradeAlertPrefs(prefs: GradeAlertPrefs): void {
+export function saveScoreAlertPrefs(prefs: ScoreAlertPrefs): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
 }
