@@ -23,7 +23,7 @@ export function OfferListPage() {
     ...filters,
     minScore: minScore === '' ? undefined : minScore,
   };
-  const { offers, total, loading, error, refetch } = useOffers(activeFilters, {
+  const { offers, total, loading, error, refetch, updateOffer } = useOffers(activeFilters, {
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
   });
@@ -88,7 +88,12 @@ export function OfferListPage() {
         </div>
       )}
 
-      <OfferTable offers={offers} loading={loading} minScore={minScore} />
+      <OfferTable
+        offers={offers}
+        loading={loading}
+        minScore={minScore}
+        onOfferPatched={updateOffer}
+      />
 
       {total > 0 && (
         <div className="flex items-center justify-between text-sm text-[var(--color-text-muted)]">

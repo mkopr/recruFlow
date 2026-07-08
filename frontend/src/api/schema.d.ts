@@ -154,7 +154,8 @@ export interface paths {
     delete?: never;
     options?: never;
     head?: never;
-    patch?: never;
+    /** Patch Offer */
+    patch: operations['patch_offer_offers__offer_id__patch'];
     trace?: never;
   };
   '/offers/{offer_id}/score': {
@@ -419,6 +420,12 @@ export interface components {
        * Format: date-time
        */
       created_at: string;
+      /** Applied */
+      applied: boolean;
+      /** Hide */
+      hide: boolean;
+      /** Notes */
+      notes: string | null;
       /**
        * Score Percent
        * @description Active profile's most recent match score (0-100) for this offer, if scored
@@ -435,6 +442,15 @@ export interface components {
        * Format: date-time
        */
       updated_at: string;
+    };
+    /** OfferEdit */
+    OfferEdit: {
+      /** Applied */
+      applied?: boolean | null;
+      /** Hide */
+      hide?: boolean | null;
+      /** Notes */
+      notes?: string | null;
     };
     /** OfferListResponse */
     OfferListResponse: {
@@ -483,6 +499,12 @@ export interface components {
        * Format: date-time
        */
       created_at: string;
+      /** Applied */
+      applied: boolean;
+      /** Hide */
+      hide: boolean;
+      /** Notes */
+      notes: string | null;
       /**
        * Score Percent
        * @description Active profile's most recent match score (0-100) for this offer, if scored
@@ -876,6 +898,8 @@ export interface operations {
         min_salary?: number | null;
         /** @description Minimum acceptable match score percentage for the active profile; keeps offers scored at least this well (unscored offers are excluded whenever this is set) */
         min_score?: number | null;
+        applied?: boolean | null;
+        show_hidden?: boolean;
         limit?: number;
         offset?: number;
       };
@@ -923,6 +947,41 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['OfferDetail'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  patch_offer_offers__offer_id__patch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        offer_id: number;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['OfferEdit'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['OfferSummary'];
         };
       };
       /** @description Validation Error */

@@ -13,6 +13,7 @@ export interface UseOffersResult {
   loading: boolean;
   error: string | null;
   refetch: () => void;
+  updateOffer: (updated: OfferSummary) => void;
 }
 
 // Filter changes (esp. every keystroke in "Min salary") are debounced by this
@@ -31,7 +32,7 @@ export function useOffers(filters: OfferListFilters, page: OfferListPage): UseOf
   const [error, setError] = useState<string | null>(null);
   const isFirstRun = useRef(true);
 
-  const { source, remote, seniority, minSalary, minScore } = filters;
+  const { source, remote, seniority, minSalary, minScore, applied, showHidden } = filters;
   const { limit, offset } = page;
 
   // react-hooks/set-state-in-effect forbids an effect calling a hoisted
@@ -45,7 +46,7 @@ export function useOffers(filters: OfferListFilters, page: OfferListPage): UseOf
       setLoading(true);
       try {
         const result = await fetchOffers(
-          { source, remote, seniority, minSalary, minScore },
+          { source, remote, seniority, minSalary, minScore, applied, showHidden },
           { limit, offset },
         );
         if (!ignore) {
@@ -77,11 +78,14 @@ export function useOffers(filters: OfferListFilters, page: OfferListPage): UseOf
       ignore = true;
       clearTimeout(timer);
     };
-  }, [source, remote, seniority, minSalary, minScore, limit, offset]);
+  }, [source, remote, seniority, minSalary, minScore, applied, showHidden, limit, offset]);
 
   const refetch = useCallback(() => {
     setLoading(true);
-    fetchOffers({ source, remote, seniority, minSalary, minScore }, { limit, offset })
+    fetchOffers(
+      { source, remote, seniority, minSalary, minScore, applied, showHidden },
+      { limit, offset },
+    )
       .then((result) => {
         setOffers(result.items);
         setTotal(result.total);
@@ -93,7 +97,19 @@ export function useOffers(filters: OfferListFilters, page: OfferListPage): UseOf
       .finally(() => {
         setLoading(false);
       });
-  }, [source, remote, seniority, minSalary, minScore, limit, offset]);
+  }, [source, remote, seniority, minSalary, minScore, applied, showHidden, limit, offset]);
 
-  return { offers, total, loading, error, refetch };
+  const updateOffer = useCallback(
+    (updated: OfferSummary) => {
+      setOffers((current) => {
+        if (!showHidden && updated.hide) {
+          return current.filter((offer) => offer.id !== updated.id);
+        }
+        return current.map((offer) => (offer.id === updated.id ? updated : offer));
+      });
+    },
+    [showHidden],
+  );
+
+  return { offers, total, loading, error, refetch, updateOffer };
 }

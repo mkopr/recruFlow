@@ -69,7 +69,7 @@ Use these terms consistently in code, schemas, and PR descriptions:
 
 | Term | Definition |
 |---|---|
-| **Offer** | A normalised job posting with exactly one Source |
+| **Offer** | A normalised job posting with exactly one Source. Alongside its ingestion-sourced fields, it carries three user-owned fields — `applied`, `hide`, `notes` — set only via `PATCH /offers/{offer_id}`, never by ingestion or scoring |
 | **Source** | A job board connector (SOLID.Jobs, JustJoin.it, NoFluffJobs) |
 | **Raw Payload** | Unmodified API/scrape response stored at ingest time |
 | **Profile** | Candidate's structured facts: skills, experience, preferences, constraints |

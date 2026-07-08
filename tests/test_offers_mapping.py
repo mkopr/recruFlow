@@ -26,6 +26,8 @@ def test_offer_summary_maps_all_scalar_fields() -> None:
         description="some text",
         posted_at=posted_at,
         industry_tags=["fintech"],
+        applied=False,
+        hide=False,
         raw_payload={},
         created_at=created_at,
     )
@@ -57,6 +59,8 @@ def test_offer_summary_uses_given_source_label_verbatim() -> None:
         title="Backend Engineer",
         company="Acme",
         remote=False,
+        applied=False,
+        hide=False,
         created_at=datetime(2026, 6, 2, tzinfo=UTC),
     )
 
@@ -75,12 +79,50 @@ def test_offer_summary_uses_given_source_label_verbatim() -> None:
     assert result.score_percent is None
 
 
+def test_offer_summary_includes_applied_hide_notes() -> None:
+    offer = OfferModel(
+        id=1,
+        title="Backend Engineer",
+        company="Acme",
+        remote=False,
+        applied=True,
+        hide=False,
+        notes="some notes",
+        created_at=datetime(2026, 6, 2, tzinfo=UTC),
+    )
+
+    result = _offer_summary(offer, "justjoinit")
+
+    assert result.applied is True
+    assert result.hide is False
+    assert result.notes == "some notes"
+
+
+def test_offer_summary_notes_defaults_to_none() -> None:
+    offer = OfferModel(
+        id=1,
+        title="Backend Engineer",
+        company="Acme",
+        remote=False,
+        applied=False,
+        hide=False,
+        notes=None,
+        created_at=datetime(2026, 6, 2, tzinfo=UTC),
+    )
+
+    result = _offer_summary(offer, "justjoinit")
+
+    assert result.notes is None
+
+
 def test_offer_detail_includes_description_and_raw_payload() -> None:
     offer = OfferModel(
         id=1,
         title="Backend Engineer",
         company="Acme",
         remote=False,
+        applied=False,
+        hide=False,
         description="some text",
         raw_payload={"nested": {"k": "v"}},
         created_at=datetime(2026, 6, 2, tzinfo=UTC),
@@ -102,6 +144,8 @@ def test_offer_detail_raw_payload_defaults_are_not_silently_dropped() -> None:
         title="Backend Engineer",
         company="Acme",
         remote=False,
+        applied=False,
+        hide=False,
         raw_payload={},
         created_at=datetime(2026, 6, 2, tzinfo=UTC),
         updated_at=datetime(2026, 6, 3, tzinfo=UTC),

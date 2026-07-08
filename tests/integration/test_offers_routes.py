@@ -483,6 +483,329 @@ async def test_get_offer_unknown_id_returns_404(client: httpx.AsyncClient) -> No
     assert "999999999" in response.json()["detail"]
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_get_offer_detail_includes_applied_hide_notes_defaults(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    source_id = await _create_source(db_session)
+    offer_id = await _create_offer(db_session, source_id)
+    await db_session.commit()
+
+    response = await client.get(f"/offers/{offer_id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["applied"] is False
+    assert body["hide"] is False
+    assert body["notes"] is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_patch_offer_updates_only_fields_sent(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    connector = f"patch-fields-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    offer_id = await _create_offer(db_session, source_id)
+    await db_session.commit()
+
+    try:
+        response = await client.patch(f"/offers/{offer_id}", json={"applied": True})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["applied"] is True
+        assert body["hide"] is False
+        assert body["notes"] is None
+
+        follow_up = await client.get(f"/offers/{offer_id}")
+        follow_up_body = follow_up.json()
+        assert follow_up_body["applied"] is True
+        assert follow_up_body["hide"] is False
+        assert follow_up_body["notes"] is None
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_patch_offer_empty_body_changes_nothing(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    connector = f"patch-empty-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    offer_id = await _create_offer(db_session, source_id)
+    await db_session.commit()
+
+    try:
+        response = await client.patch(f"/offers/{offer_id}", json={})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["applied"] is False
+        assert body["hide"] is False
+        assert body["notes"] is None
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_patch_offer_unknown_offer_returns_404(client: httpx.AsyncClient) -> None:
+    response = await client.patch("/offers/999999999", json={"applied": True})
+
+    assert response.status_code == 404
+    assert "999999999" in response.json()["detail"]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_patch_offer_notes_no_max_length(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    connector = f"patch-notes-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    offer_id = await _create_offer(db_session, source_id)
+    await db_session.commit()
+
+    try:
+        long_notes = "x" * 5000
+        response = await client.patch(f"/offers/{offer_id}", json={"notes": long_notes})
+
+        assert response.status_code == 200
+        assert response.json()["notes"] == long_notes
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_patch_offer_clearing_notes_with_explicit_null(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    connector = f"patch-clear-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    offer_id = await _create_offer(db_session, source_id)
+    await db_session.commit()
+
+    try:
+        first = await client.patch(f"/offers/{offer_id}", json={"notes": "foo"})
+        assert first.json()["notes"] == "foo"
+
+        second = await client.patch(f"/offers/{offer_id}", json={"notes": None})
+
+        assert second.status_code == 200
+        assert second.json()["notes"] is None
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_list_offers_excludes_hidden_by_default(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    connector = f"hide-default-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    visible_id = await _create_offer(db_session, source_id)
+    hidden_id = await _create_offer(db_session, source_id)
+    await db_session.commit()
+
+    try:
+        await db_session.execute(
+            update(OfferModel).where(OfferModel.id == hidden_id).values(hide=True)
+        )
+        await db_session.commit()
+
+        response = await client.get("/offers", params={"source": connector})
+
+        ids = {entry["id"] for entry in response.json()["items"]}
+        assert ids == {visible_id}
+        assert response.json()["total"] == 1
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_list_offers_show_hidden_true_includes_both(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    connector = f"hide-show-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    visible_id = await _create_offer(db_session, source_id)
+    hidden_id = await _create_offer(db_session, source_id)
+    await db_session.commit()
+
+    try:
+        await db_session.execute(
+            update(OfferModel).where(OfferModel.id == hidden_id).values(hide=True)
+        )
+        await db_session.commit()
+
+        response = await client.get("/offers", params={"source": connector, "show_hidden": "true"})
+
+        ids = {entry["id"] for entry in response.json()["items"]}
+        assert ids == {visible_id, hidden_id}
+        assert response.json()["total"] == 2
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_list_offers_applied_filter_is_tri_state(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    connector = f"applied-tri-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    applied_id = await _create_offer(db_session, source_id)
+    not_applied_id = await _create_offer(db_session, source_id)
+    await db_session.commit()
+
+    try:
+        await db_session.execute(
+            update(OfferModel).where(OfferModel.id == applied_id).values(applied=True)
+        )
+        await db_session.commit()
+
+        applied_true = await client.get("/offers", params={"source": connector, "applied": "true"})
+        applied_false = await client.get(
+            "/offers", params={"source": connector, "applied": "false"}
+        )
+        applied_omitted = await client.get("/offers", params={"source": connector})
+
+        assert {e["id"] for e in applied_true.json()["items"]} == {applied_id}
+        assert {e["id"] for e in applied_false.json()["items"]} == {not_applied_id}
+        assert {e["id"] for e in applied_omitted.json()["items"]} == {
+            applied_id,
+            not_applied_id,
+        }
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_list_offers_composes_applied_hidden_min_score(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await _deactivate_all_profiles(db_session)
+    connector = f"compose-filt-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    matching = await _create_offer(db_session, source_id)
+    wrong_applied = await _create_offer(db_session, source_id)
+    wrong_hidden = await _create_offer(db_session, source_id)
+    wrong_score = await _create_offer(db_session, source_id)
+    profile = Profile(name=f"profile-{uuid4()}", is_active=True, data={})
+    db_session.add(profile)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            MatchScore(
+                offer_id=matching,
+                profile_id=profile.id,
+                engine="langchain",
+                score_percent=80,
+                dimensions={},
+            ),
+            MatchScore(
+                offer_id=wrong_applied,
+                profile_id=profile.id,
+                engine="langchain",
+                score_percent=80,
+                dimensions={},
+            ),
+            MatchScore(
+                offer_id=wrong_hidden,
+                profile_id=profile.id,
+                engine="langchain",
+                score_percent=80,
+                dimensions={},
+            ),
+            MatchScore(
+                offer_id=wrong_score,
+                profile_id=profile.id,
+                engine="langchain",
+                score_percent=10,
+                dimensions={},
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    try:
+        await db_session.execute(
+            update(OfferModel)
+            .where(OfferModel.id.in_([matching, wrong_hidden]))
+            .values(applied=True)
+        )
+        await db_session.execute(
+            update(OfferModel).where(OfferModel.id == wrong_applied).values(applied=False)
+        )
+        await db_session.execute(
+            update(OfferModel).where(OfferModel.id == wrong_hidden).values(hide=True)
+        )
+        await db_session.execute(
+            update(OfferModel).where(OfferModel.id == wrong_score).values(applied=True)
+        )
+        await db_session.commit()
+
+        response = await client.get(
+            "/offers",
+            params={
+                "source": connector,
+                "applied": "true",
+                "show_hidden": "false",
+                "min_score": 50,
+            },
+        )
+
+        ids = {entry["id"] for entry in response.json()["items"]}
+        assert ids == {matching}
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_reingest_does_not_reset_user_owned_fields(db_session: AsyncSession) -> None:
+    connector = f"reingest-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    mapped_fields: dict[str, object] = {
+        "source_id": source_id,
+        "title": "Backend Engineer",
+        "company": "Acme",
+        "canonical_url": _unique_url("reingest"),
+    }
+
+    try:
+        first_result = await ingest_offer(db_session, mapped_fields, raw_payload={})
+        await db_session.commit()
+        assert first_result is not None
+        offer_id = first_result[0].id
+
+        await db_session.execute(
+            update(OfferModel).where(OfferModel.id == offer_id).values(applied=True, notes="foo")
+        )
+        await db_session.commit()
+
+        second_result = await ingest_offer(db_session, mapped_fields, raw_payload={})
+        await db_session.commit()
+
+        assert second_result is not None
+        assert second_result[1] is False
+
+        row = await db_session.get(OfferModel, offer_id)
+        assert row is not None
+        assert row.applied is True
+        assert row.notes == "foo"
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
 async def _deactivate_all_profiles(session: AsyncSession) -> None:
     # Deactivating (rather than deleting) avoids tripping match_scores' profile_id
     # FK constraint on profiles owned by unrelated tests.

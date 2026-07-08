@@ -1795,6 +1795,65 @@ number the user types in, no persisted config in between. See the P3US29 section
   `.badge-score-none`, keeping their declarations unchanged — the neutral "not yet scored" state
   itself is unaffected by this story.
 
+### Offer applied/hide/notes fields (P3US31)
+
+- **Purpose**: the first story to give `Offer` fields that are purely user-owned — `applied`,
+  `hide`, `notes` — rather than connector-sourced (title, company, salary, ...) or computed
+  (`score_percent`). It's consequently the first partial-update write path anywhere in the API:
+  every prior write endpoint (`PUT /profile`) is a full upsert; `PATCH /offers/{offer_id}` updates
+  only the fields present in the request body.
+- **Schema/DB**: one Alembic migration (`bef7908f5330_offer_applied_hide_notes`) adds
+  `applied BOOLEAN NOT NULL DEFAULT false`, `hide BOOLEAN NOT NULL DEFAULT false`,
+  `notes TEXT NULL` to `offers`. `notes` has no length cap, matching the existing unbounded
+  `description` column.
+- **`PATCH /offers/{offer_id}`** (`app/api/routes/offers.py`): takes `OfferEdit`
+  (`app/schemas/offer.py` — `applied: bool | None = None`, `hide: bool | None = None`,
+  `notes: str | None = None`, all optional) and returns the updated `OfferSummary`. The handler
+  applies `payload.model_dump(exclude_unset=True)` field-by-field via `setattr` — `exclude_unset`
+  (not `exclude_none`) is what makes "only fields present in the request body change" work
+  correctly, including the case where a client explicitly sends `{"notes": null}` to clear notes:
+  `exclude_unset` only drops fields never present in the request at all, not fields explicitly set
+  to `None`. Unknown `offer_id` returns `404 {"detail": "offer {id} not found"}`, mirroring
+  `GET /offers/{offer_id}`'s existing convention. The response includes the offer's real, current
+  `score_percent` (via the same latest-score-for-active-profile query `GET /offers/{offer_id}/score`
+  uses) rather than always `None` — otherwise toggling Applied/Hide on a scored row would erase its
+  visible score badge in the frontend's locally-patched state, since the frontend never re-fetches
+  the list after a `PATCH`.
+- **`GET /offers` gains `applied`/`show_hidden`**: `applied: bool | None` is tri-state, same
+  shape as the existing `remote` filter. `show_hidden: bool = False` is the one filter in this
+  endpoint that behaves differently when *omitted* versus every other optional filter: omitting
+  `remote`/`seniority`/`min_score`/etc. means "no constraint," but omitting `show_hidden` (or
+  passing `false`) means hidden offers are actively excluded (`OfferModel.hide.is_(False)`) —
+  there is no way to request "no opinion on hidden-ness" the way there is for the other filters.
+  `show_hidden=true` removes that clause entirely, returning hidden and non-hidden offers together,
+  still subject to every other active filter. Both new clauses are added before the `total = ...`
+  count query, same as every existing filter, so `total` stays consistent with the returned page.
+- **Re-ingestion never resets these fields — for free**: `app/ingestion/persist.py`'s
+  `persist_offer` already inserts via `on_conflict_do_nothing(index_elements=[OfferModel.dedup_hash])`
+  — on a duplicate `dedup_hash`, the conflict clause does nothing at all, not even touching columns
+  the ingestion payload doesn't reference. Since `applied`/`hide`/`notes` are never part of the
+  ingestion `Offer` schema, this acceptance criterion required zero code changes in the ingestion
+  path; the three new columns only needed DB-level `server_default`s so a genuinely new row still
+  gets sensible defaults.
+- **Frontend**: `frontend/src/hooks/useOffers.ts` gains `updateOffer(updated: OfferSummary): void`
+  — patches a single row into local state without a full list re-fetch (mirroring the "ride along
+  on `OfferSummary`, no extra per-row request" pattern BUG26 established for `score_percent`). When
+  `showHidden` is false and the updated offer's `hide` is true, `updateOffer` removes it from local
+  state instead of replacing it in place — this is what makes hiding a row disappear immediately
+  without a manual refresh. **Known, accepted trade-off**: `total` is deliberately left unchanged
+  by `updateOffer` (no re-fetch), so the displayed count can drift by one after a hide/unhide until
+  the next real fetch; this is intentional, not a bug. `frontend/src/components/OfferTable.tsx`
+  calls `patchOffer` directly (mirroring how it already calls `fetchOfferScore` directly via
+  `useOfferScoreDetail` rather than delegating network calls up to the parent) and invokes the new
+  `onOfferPatched` prop with the response. `frontend/src/components/NotesEditor.tsx` is a new
+  overlay built on `ScoreDrawer.tsx`'s exact scaffold (fixed backdrop that closes on click,
+  `role="dialog" aria-modal="true"` card panel, `Escape`-key `window` listener) with an editable
+  textarea and Save/Cancel instead of read-only content. `frontend/src/components/OfferFilters.tsx`'s
+  "Show hidden offers" checkbox is wrapped in the same `.input`-styled, `flex-col` label shape as
+  every other filter (a caption line above a bordered control) rather than a bare inline checkbox
+  — the filter row uses `items-end` alignment, so a differently-shaped control breaks the row's
+  visual alignment against the select/input fields next to it.
+
 ### Makefile targets
 
 - `install` — `uv sync --all-groups` + `cd frontend && pnpm install`.

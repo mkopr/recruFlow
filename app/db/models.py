@@ -51,6 +51,9 @@ class Offer(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     industry_tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    applied: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    hide: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

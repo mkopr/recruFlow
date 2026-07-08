@@ -491,6 +491,8 @@ filtering by query parameter, all combinable (AND semantics):
 | `seniority` | Canonical level (`junior`/`mid`/`senior`/`lead`/`expert`) — substring match |
 | `min_salary` | Minimum salary (PLN, monthly gross); an offer's `salary_max` must meet or exceed it, falling back to `salary_min` when `salary_max` is unknown |
 | `min_score` | Minimum acceptable match score (0-100) for the active profile; keeps offers scored at least this well, excluding not-yet-scored offers whenever set |
+| `applied` | `true`/`false` — whether the user has marked the offer as applied to |
+| `show_hidden` | `true`/`false` (default `false`) — unlike every other filter above, omitting this (or passing `false`) actively excludes offers marked `hide`; `true` returns hidden and non-hidden offers together, still subject to every other active filter |
 
 ```bash
 curl "http://localhost:8000/offers?source=justjoinit&remote=true&min_salary=15000"
@@ -514,6 +516,9 @@ curl "http://localhost:8000/offers?source=justjoinit&remote=true&min_salary=1500
     "contract_type": "B2B",
     "posted_at": "2026-06-20T09:00:00Z",
     "created_at": "2026-06-21T08:00:00Z",
+    "applied": false,
+    "hide": false,
+    "notes": null,
     "score_percent": 92
   }
 ]
@@ -534,6 +539,35 @@ stored at ingest time), and `updated_at`. Returns `404` with a clear message for
 ```json
 {"detail": "offer 999999999 not found"}
 ```
+
+### `PATCH /offers/{offer_id}`
+
+Partially updates the user-owned `applied`/`hide`/`notes` fields on an offer — only fields present
+in the request body are changed; everything else on the row is left untouched. Send an explicit
+`null` for `notes` to clear it.
+
+```bash
+curl -X PATCH http://localhost:8000/offers/42 \
+  -H "Content-Type: application/json" \
+  -d '{"applied": true, "notes": "Applied via referral"}'
+```
+
+```json
+{
+  "id": 42,
+  "source": "justjoinit",
+  "title": "Senior Backend Engineer",
+  "company": "Acme",
+  "applied": true,
+  "hide": false,
+  "notes": "Applied via referral",
+  "score_percent": 92
+}
+```
+
+Returns `404` with the same message convention as `GET /offers/{offer_id}` for an unknown id.
+`applied`/`hide`/`notes` are never touched by `POST /ingest/{source}` or the batch scoring job —
+re-ingesting an already-seen offer leaves these three columns exactly as the user last set them.
 
 ### `GET /offers/{offer_id}/score`
 

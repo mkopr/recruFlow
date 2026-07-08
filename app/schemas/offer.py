@@ -58,6 +58,9 @@ class OfferSummary(BaseModel):
     posted_at: datetime | None
     industry_tags: list[str]
     created_at: datetime
+    applied: bool
+    hide: bool
+    notes: str | None
     score_percent: int | None = Field(
         default=None,
         ge=0,
@@ -70,6 +73,12 @@ class OfferDetail(OfferSummary):
     description: str | None
     raw_payload: dict[str, Any]
     updated_at: datetime
+
+
+class OfferEdit(BaseModel):
+    applied: bool | None = None
+    hide: bool | None = None
+    notes: str | None = None
 
 
 class OfferListResponse(BaseModel):

@@ -7,7 +7,7 @@ from app.db.models import Offer as OfferModel
 from app.db.models import Source
 from app.db.profile_repo import get_active_profile
 from app.schemas.match_score import MatchScoreResponse
-from app.schemas.offer import OfferDetail, OfferListResponse, OfferSummary
+from app.schemas.offer import OfferDetail, OfferEdit, OfferListResponse, OfferSummary
 
 router = APIRouter()
 
@@ -40,6 +40,9 @@ def _offer_summary(
         posted_at=offer.posted_at,
         industry_tags=offer.industry_tags or [],
         created_at=offer.created_at,
+        applied=offer.applied,
+        hide=offer.hide,
+        notes=offer.notes,
         score_percent=score_percent,
     )
 
@@ -95,6 +98,8 @@ async def list_offers(
             "scored at least this well (unscored offers are excluded whenever this is set)"
         ),
     ),
+    applied: bool | None = Query(default=None),
+    show_hidden: bool = Query(default=False),
     limit: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     offset: int = Query(default=0, ge=0),
 ) -> OfferListResponse:
@@ -142,6 +147,10 @@ async def list_offers(
         )
     if min_score is not None:
         stmt = stmt.where(latest_score.c.score_percent >= min_score)
+    if applied is not None:
+        stmt = stmt.where(OfferModel.applied == applied)
+    if not show_hidden:
+        stmt = stmt.where(OfferModel.hide.is_(False))
 
     total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
 
@@ -176,6 +185,36 @@ async def get_offer(offer_id: int, session: SessionDep) -> OfferDetail:
 
     offer, connector, name = row
     return _offer_detail(offer, connector or name)
+
+
+@router.patch("/offers/{offer_id}")
+async def patch_offer(offer_id: int, payload: OfferEdit, session: SessionDep) -> OfferSummary:
+    offer = await session.get(OfferModel, offer_id)
+    if offer is None:
+        raise HTTPException(status_code=404, detail=f"offer {offer_id} not found")
+
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(offer, field, value)
+    await session.commit()
+    await session.refresh(offer)
+
+    source = await session.get(Source, offer.source_id)
+    assert source is not None
+
+    active_profile = await get_active_profile(session)
+    score_percent = None
+    if active_profile is not None:
+        score_percent = await session.scalar(
+            select(MatchScoreModel.score_percent)
+            .where(
+                MatchScoreModel.offer_id == offer.id,
+                MatchScoreModel.profile_id == active_profile.id,
+            )
+            .order_by(MatchScoreModel.created_at.desc())
+            .limit(1)
+        )
+
+    return _offer_summary(offer, source.connector or source.name, score_percent)
 
 
 @router.get("/offers/{offer_id}/score")

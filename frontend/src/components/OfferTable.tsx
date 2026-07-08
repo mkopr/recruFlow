@@ -1,7 +1,8 @@
 import { useState } from 'react';
 
-import type { OfferSummary } from '../api/offers';
+import { patchOffer, type OfferSummary } from '../api/offers';
 import { useOfferScoreDetail } from '../hooks/useOfferScoreDetail';
+import { NotesEditor } from './NotesEditor';
 import { ScoreBadge } from './ScoreBadge';
 import { ScoreDrawer } from './ScoreDrawer';
 
@@ -9,6 +10,7 @@ interface OfferTableProps {
   offers: OfferSummary[];
   loading: boolean;
   minScore: number | '';
+  onOfferPatched: (updated: OfferSummary) => void;
 }
 
 function formatSalary(offer: OfferSummary): string {
@@ -81,9 +83,10 @@ function getEmptyState(offers: OfferSummary[], minScore: number | '', loading: b
   return <NoOffersEmptyState />;
 }
 
-export function OfferTable({ offers, loading, minScore }: OfferTableProps) {
+export function OfferTable({ offers, loading, minScore, onOfferPatched }: OfferTableProps) {
   const [selectedOfferId, setSelectedOfferId] = useState<number | null>(null);
   const [scoreSort, setScoreSort] = useState<'asc' | 'desc' | null>(null);
+  const [notesOfferId, setNotesOfferId] = useState<number | null>(null);
   const { score: selectedScore } = useOfferScoreDetail(selectedOfferId);
 
   const emptyState = getEmptyState(offers, minScore, loading);
@@ -97,8 +100,26 @@ export function OfferTable({ offers, loading, minScore }: OfferTableProps) {
   const selectedOffer =
     selectedOfferId != null ? offers.find((offer) => offer.id === selectedOfferId) : undefined;
 
+  const notesOffer =
+    notesOfferId != null ? offers.find((offer) => offer.id === notesOfferId) : undefined;
+
   const handleScoreHeaderClick = () => {
     setScoreSort((current) => (current === 'asc' ? 'desc' : 'asc'));
+  };
+
+  const handleToggleApplied = async (offer: OfferSummary) => {
+    const updated = await patchOffer(offer.id, { applied: !offer.applied });
+    onOfferPatched(updated);
+  };
+
+  const handleToggleHide = async (offer: OfferSummary) => {
+    const updated = await patchOffer(offer.id, { hide: !offer.hide });
+    onOfferPatched(updated);
+  };
+
+  const handleSaveNotes = async (offer: OfferSummary, notes: string) => {
+    const updated = await patchOffer(offer.id, { notes });
+    onOfferPatched(updated);
   };
 
   return (
@@ -119,6 +140,9 @@ export function OfferTable({ offers, loading, minScore }: OfferTableProps) {
                   Score
                 </button>
               </th>
+              <th className="px-4 py-3 font-medium">Applied</th>
+              <th className="px-4 py-3 font-medium">Notes</th>
+              <th className="px-4 py-3 font-medium">Hide</th>
             </tr>
           </thead>
           <tbody>
@@ -153,6 +177,34 @@ export function OfferTable({ offers, loading, minScore }: OfferTableProps) {
                     onClick={() => setSelectedOfferId(offer.id)}
                   />
                 </td>
+                <td className="px-4 py-3">
+                  <input
+                    type="checkbox"
+                    aria-label={`Applied to ${offer.title}`}
+                    checked={offer.applied}
+                    onChange={() => handleToggleApplied(offer)}
+                  />
+                </td>
+                <td className="px-4 py-3">
+                  <button
+                    type="button"
+                    className="btn"
+                    aria-label={`Notes for ${offer.title}`}
+                    onClick={() => setNotesOfferId(offer.id)}
+                  >
+                    {offer.notes ? '📝' : '📄'}
+                  </button>
+                </td>
+                <td className="px-4 py-3">
+                  <button
+                    type="button"
+                    className="btn"
+                    aria-label={`Hide ${offer.title}`}
+                    onClick={() => handleToggleHide(offer)}
+                  >
+                    {offer.hide ? 'Unhide' : 'Hide'}
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -173,6 +225,14 @@ export function OfferTable({ offers, loading, minScore }: OfferTableProps) {
             <div className="card p-6 text-sm text-[var(--color-text-muted)]">Loading score…</div>
           </div>
         ))}
+      {notesOffer != null && (
+        <NotesEditor
+          offerTitle={notesOffer.title}
+          initialNotes={notesOffer.notes}
+          onSave={(notes) => handleSaveNotes(notesOffer, notes)}
+          onClose={() => setNotesOfferId(null)}
+        />
+      )}
     </div>
   );
 }

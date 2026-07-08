@@ -4,6 +4,7 @@ import type { components } from './schema';
 export type OfferSummary = components['schemas']['OfferSummary'];
 export type OfferListResponse = components['schemas']['OfferListResponse'];
 export type IngestResponse = components['schemas']['IngestResponse'];
+export type OfferEdit = components['schemas']['OfferEdit'];
 
 export interface OfferListFilters {
   source?: string;
@@ -11,6 +12,8 @@ export interface OfferListFilters {
   seniority?: string;
   minSalary?: number;
   minScore?: number;
+  applied?: boolean;
+  showHidden?: boolean;
 }
 
 export interface OfferListPage {
@@ -30,6 +33,8 @@ export async function fetchOffers(
         seniority: filters.seniority,
         min_salary: filters.minSalary,
         min_score: filters.minScore,
+        applied: filters.applied,
+        show_hidden: filters.showHidden,
         limit: page.limit,
         offset: page.offset,
       },
@@ -50,6 +55,19 @@ export async function triggerIngest(source: string): Promise<IngestResponse> {
 
   if (error) {
     throw new Error(`failed to trigger ingest for ${source}`);
+  }
+
+  return data;
+}
+
+export async function patchOffer(offerId: number, edit: OfferEdit): Promise<OfferSummary> {
+  const { data, error } = await apiClient.PATCH('/offers/{offer_id}', {
+    params: { path: { offer_id: offerId } },
+    body: edit,
+  });
+
+  if (error) {
+    throw new Error(`failed to update offer ${offerId}`);
   }
 
   return data;

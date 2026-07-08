@@ -1,8 +1,8 @@
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as offersApi from '../api/offers';
-import type { OfferListFilters, OfferListPage } from '../api/offers';
+import type { OfferListFilters, OfferListPage, OfferSummary } from '../api/offers';
 import { useOffers } from './useOffers';
 
 vi.mock('../api/offers', () => ({
@@ -12,6 +12,32 @@ vi.mock('../api/offers', () => ({
 const fetchOffersMock = vi.mocked(offersApi.fetchOffers);
 
 const PAGE: OfferListPage = { limit: 50, offset: 0 };
+
+function makeOffer(overrides: Partial<OfferSummary> = {}): OfferSummary {
+  return {
+    id: 1,
+    source: 'justjoinit',
+    external_id: 'ext-1',
+    canonical_url: 'https://example.com/jobs/1',
+    title: 'Senior Backend Engineer',
+    company: 'Acme',
+    location: 'Warsaw',
+    remote: true,
+    seniority: 'senior',
+    salary_min: 15000,
+    salary_max: 25000,
+    salary_currency: 'PLN',
+    contract_type: 'B2B',
+    posted_at: '2026-06-01T00:00:00Z',
+    industry_tags: [],
+    created_at: '2026-06-01T00:00:00Z',
+    applied: false,
+    hide: false,
+    notes: null,
+    score_percent: null,
+    ...overrides,
+  };
+}
 
 beforeEach(() => {
   fetchOffersMock.mockReset();
@@ -98,5 +124,67 @@ describe('useOffers', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('threads applied and showHidden through to fetchOffers', async () => {
+    const { result } = renderHook(() => useOffers({ applied: true, showHidden: true }, PAGE));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(fetchOffersMock).toHaveBeenLastCalledWith(
+      {
+        source: undefined,
+        remote: undefined,
+        seniority: undefined,
+        minSalary: undefined,
+        minScore: undefined,
+        applied: true,
+        showHidden: true,
+      },
+      PAGE,
+    );
+  });
+
+  it('replaces the matching offer in state', async () => {
+    const offer = makeOffer({ id: 1, applied: false });
+    fetchOffersMock.mockResolvedValue({ items: [offer], total: 1 });
+
+    const { result } = renderHook(() => useOffers({}, PAGE));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    const patched = { ...offer, applied: true };
+    act(() => {
+      result.current.updateOffer(patched);
+    });
+
+    expect(result.current.offers).toEqual([patched]);
+  });
+
+  it('removes an offer from state when hidden while showHidden is false', async () => {
+    const offer = makeOffer({ id: 1, hide: false });
+    fetchOffersMock.mockResolvedValue({ items: [offer], total: 1 });
+
+    const { result } = renderHook(() => useOffers({ showHidden: false }, PAGE));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      result.current.updateOffer({ ...offer, hide: true });
+    });
+
+    expect(result.current.offers).toEqual([]);
+  });
+
+  it('keeps a hidden offer in state when showHidden is true', async () => {
+    const offer = makeOffer({ id: 1, hide: false });
+    fetchOffersMock.mockResolvedValue({ items: [offer], total: 1 });
+
+    const { result } = renderHook(() => useOffers({ showHidden: true }, PAGE));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    const patched = { ...offer, hide: true };
+    act(() => {
+      result.current.updateOffer(patched);
+    });
+
+    expect(result.current.offers).toEqual([patched]);
   });
 });

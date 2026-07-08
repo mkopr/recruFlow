@@ -54,4 +54,22 @@ describe('OfferFilters', () => {
 
     expect(onChange).toHaveBeenLastCalledWith({ minSalary: 0 });
   });
+
+  it('calls onChange with a boolean when applied is selected', async () => {
+    const onChange = vi.fn();
+    renderFilters({}, onChange);
+
+    await userEvent.selectOptions(screen.getByLabelText('Applied'), 'true');
+
+    expect(onChange).toHaveBeenCalledWith({ applied: true });
+  });
+
+  it('calls onChange with showHidden when the checkbox is toggled', async () => {
+    const onChange = vi.fn();
+    renderFilters({}, onChange);
+
+    await userEvent.click(screen.getByLabelText('Show hidden offers'));
+
+    expect(onChange).toHaveBeenCalledWith({ showHidden: true });
+  });
 });
