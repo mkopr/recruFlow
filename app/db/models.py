@@ -157,3 +157,46 @@ class SchedulerRun(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DeadLetterMixin:
+    """Common columns for a pipeline failure table (P3US33).
+
+    One row per failing *resource* (a job posting, a source's ingestion, an
+    offer x profile pair), not one row per occurrence: `dedup_key` is unique per
+    table, and `record_failure` upserts on it -- a recurring failure updates the
+    existing row (reopening it if resolved) instead of appending a sibling row.
+    See docs/adr/0016-dead-letter-rows-are-mutable-per-resource-not-append-only.md.
+    """
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dedup_key: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    failure_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    error_message: Mapped[str] = mapped_column(Text, nullable=False)
+    raw_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="open")
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class IngestionFailure(DeadLetterMixin, Base):
+    __tablename__ = "ingestion_failures"
+    __table_args__ = (
+        Index("ix_ingestion_failures_source_id_occurred_at", "source_id", "occurred_at"),
+    )
+
+    source_id: Mapped[int] = mapped_column(Integer, ForeignKey("sources.id"), nullable=False)
+    scheduler_run_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("scheduler_runs.id"), nullable=True
+    )
+    page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class ScoringFailure(DeadLetterMixin, Base):
+    __tablename__ = "scoring_failures"
+    __table_args__ = (Index("ix_scoring_failures_offer_id_occurred_at", "offer_id", "occurred_at"),)
+
+    offer_id: Mapped[int] = mapped_column(Integer, ForeignKey("offers.id"), nullable=False)
+    profile_id: Mapped[int] = mapped_column(Integer, ForeignKey("profiles.id"), nullable=False)

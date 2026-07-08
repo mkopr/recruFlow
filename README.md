@@ -92,7 +92,8 @@ Two routes are wired up in `App.tsx`: `/` (offer list) and `/profile` (the profi
 lives in `frontend/src/api/profile.ts`, calling `GET /profile`, `PUT /profile`, and
 `POST /profile/upload` through the same shared `apiClient` the offer list page uses. The offer
 list's score badges/drawer call `GET /offers/{id}/score` through `frontend/src/api/offerScore.ts`,
-also through the same shared `apiClient`.
+also through the same shared `apiClient`. `/failures` (the pipeline failures page — see "Failures
+page" below) is wired up the same way, through `frontend/src/api/failures.ts`.
 
 `pnpm test` is also runnable as `make test-frontend` from the repo root. It is **not** part of
 `make test`/`make ci`/the GitHub Actions workflow yet — see
@@ -640,6 +641,39 @@ The connection stays open indefinitely; the browser's native `EventSource` handl
 a dropped connection automatically, and a reconnect never replays anything missed in the gap (this
 is a live notification stream, not an audit log).
 
+### `GET /failures/{process}`
+
+Lists dead-letter rows for a pipeline process — `ingestion` or `scoring` — every handled,
+anticipated failure that ingestion/scoring used to only log and drop now lands here as one
+durable row per failing resource (a job posting, a source's ingestion, an offer×profile pair),
+re-opened in place on recurrence rather than duplicated.
+
+```bash
+curl "http://localhost:8000/failures/ingestion?source=nofluffjobs&limit=20"
+curl "http://localhost:8000/failures/scoring?offer_id=42"
+```
+
+Same `limit`/`offset` pagination convention as `GET /offers` (`{"items": [...], "total": n}`,
+default page size 50, hard cap 200). `status` defaults to `open` (`resolved`/`all` also accepted).
+`failure_type` filters both processes; `source` (a connector identity, resolved against
+`Source.connector`) filters `ingestion` only; `offer_id`/`profile_id` filter `scoring` only. An
+unrecognized `process` returns `404`; an unrecognized `source` connector returns `200` with an
+empty page, same convention as `GET /offers`'s unknown-source filter.
+
+### `POST /failures/{process}/{failure_id}/retry`
+
+Replays the failing resource through the same code path that would have produced it originally —
+re-validates a stored raw payload, re-scores an offer/profile pair, or re-triggers ingestion for a
+source — and marks the row `resolved` on success. On failure, the row is updated in place with the
+latest error and stays `open`.
+
+```bash
+curl -X POST http://localhost:8000/failures/ingestion/17/retry
+```
+
+Returns the updated row (same shape as one item from the list endpoint). Unknown `process` or
+`failure_id` returns `404`.
+
 ## Offer list page
 
 With `make up` running, open `http://localhost:5173` to browse ingested offers without calling
@@ -766,3 +800,21 @@ this page has two sections:
   threshold — every open browser tab connects and evaluates independently, and muting stops
   playback without closing the underlying SSE connection. Lowering the threshold takes effect on
   the very next event, with no reconnect needed.
+
+## Failures page
+
+With `make up` running, open `http://localhost:5173/failures` to review durable failures from the
+ingestion and scoring pipelines and retry them without a redeploy.
+
+- **Process selector** — `Ingestion` / `Scoring`, each backed by `GET /failures/{process}`.
+  Switching resets the page and filters.
+- **Filters** — a failure-type text filter for both processes, a source dropdown for ingestion
+  (`GET /scheduler/status`'s known connectors), offer id/profile id number inputs for scoring, and
+  a status filter (`Open`/`Resolved`/`All`) defaulting to `Open`.
+- **Table** — one row per failure, columns driven by a small frontend column registry mirroring
+  the backend's `DEAD_LETTER_REGISTRY`. Clicking a row opens a drawer with the full error message,
+  pretty-printed raw payload (when present), and where it came from (the originating scheduler
+  run, or the offer/profile pair). A **Retry** button on each row calls
+  `POST /failures/{process}/{failure_id}/retry` and refreshes the table on completion.
+- **Empty state** — "No failures recorded" replaces the table when the selected process has no
+  rows matching the current filters.

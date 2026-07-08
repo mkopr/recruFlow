@@ -11,6 +11,8 @@ def test_models_register_all_v1_tables() -> None:
         "match_scores",
         "applications",
         "scheduler_runs",
+        "ingestion_failures",
+        "scoring_failures",
     }
 
 
@@ -44,3 +46,25 @@ def test_sources_connector_column_exists_and_is_nullable() -> None:
 def test_scheduler_runs_source_id_started_at_index_exists() -> None:
     index_names = {index.name for index in Base.metadata.tables["scheduler_runs"].indexes}
     assert "ix_scheduler_runs_source_id_started_at" in index_names
+
+
+def test_ingestion_failures_source_id_occurred_at_index_exists() -> None:
+    index_names = {index.name for index in Base.metadata.tables["ingestion_failures"].indexes}
+    assert "ix_ingestion_failures_source_id_occurred_at" in index_names
+
+
+def test_scoring_failures_offer_id_occurred_at_index_exists() -> None:
+    index_names = {index.name for index in Base.metadata.tables["scoring_failures"].indexes}
+    assert "ix_scoring_failures_offer_id_occurred_at" in index_names
+
+
+def test_ingestion_failures_dedup_key_is_unique_and_not_nullable() -> None:
+    column = Base.metadata.tables["ingestion_failures"].columns["dedup_key"]
+    assert column.unique is True
+    assert column.nullable is False
+
+
+def test_scoring_failures_dedup_key_is_unique_and_not_nullable() -> None:
+    column = Base.metadata.tables["scoring_failures"].columns["dedup_key"]
+    assert column.unique is True
+    assert column.nullable is False

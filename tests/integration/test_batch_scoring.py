@@ -10,10 +10,10 @@ import pytest
 import pytest_asyncio
 from app.api.routes import scoring as scoring_routes
 from app.connectors import justjoinit
+from app.db.models import IngestionFailure, ScoringFailure, Source
 from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
 from app.db.models import Profile as ProfileModel
-from app.db.models import Source
 from app.db.session import get_sessionmaker
 from app.ingestion.types import IngestionResult
 from app.llm.matcher import _MatcherOutput
@@ -72,6 +72,10 @@ async def _delete_sources_and_dependents(session: AsyncSession, source_ids: list
     # it creates, mirroring test_offers_routes.py's own _delete_sources_with_offers.
     offer_ids = select(OfferModel.id).where(OfferModel.source_id.in_(source_ids))
     await session.execute(delete(MatchScoreModel).where(MatchScoreModel.offer_id.in_(offer_ids)))
+    await session.execute(delete(ScoringFailure).where(ScoringFailure.offer_id.in_(offer_ids)))
+    await session.execute(
+        delete(IngestionFailure).where(IngestionFailure.source_id.in_(source_ids))
+    )
     await session.execute(delete(OfferModel).where(OfferModel.source_id.in_(source_ids)))
     await session.execute(delete(Source).where(Source.id.in_(source_ids)))
     await session.commit()

@@ -5,7 +5,7 @@ from uuid import uuid4
 import httpx
 import pytest
 import pytest_asyncio
-from app.db.models import MatchScore, Profile, Source
+from app.db.models import IngestionFailure, MatchScore, Profile, ScoringFailure, Source
 from app.db.models import Offer as OfferModel
 from app.ingestion.persist import ingest_offer
 from sqlalchemy import delete, select, update
@@ -36,9 +36,14 @@ async def _delete_sources_with_offers(session: AsyncSession, source_ids: list[in
     # Sources carrying a non-null connector are picked up by connector.is_not(None)
     # assertions elsewhere (e.g. test_scheduler_ensure_sources.py's exact-set check),
     # so any test that gives a Source a real-looking connector must clean up after itself.
-    # MatchScore rows referencing these offers must go first (FK on offer_id).
+    # MatchScore/ScoringFailure rows referencing these offers, and IngestionFailure rows
+    # referencing these sources, must go first (FK on offer_id/source_id).
     offer_ids = select(OfferModel.id).where(OfferModel.source_id.in_(source_ids))
     await session.execute(delete(MatchScore).where(MatchScore.offer_id.in_(offer_ids)))
+    await session.execute(delete(ScoringFailure).where(ScoringFailure.offer_id.in_(offer_ids)))
+    await session.execute(
+        delete(IngestionFailure).where(IngestionFailure.source_id.in_(source_ids))
+    )
     await session.execute(delete(OfferModel).where(OfferModel.source_id.in_(source_ids)))
     await session.execute(delete(Source).where(Source.id.in_(source_ids)))
     await session.commit()

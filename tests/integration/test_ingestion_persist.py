@@ -1,8 +1,8 @@
 from uuid import uuid4
 
 import pytest
+from app.db.models import IngestionFailure, Source
 from app.db.models import Offer as OfferModel
-from app.db.models import Source
 from app.ingestion.persist import ingest_offer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -152,6 +152,18 @@ async def test_ingest_offer_returns_none_and_does_not_persist_invalid_offer(
         .all()
     )
     assert len(rows) == 0
+
+    failures = (
+        (
+            await db_session.execute(
+                select(IngestionFailure).where(IngestionFailure.source_id == source_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(failures) == 1
+    assert failures[0].failure_type == "validation_failed"
 
 
 @pytest.mark.integration

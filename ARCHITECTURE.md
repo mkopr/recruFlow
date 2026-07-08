@@ -1929,6 +1929,107 @@ number the user types in, no persisted config in between. See the P3US29 section
   — the filter row uses `items-end` alignment, so a differently-shaped control breaks the row's
   visual alignment against the select/input fields next to it.
 
+### Dead letter queues (P3US33)
+
+- **Purpose**: every prior story's handled, anticipated failure (a malformed scraped record, a
+  page that failed to fetch mid-run, a whole run's first-page fetch failing, an LLM matcher call
+  raising `MatcherError`) was caught, logged at WARNING/ERROR, and silently dropped — no durable,
+  queryable trace survived a container restart. This story adds one record-and-list-and-retry
+  capability that every existing catch site now calls into. It covers all three sources
+  end-to-end: SOLID.Jobs, JustJoin.it, and NoFluffJobs are all scored via the same LangChain
+  Matcher path (BUG10/P3US23), so there is no separate `sjctl evaluate` scoring path left
+  uncovered.
+- **`DeadLetterMixin`** (`app/db/models.py`): `id`, `dedup_key` (`String(255)`, unique per table),
+  `failure_type` (`String(30)`), `error_message` (`Text`), `raw_payload` (`JSONB`, nullable),
+  `status` (`String(20)`, `"open"`/`"resolved"`, plain string per this repo's no-DB-enum
+  convention), `occurred_at` (`DateTime(timezone=True)`, last-occurrence timestamp), `resolved_at`
+  (nullable). `IngestionFailure` (`ingestion_failures`) adds `source_id` (FK `sources.id`),
+  `scheduler_run_id` (FK `scheduler_runs.id`, nullable — null for manually-triggered failures,
+  per ADR 0006), `page` (nullable). `ScoringFailure` (`scoring_failures`) adds `offer_id` (FK
+  `offers.id`), `profile_id` (FK `profiles.id`). Each gets a composite index mirroring
+  `scheduler_runs`' `(source_id, started_at)` convention: `(source_id, occurred_at)` and
+  `(offer_id, occurred_at)` respectively. Migration: `7130773ba67b_dead_letter_queues`.
+- **One row per resource, not one row per occurrence** — see
+  `docs/adr/0016-dead-letter-rows-are-mutable-per-resource-not-append-only.md`. `dedup_key`
+  identifies the failing *resource*: the job posting's `canonical_url` for `validation_failed`
+  (falling back to `source_id:title:company` when `canonical_url` itself is missing/invalid);
+  `source:{source_id}` for `page_fetch_failed` and `run_fetch_failed` — these two share one row
+  per source, since page position isn't a stable identity across retries; `offer:{offer_id}:profile:{profile_id}`
+  for `scoring_failed`. A recurring failure re-opens and updates the existing row in place
+  (`status="open"`, `resolved_at=NULL`, fresh `error_message`/`occurred_at`) rather than
+  appending a sibling row.
+- **`app/dlq/service.py`**: `record_failure(session, model_cls, *, dedup_key, **fields) -> None`
+  is a Postgres upsert (`pg_insert(...).on_conflict_do_update(index_elements=["dedup_key"], ...)`
+  — the same idiom `persist_offer` already uses for offer dedup), wrapped in `try/except
+  Exception` and logging at ERROR on failure, never raising: a bug in the dead-letter write path
+  must not take down the ingestion/scoring call site it instruments. It's `async` (not the
+  synchronous `session.add`-only design an append-only version would allow) because an upsert
+  needs `await session.execute(...)`. Does not commit — the caller's existing transaction-boundary
+  convention is unchanged. `list_failures(session, model_cls, *, limit, offset, filters) ->
+  tuple[Sequence[Any], int]` mirrors `GET /offers`'s pagination/total-count-subquery pattern,
+  ordering by `occurred_at DESC`.
+- **`app/dlq/registry.py`**: `DEAD_LETTER_REGISTRY: dict[str, DeadLetterQueueSpec]` mirrors
+  `CONNECTOR_REGISTRY`'s `dict[str, ...]` shape exactly — `"ingestion"` → `IngestionFailure` +
+  `IngestionFailureResponse` + `{"source_id", "failure_type", "status"}`; `"scoring"` →
+  `ScoringFailure` + `ScoringFailureResponse` + `{"offer_id", "profile_id", "failure_type",
+  "status"}`. A future process (e.g. Phase 4/5's send queue) is one more entry, no route change.
+- **`app/dlq/retry.py`**: `RETRY_HANDLERS: dict[str, RetryHandler]`, keyed by `failure_type`
+  (flat across both tables, since the four `failure_type` strings are globally unique) rather
+  than by process, because retry mechanics differ per failure type, not per table.
+  `validation_failed` re-runs `Offer.model_validate(row.raw_payload)` then `persist_offer` on
+  success. `scoring_failed` re-runs `score_offer_with_langchain(...)` then adds a `MatchScore`
+  row on success. `page_fetch_failed`/`run_fetch_failed` both call `trigger_ingest(connector)`
+  wholesale — there's no finer-grained stored input to replay, so "retry" means "re-run the
+  source's ingestion" — and succeed when `result.ok`. These two handlers deliberately do **not**
+  update `row` themselves on failure: because they share the `source:{id}` dedup key, a fresh
+  failure from the re-triggered ingestion lands on this exact row via the ordinary
+  `record_failure` upsert (in a *different* session, since `trigger_ingest` owns its own
+  engine/session lifecycle) — `perform_retry` calls `session.refresh(row)` afterward to pick that
+  up rather than trusting its own possibly-stale copy. `perform_retry(session, row)` is the
+  shared success/failure envelope: on success, sets `status="resolved"` + `resolved_at`; on
+  failure, either the handler already updated `row` in place (validation/scoring) or a refresh
+  picks up the externally-recorded update (fetch failures); either way it commits.
+- **Five write call sites**: `normalize_and_validate` (`app/ingestion/persist.py`, now
+  `async` and takes a leading `session` param) records `validation_failed` before returning
+  `None`; `run_paginated_ingestion` (`app/ingestion/runner.py`) records `page_fetch_failed` when
+  a page after the first returns `None`; `app/scheduler/service.py`'s `on_success` and
+  `app/ingestion/service.py`'s manual-trigger `on_success` (newly added — the manual flow
+  previously passed no `on_success` callback at all) both record `run_fetch_failed` when
+  `result.ok` is `False`, **fixing a real bug in the same commit**: `result.error_message` on an
+  `ok=False` result was previously discarded entirely by the scheduled path, with
+  `scheduler_runs`' own status/warning semantics left completely untouched (`finish_run_ok`'s
+  call is unchanged — a `run_fetch_failed` row is additive, not a replacement audit trail).
+  `score_offers_with_langchain` (`app/llm/matcher.py`) records `scoring_failed` in its existing
+  `except MatcherError` branch before continuing to the next offer.
+- **`GET /failures/{process}`** (`app/api/routes/failures.py`): `process` is a plain `str` path
+  param (not a `Literal`), so an unregistered value reaches the handler body and produces a `404`
+  via registry lookup rather than FastAPI's own `422` — mirroring `UnknownConnectorError`'s
+  handling. Same `limit`/`offset` convention as `GET /offers` (`DEFAULT_PAGE_SIZE=50`,
+  `MAX_PAGE_SIZE=200`). `source` (ingestion only) resolves a connector name to `source_id` via
+  `Source.connector`, using a `_NO_MATCHING_SOURCE_ID = -1` sentinel for an unknown connector —
+  same pattern as `GET /offers`' `_NO_ACTIVE_PROFILE_ID`, so an unrecognized filter value returns
+  an empty page rather than an unfiltered one or an error. `status` defaults to `"open"`
+  (`"resolved"`/`"all"` also accepted) rather than showing every historical row by default.
+- **`POST /failures/{process}/{failure_id}/retry`**: looks up the row by id (404 if missing),
+  dispatches to `RETRY_HANDLERS[row.failure_type]` via `perform_retry`, and returns the
+  (possibly now-resolved) row.
+- **Frontend**: `frontend/src/api/failures.ts` (typed client, mirrors `api/offers.ts`),
+  `frontend/src/hooks/useFailures.ts` (mirrors `useOffers.ts`'s fetch-on-change effect, minus
+  BUG17's debounce — a smaller filter set doesn't need it), `frontend/src/lib/failureColumns.tsx`
+  (a small column-config registry mirroring `DEAD_LETTER_REGISTRY`: ingestion shows
+  source/failure-type/page/occurred-at/error, scoring shows offer/profile/failure-type/occurred-at/error),
+  `frontend/src/components/FailuresTable.tsx` (generic table + Prev/Next pagination footer
+  copied from `OfferListPage.tsx`'s convention + a Status badge + a Retry button per row +
+  "No failures recorded" empty state), `frontend/src/components/FailureDetailDrawer.tsx` (mirrors
+  `ScoreDrawer.tsx`'s modal shell — full error text, pretty-printed `raw_payload` when present,
+  and an informational origin label: "Scheduler run #N" / "Manual trigger" for ingestion,
+  "Offer #N, Profile #N" for scoring — not a navigable link, since this app has no per-run or
+  per-offer detail route today), `frontend/src/components/FailureFilters.tsx` (the
+  process-conditional filter controls, split out of `FailuresPage.tsx` to keep it under the
+  ESLint `complexity: 10` cap), `frontend/src/pages/FailuresPage.tsx` (process selector,
+  page-reset-on-filter-change, ties the pieces together). New `/failures` route + nav link in
+  `App.tsx`.
+
 ### Makefile targets
 
 - `install` — `uv sync --all-groups` + `cd frontend && pnpm install`.

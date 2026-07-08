@@ -5,6 +5,7 @@ import pytest
 from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
 from app.db.models import Profile as ProfileModel
+from app.db.models import ScoringFailure
 from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
 from app.llm.matcher import _MatcherOutput, score_offers_with_langchain
 from langchain_core.messages import BaseMessage
@@ -135,6 +136,19 @@ async def test_score_offers_with_langchain_continues_batch_after_one_offer_fails
 
     assert len(rows) == 1
     assert rows[0].offer_id == offer_2_id
+
+    failures = (
+        (
+            await db_session.execute(
+                select(ScoringFailure).where(ScoringFailure.offer_id == offer_1_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(failures) == 1
+    assert failures[0].profile_id == profile.id
+    assert failures[0].failure_type == "scoring_failed"
 
 
 @pytest.mark.integration

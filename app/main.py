@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
+from app.api.routes.failures import router as failures_router
 from app.api.routes.health import router as health_router
 from app.api.routes.ingestion import router as ingestion_router
 from app.api.routes.offers import router as offers_router
@@ -65,3 +66,4 @@ app.include_router(ingestion_router)
 app.include_router(offers_router)
 app.include_router(profile_router)
 app.include_router(scoring_router)
+app.include_router(failures_router)

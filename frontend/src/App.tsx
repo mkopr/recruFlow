@@ -1,6 +1,7 @@
 import { BrowserRouter, NavLink, Route, Routes } from 'react-router-dom';
 
 import { useScoreAlerts } from './hooks/useScoreAlerts';
+import { FailuresPage } from './pages/FailuresPage';
 import { OfferListPage } from './pages/OfferListPage';
 import { ProfileEditorPage } from './pages/ProfileEditorPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -8,6 +9,7 @@ import { SettingsPage } from './pages/SettingsPage';
 const NAV_LINKS = [
   { to: '/', label: 'Offers' },
   { to: '/profile', label: 'Profile' },
+  { to: '/failures', label: 'Failures' },
   { to: '/settings', label: 'Settings' },
 ];
 
@@ -41,6 +43,7 @@ function App() {
         <Routes>
           <Route path="/" element={<OfferListPage />} />
           <Route path="/profile" element={<ProfileEditorPage />} />
+          <Route path="/failures" element={<FailuresPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </BrowserRouter>

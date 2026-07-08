@@ -5,9 +5,9 @@ from uuid import uuid4
 import httpx
 import pytest
 from app.connectors import justjoinit, nofluffjobs, solid_jobs
+from app.db.models import IngestionFailure, Source
 from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
-from app.db.models import Source
 from app.db.session import get_engine, get_sessionmaker
 from app.ingestion import registry
 from app.ingestion.normalize import JUSTJOINIT
@@ -239,6 +239,41 @@ async def test_ingest_connector_exception_returns_200_ok_false_with_error_messag
     assert body["fetched"] == 0
     assert body["created"] == 0
     assert "boom" in body["error_message"]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ingest_records_ingestion_failure_on_first_page_fetch_failure(
+    scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _fake(
+        session: AsyncSession, source: Source, *, force_refresh: bool = False
+    ) -> JustJoinItIngestionResult:
+        return JustJoinItIngestionResult(ok=False, fetched=0, created=0, error_message="boom")
+
+    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake)
+
+    response = await scheduled_client.post("/ingest/justjoinit")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is False
+    assert body["error_message"] == "boom"
+
+    engine = get_engine()
+    try:
+        sessionmaker = get_sessionmaker(engine)
+        async with sessionmaker() as fresh_session:
+            source = await registry.resolve_source_by_connector(fresh_session, JUSTJOINIT)
+            failure = await fresh_session.scalar(
+                select(IngestionFailure).where(IngestionFailure.source_id == source.id)
+            )
+            assert failure is not None
+            assert failure.failure_type == "run_fetch_failed"
+            assert failure.error_message == "boom"
+            assert failure.scheduler_run_id is None
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.integration

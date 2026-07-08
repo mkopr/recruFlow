@@ -261,6 +261,40 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/failures/{process}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Failures Route */
+    get: operations['list_failures_route_failures__process__get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/failures/{process}/{failure_id}/retry': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Retry Failure Route */
+    post: operations['retry_failure_route_failures__process___failure_id__retry_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -320,6 +354,41 @@ export interface components {
       created: number;
       /** Error Message */
       error_message?: string | null;
+    };
+    /** IngestionFailureListResponse */
+    IngestionFailureListResponse: {
+      /** Items */
+      items: components['schemas']['IngestionFailureResponse'][];
+      /** Total */
+      total: number;
+    };
+    /** IngestionFailureResponse */
+    IngestionFailureResponse: {
+      /** Id */
+      id: number;
+      /** Source Id */
+      source_id: number;
+      /** Scheduler Run Id */
+      scheduler_run_id: number | null;
+      /** Page */
+      page: number | null;
+      /** Failure Type */
+      failure_type: string;
+      /** Error Message */
+      error_message: string;
+      /** Raw Payload */
+      raw_payload: {
+        [key: string]: unknown;
+      } | null;
+      /** Status */
+      status: string;
+      /**
+       * Occurred At
+       * Format: date-time
+       */
+      occurred_at: string;
+      /** Resolved At */
+      resolved_at: string | null;
     };
     /** IntervalUpdateRequest */
     IntervalUpdateRequest: {
@@ -604,6 +673,39 @@ export interface components {
     SchedulerStatusResponse: {
       /** Sources */
       sources: components['schemas']['SourceStatus'][];
+    };
+    /** ScoringFailureListResponse */
+    ScoringFailureListResponse: {
+      /** Items */
+      items: components['schemas']['ScoringFailureResponse'][];
+      /** Total */
+      total: number;
+    };
+    /** ScoringFailureResponse */
+    ScoringFailureResponse: {
+      /** Id */
+      id: number;
+      /** Offer Id */
+      offer_id: number;
+      /** Profile Id */
+      profile_id: number;
+      /** Failure Type */
+      failure_type: string;
+      /** Error Message */
+      error_message: string;
+      /** Raw Payload */
+      raw_payload: {
+        [key: string]: unknown;
+      } | null;
+      /** Status */
+      status: string;
+      /**
+       * Occurred At
+       * Format: date-time
+       */
+      occurred_at: string;
+      /** Resolved At */
+      resolved_at: string | null;
     };
     /** ScoringStatusResponse */
     ScoringStatusResponse: {
@@ -1181,6 +1283,84 @@ export interface operations {
         };
         content: {
           'application/json': unknown;
+        };
+      };
+    };
+  };
+  list_failures_route_failures__process__get: {
+    parameters: {
+      query?: {
+        failure_type?: string | null;
+        /** @description Connector identity (ingestion only) */
+        source?: string | null;
+        /** @description Offer id (scoring only) */
+        offer_id?: number | null;
+        /** @description Profile id (scoring only) */
+        profile_id?: number | null;
+        status?: 'open' | 'resolved' | 'all';
+        limit?: number;
+        offset?: number;
+      };
+      header?: never;
+      path: {
+        process: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['IngestionFailureListResponse']
+            | components['schemas']['ScoringFailureListResponse'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  retry_failure_route_failures__process___failure_id__retry_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        process: string;
+        failure_id: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['IngestionFailureResponse']
+            | components['schemas']['ScoringFailureResponse'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
         };
       };
     };

@@ -6,14 +6,23 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.models import IngestionFailure
 from app.db.models import Offer as OfferModel
-from app.ingestion.dedup import compute_dedup_hash
+from app.dlq.service import record_failure
+from app.ingestion.dedup import compute_dedup_hash, normalize_canonical_url
 from app.schemas.offer import Offer
 
 logger = logging.getLogger(__name__)
 
 
-def normalize_and_validate(raw: dict[str, Any]) -> Offer | None:
+def _validation_failure_dedup_key(raw: dict[str, Any]) -> str:
+    canonical_url = raw.get("canonical_url")
+    if canonical_url:
+        return f"validation:{normalize_canonical_url(canonical_url)}"
+    return f"validation:{raw.get('source_id')}:{raw.get('title', '')}:{raw.get('company', '')}"
+
+
+async def normalize_and_validate(session: AsyncSession, raw: dict[str, Any]) -> Offer | None:
     try:
         return Offer.model_validate(raw)
     except ValidationError as exc:
@@ -22,6 +31,15 @@ def normalize_and_validate(raw: dict[str, Any]) -> Offer | None:
             raw.get("canonical_url"),
             raw.get("title"),
             str(exc),
+        )
+        await record_failure(
+            session,
+            IngestionFailure,
+            dedup_key=_validation_failure_dedup_key(raw),
+            source_id=raw["source_id"],
+            failure_type="validation_failed",
+            raw_payload=raw,
+            error_message=str(exc),
         )
         return None
 
@@ -46,7 +64,7 @@ async def persist_offer(
 async def ingest_offer(
     session: AsyncSession, mapped_fields: dict[str, Any], raw_payload: dict[str, Any]
 ) -> tuple[OfferModel, bool] | None:
-    offer = normalize_and_validate(mapped_fields)
+    offer = await normalize_and_validate(session, mapped_fields)
     if offer is None:
         return None
     return await persist_offer(session, offer, raw_payload)

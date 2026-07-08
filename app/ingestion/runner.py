@@ -5,6 +5,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.models import IngestionFailure
+from app.dlq.service import record_failure
 from app.ingestion.persist import ingest_offer
 from app.ingestion.types import IngestionResult
 
@@ -51,6 +53,15 @@ async def run_paginated_ingestion(
                     error_message=f"failed to fetch {source_name} offers",
                 )
             logger.warning("%s pagination stopped early after %d page(s)", source_name, page_index)
+            await record_failure(
+                session,
+                IngestionFailure,
+                dedup_key=f"source:{source_id}",
+                source_id=source_id,
+                failure_type="page_fetch_failed",
+                page=page_index,
+                error_message=f"failed to fetch {source_name} page {page_index}",
+            )
             break
 
         offers, cursor = page

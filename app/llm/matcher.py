@@ -13,6 +13,8 @@ from app.config import get_settings
 from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
 from app.db.models import Profile as ProfileModel
+from app.db.models import ScoringFailure
+from app.dlq.service import record_failure
 from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
 from app.schemas.match_score import MatchScore
 from app.schemas.offer import Offer
@@ -292,6 +294,15 @@ async def score_offers_with_langchain(
             )
         except MatcherError as exc:
             logger.warning("LangChain matcher failed for offer_id=%s: %s", offer_row.id, exc)
+            await record_failure(
+                session,
+                ScoringFailure,
+                dedup_key=f"offer:{offer_row.id}:profile:{profile_row.id}",
+                offer_id=offer_row.id,
+                profile_id=profile_row.id,
+                failure_type="scoring_failed",
+                error_message=str(exc),
+            )
             if on_progress is not None:
                 on_progress(processed)
             continue
