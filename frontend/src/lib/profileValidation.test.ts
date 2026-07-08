@@ -20,7 +20,7 @@ describe('validateProfile', () => {
   it('produces all-false errors for a valid profile with all required sub-fields filled', () => {
     const profile: ProfileData = {
       ...emptyProfile(),
-      skills: [{ name: 'Python' }],
+      skills: [{ name: 'Python', hard: false }],
       past_roles: [{ title: 'Engineer', company: 'Acme' }],
       education: [{ institution: 'MIT' }],
       certifications: [{ name: 'AWS SAA' }],
@@ -40,7 +40,11 @@ describe('validateProfile', () => {
   it('flags a skill with a blank name and one with a whitespace-only name', () => {
     const profile: ProfileData = {
       ...emptyProfile(),
-      skills: [{ name: '' }, { name: '   ' }, { name: 'Go' }],
+      skills: [
+        { name: '', hard: false },
+        { name: '   ', hard: false },
+        { name: 'Go', hard: false },
+      ],
     };
 
     const errors = validateProfile(profile);

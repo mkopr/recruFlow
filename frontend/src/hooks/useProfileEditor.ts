@@ -23,7 +23,6 @@ function emptyProfile(): ProfileData {
     certifications: [],
     languages: [],
     deal_breakers: [],
-    core_skills: [],
     contract_type_preference: null,
     salary_min: null,
     salary_target: null,

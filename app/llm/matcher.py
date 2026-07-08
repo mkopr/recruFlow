@@ -33,7 +33,7 @@ LANGCHAIN_SOURCES = frozenset({SOLID_JOBS, JUSTJOINIT, NOFLUFFJOBS})
 
 _DEAL_BREAKER_SCORE_CAP: int = 40
 
-_CORE_SKILL_MISS_CAP: int = 25
+_HARD_SKILL_MISS_CAP: int = 25
 
 _CONSERVATIVE_SALARY_SCORE_CAP: float = 0.5
 
@@ -166,15 +166,20 @@ def _deal_breaker_hit(profile: Profile, offer: Offer) -> str | None:
     return None
 
 
-def _missing_core_skills(profile: Profile, offer: Offer) -> bool:
-    # Inverse of _deal_breaker_hit: True only when profile.core_skills is non-empty and
-    # none of them are found in the offer haystack (OR semantics — any single match clears
-    # the veto). Uses the exact same word-boundary/optional-separator regex construction.
-    if not profile.core_skills:
+def _hard_skill_names(profile: Profile) -> list[str]:
+    return [skill.name for skill in profile.skills if skill.hard]
+
+
+def _missing_hard_skills(profile: Profile, offer: Offer) -> bool:
+    # Inverse of _deal_breaker_hit: True only when the profile has at least one skill flagged
+    # hard and none of them are found in the offer haystack (OR semantics — any single match
+    # clears the veto). Uses the exact same word-boundary/optional-separator regex construction.
+    hard_skills = _hard_skill_names(profile)
+    if not hard_skills:
         return False
     haystack = _offer_haystack(offer)
-    for core_skill in profile.core_skills:
-        tokens = _tokenize(core_skill)
+    for hard_skill in hard_skills:
+        tokens = _tokenize(hard_skill)
         if not tokens:
             continue
         pattern = r"\b" + r"[\s\-_/]*".join(re.escape(token) for token in tokens) + r"\b"
@@ -187,8 +192,8 @@ def _cap_score_for_deal_breaker(score_percent: int) -> int:
     return min(score_percent, _DEAL_BREAKER_SCORE_CAP)
 
 
-def _cap_score_for_missing_core_skill(score_percent: int) -> int:
-    return min(score_percent, _CORE_SKILL_MISS_CAP)
+def _cap_score_for_missing_hard_skill(score_percent: int) -> int:
+    return min(score_percent, _HARD_SKILL_MISS_CAP)
 
 
 def _apply_missing_salary_conservatism(output: _MatcherOutput, profile: Profile) -> _MatcherOutput:
@@ -235,12 +240,12 @@ async def score_offer_with_langchain(
             f"score capped at {_DEAL_BREAKER_SCORE_CAP}."
         )
 
-    if _missing_core_skills(profile, offer):
-        score_percent = _cap_score_for_missing_core_skill(score_percent)
+    if _missing_hard_skills(profile, offer):
+        score_percent = _cap_score_for_missing_hard_skill(score_percent)
         rationale = (
-            f"{rationale} None of the required core skills "
-            f"({', '.join(profile.core_skills)}) were found in this offer; "
-            f"score capped at {_CORE_SKILL_MISS_CAP}."
+            f"{rationale} None of the required hard skills "
+            f"({', '.join(_hard_skill_names(profile))}) were found in this offer; "
+            f"score capped at {_HARD_SKILL_MISS_CAP}."
         )
 
     dimensions = {dim: getattr(output, dim) for dim in DIMENSION_WEIGHTS}

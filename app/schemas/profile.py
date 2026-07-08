@@ -8,6 +8,7 @@ class Skill(BaseModel):
 
     name: str = Field(min_length=1)
     category: str | None = None
+    hard: bool = False
 
 
 class PastRole(BaseModel):
@@ -94,7 +95,6 @@ class Profile(BaseModel):
     location_preference: str | None = None
     remote_preference: bool | None = None
     deal_breakers: list[str] = Field(default_factory=list)
-    core_skills: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_salary_target_not_below_min(self) -> "Profile":

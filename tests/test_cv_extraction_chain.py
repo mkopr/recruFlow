@@ -49,6 +49,22 @@ async def test_extract_profile_from_cv_text_maps_extraction_into_profile(
 
 
 @pytest.mark.asyncio
+async def test_extract_profile_from_cv_text_forces_hard_false_regardless_of_llm_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Skill.hard is a candidate preference, not a CV fact -- even if the structured-output
+    # schema let the model set it True, extraction must reset it deterministically.
+    async def fake_call_llm(cv_text: str) -> CVExtraction:
+        return CVExtraction(skills=[Skill(name="Go", category="language", hard=True)])
+
+    monkeypatch.setattr("app.llm.cv_extraction._call_llm", fake_call_llm)
+
+    profile = await extract_profile_from_cv_text("irrelevant text")
+
+    assert profile.skills[0].hard is False
+
+
+@pytest.mark.asyncio
 async def test_extract_profile_from_cv_text_wraps_core_llm_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

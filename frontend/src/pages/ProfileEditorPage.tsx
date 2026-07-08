@@ -1,5 +1,4 @@
 import { CertificationsList } from '../components/profile/CertificationsList';
-import { CoreSkillsList } from '../components/profile/CoreSkillsList';
 import { CvUploadControl } from '../components/profile/CvUploadControl';
 import { DealBreakersList } from '../components/profile/DealBreakersList';
 import { EducationList } from '../components/profile/EducationList';
@@ -29,7 +28,6 @@ function withDefaults(profile: ProfileData) {
     certifications: profile.certifications ?? [],
     languages: profile.languages ?? [],
     dealBreakers: profile.deal_breakers ?? [],
-    coreSkills: profile.core_skills ?? [],
   };
 }
 
@@ -101,11 +99,6 @@ export function ProfileEditorPage() {
       <DealBreakersList
         dealBreakers={fields.dealBreakers}
         onChange={(deal_breakers) => editor.setProfile({ ...profile, deal_breakers })}
-      />
-
-      <CoreSkillsList
-        coreSkills={fields.coreSkills}
-        onChange={(core_skills) => editor.setProfile({ ...profile, core_skills })}
       />
 
       <div className="flex gap-3">

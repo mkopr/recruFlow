@@ -156,4 +156,9 @@ async def _call_llm(cv_text: str) -> CVExtraction:
 
 async def extract_profile_from_cv_text(cv_text: str) -> Profile:
     extraction = await _call_llm(cv_text)
-    return Profile(**extraction.model_dump())
+    data = extraction.model_dump()
+    # Skill.hard is a candidate preference ("is this a hard requirement"), not a CV fact —
+    # force it False regardless of what the structured-output schema let the model fill in,
+    # the same deterministic-override pattern as the matcher's deal-breaker/salary handling.
+    data["skills"] = [{**skill, "hard": False} for skill in data["skills"]]
+    return Profile(**data)

@@ -324,3 +324,95 @@ async def test_get_profile_by_id_returns_none_for_unknown_id(db_session: AsyncSe
     result = await get_profile_by_id(db_session, 999_999)
 
     assert result is None
+
+
+async def _scored_offer(db_session: AsyncSession, profile_id: int) -> int:
+    """Ingests a throwaway Offer and writes one MatchScore row against it for
+    profile_id, mirroring BUG15's test fixture pattern above."""
+    source = Source(name=f"test-source-{uuid4()}", connector=None, config_json={})
+    db_session.add(source)
+    await db_session.flush()
+
+    result = await ingest_offer(
+        db_session,
+        {
+            "source_id": source.id,
+            "title": "Backend Engineer",
+            "company": "Acme",
+            "canonical_url": f"https://example.com/jobs/{uuid4()}",
+        },
+        raw_payload={},
+    )
+    assert result is not None
+    offer_id = result[0].id
+
+    db_session.add(
+        MatchScoreModel(
+            offer_id=offer_id,
+            profile_id=profile_id,
+            engine="langchain",
+            score_percent=92,
+            dimensions={},
+            rationale="test",
+        )
+    )
+    await db_session.flush()
+    return offer_id
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_upsert_active_profile_editing_active_profile_deletes_its_match_scores(
+    db_session: AsyncSession,
+) -> None:
+    # BUG30: an edit to the active profile's content must not leave stale MatchScore
+    # rows behind, or batch scoring's "no existing MatchScore row" query never revisits
+    # those offers again.
+    await _reset_test_profiles(db_session)
+    first = await upsert_active_profile(db_session, Profile(skills=[Skill(name="Python")]))
+    await db_session.commit()
+    await _scored_offer(db_session, first.id)
+    await db_session.commit()
+
+    await upsert_active_profile(db_session, Profile(skills=[Skill(name="Rust")]))
+    await db_session.commit()
+
+    remaining = (
+        (
+            await db_session.execute(
+                select(MatchScoreModel).where(MatchScoreModel.profile_id == first.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert remaining == []
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_upsert_active_profile_unchanged_resave_keeps_match_scores(
+    db_session: AsyncSession,
+) -> None:
+    await _reset_test_profiles(db_session)
+    profile = Profile(skills=[Skill(name="Python")])
+    first = await upsert_active_profile(db_session, profile)
+    await db_session.commit()
+    await _scored_offer(db_session, first.id)
+    await db_session.commit()
+
+    # Resaving identical data (e.g. re-clicking "Set as active" with no edits) must not
+    # nuke otherwise-still-valid scores.
+    await upsert_active_profile(db_session, profile)
+    await db_session.commit()
+
+    remaining = (
+        (
+            await db_session.execute(
+                select(MatchScoreModel).where(MatchScoreModel.profile_id == first.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(remaining) == 1

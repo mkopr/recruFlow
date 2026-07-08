@@ -1027,7 +1027,9 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   stores these fields plus an `is_active` boolean flag"; the structured fields live inside `data`,
   validated at the application layer, the same ELT-adjacent split `offers.raw_payload` already
   uses.
-- **Field list**: `skills` (`Skill`: `name`, `proficiency`, `years`, `category`), `past_roles`
+- **Field list**: `skills` (`Skill`: `name`, `proficiency`, `years`, `category`, `hard` — the last
+  added by P3US32, a candidate-marked "this is a hard requirement" flag consumed by the matcher's
+  hard-skill-miss cap, see the P3US22 section below), `past_roles`
   (`PastRole`: `title`, `company`, `start_date`, `end_date`, `description`), `education`
   (`Education`: `institution`, `degree`, `field_of_study`, `start_date`, `end_date`),
   `certifications` (`Certification`: `name`, `issuer`, `year`), `languages` (`Language`: `name`,
@@ -1035,8 +1037,7 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   `team_size` — distinct from `past_roles`, for a CV's own "Selected Projects"-style section),
   `industry_tags` (`list[str]`), `headline`, `summary`, `email`, `phone`, `location`, `links`
   (`list[str]`), `contract_type_preference`, `salary_min`, `salary_target`,
-  `location_preference`, `remote_preference`, `deal_breakers` (`list[str]`), `core_skills`
-  (`list[str]`, P3US32). `industry_tags` also
+  `location_preference`, `remote_preference`, `deal_breakers` (`list[str]`). `industry_tags` also
   exists on `Offer`/`OfferSummary` (`app/schemas/offer.py`, `offers.industry_tags` JSONB column)
   so postings can carry the same domain tags for future matching (BUG09).
 - **Three deliberate looseness decisions**, required by the acceptance criteria's "no fixed/
@@ -1120,11 +1121,14 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   `past_roles`, `education`, `certifications`, `languages`, `projects`, `industry_tags`,
   `headline`, `summary`, `email`, `phone`, `location`, `links`) — it deliberately omits `Profile`'s
   preference fields (`contract_type_preference`, `salary_min`, `salary_target`,
-  `location_preference`, `remote_preference`, `deal_breakers`, `core_skills`), because a CV's text has no basis
+  `location_preference`, `remote_preference`, `deal_breakers`), because a CV's text has no basis
   for those and the LLM must never be given a schema slot it could be tempted to fill with an
   inference. `extract_profile_from_cv_text` maps `CVExtraction` into a full `Profile` via
   `Profile(**extraction.model_dump())`, leaving every preference field at its own default (`None`
-  or `[]`).
+  or `[]`) — `Skill.hard` (P3US32) is the one preference-like field that rides along on a
+  CV-derived nested object rather than a top-level `Profile` field, so it gets its own explicit
+  force-reset-to-`False` step instead of "just don't put it in `CVExtraction`" (see the P3US22
+  section below).
 - **Three-way split LLM call (BUG09)**: `_call_llm` no longer asks the model to fill all of
   `CVExtraction` in a single structured-output call. Manual testing against a real two-page CV
   (`user stories/CV.pdf`) showed that once the schema grew to cover projects/industry
@@ -1337,26 +1341,43 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   between tokens, so `"on-site only"` matches `"on-site only"`, `"onsite only"`, and `"on site only"`
   alike, while a single-token deal-breaker like `"Java"` keeps plain word-boundary anchors and so
   never matches inside `"JavaScript"`.
-- **Core skill miss cap (P3US32)** is `deal_breakers`/`_deal_breaker_hit` inverted: a positive
+- **Hard skill miss cap (P3US32)** is `deal_breakers`/`_deal_breaker_hit` inverted: a positive
   "must mention at least one of these" check where `deal_breakers` is a negative "must mention
   none of these" one. Live investigation found a Java-only offer scoring 86% for a Python-only
   profile — `skill_match` (30% weight) got hedged to ~0.5 by the LLM while the other five
   dimensions scored ~1.0, and nothing let one dimension veto the total from the positive side the
-  way `deal_breakers` already vetoes it from the negative side. `_missing_core_skills(profile,
-  offer)` returns `True` only when `Profile.core_skills` is non-empty and *none* of its entries are
-  found in the offer haystack — OR semantics fall out naturally, since the loop returns `False` on
-  the first match. It reuses `_deal_breaker_hit`'s exact tokenize/regex/haystack machinery (factored
-  into a shared `_offer_haystack(offer)` helper both functions call) rather than inventing new
-  matching logic, so the same punctuation-variant and word-boundary guarantees apply symmetrically
-  (`"Java"` still won't false-match inside `"JavaScript"`). `_cap_score_for_missing_core_skill`
-  caps `score_percent` at `_CORE_SKILL_MISS_CAP = 25`, only ever lowering, never raising. Both caps
-  are applied unconditionally in sequence in `score_offer_with_langchain` (deal-breaker check
-  first, by precedent) — since `_CORE_SKILL_MISS_CAP` (25) is lower than `_DEAL_BREAKER_SCORE_CAP`
-  (40), this composes as `min()` of both cap values for free, with no extra bookkeeping, when an
-  offer trips both checks at once; each cap independently appends its own explanation to
-  `rationale`, so a doubly-capped score's rationale names both the matched deal-breaker and the
-  missing core skills. An empty `core_skills` list (the default) never triggers this cap, so
-  existing uncapped scores are unaffected.
+  way `deal_breakers` already vetoes it from the negative side.
+  - **Modeled as a flag on existing `Skill` entries, not a parallel free-text list.** The story
+    originally shipped a separate `Profile.core_skills: list[str]` (mirroring `deal_breakers`
+    exactly), but this duplicated skill names already entered in `Profile.skills` and invited
+    drift (typo/edit in one list but not the other). It was revised same-session to
+    `Skill.hard: bool = False` — the frontend `SkillsTable` gets a star toggle per skill instead
+    of `Profile` gaining a second list, and `_hard_skill_names(profile)` reads
+    `[s.name for s in profile.skills if s.hard]` as the set to check. `CoreSkillsList.tsx` was
+    deleted; there is no longer a `Profile.core_skills` field.
+  - **CV extraction never sets `hard=True`**: `Skill` is shared between `Profile` and
+    `CVExtraction` (the CV-upload LLM's structured-output target, see P2US2 below), so `hard`
+    is technically exposed in that schema too. `extract_profile_from_cv_text`
+    (`app/llm/cv_extraction.py`) force-resets every extracted skill's `hard` to `False`
+    regardless of what the model output, the same deterministic-override pattern as
+    `_apply_missing_salary_conservatism` — `hard` is a candidate preference, not a CV fact, and
+    must never be inferred.
+  - `_missing_hard_skills(profile, offer)` returns `True` only when the profile has at least one
+    skill flagged `hard` and *none* of their names are found in the offer haystack — OR semantics
+    fall out naturally, since the loop returns `False` on the first match. It reuses
+    `_deal_breaker_hit`'s exact tokenize/regex/haystack machinery (factored into a shared
+    `_offer_haystack(offer)` helper both functions call) rather than inventing new matching logic,
+    so the same punctuation-variant and word-boundary guarantees apply symmetrically (`"Java"`
+    still won't false-match inside `"JavaScript"`).
+  - `_cap_score_for_missing_hard_skill` caps `score_percent` at `_HARD_SKILL_MISS_CAP = 25`, only
+    ever lowering, never raising. Both caps are applied unconditionally in sequence in
+    `score_offer_with_langchain` (deal-breaker check first, by precedent) — since
+    `_HARD_SKILL_MISS_CAP` (25) is lower than `_DEAL_BREAKER_SCORE_CAP` (40), this composes as
+    `min()` of both cap values for free, with no extra bookkeeping, when an offer trips both
+    checks at once; each cap independently appends its own explanation to `rationale`, so a
+    doubly-capped score's rationale names both the matched deal-breaker and the missing hard
+    skills. No skill flagged `hard` (the default) never triggers this cap, so existing uncapped
+    scores are unaffected.
 - **Missing-field conservatism is a code-level backstop, not prompt-only** —
   `_apply_missing_salary_conservatism` clamps `salary_fit` to `<= 0.5` and appends a note to the
   rationale whenever `Profile.salary_min` and `Profile.salary_target` are both absent, regardless of
@@ -1427,6 +1448,24 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   Profile on the next run — no explicit re-scoring logic exists or is needed; it falls out of
   the query shape. Old `MatchScore` rows against the previous Profile are never deleted (US21's
   original "always insert, never overwrite" design).
+- **Re-scoring on in-place Profile *edit* (BUG30)**: the "Re-scoring on Profile change" bullet
+  above only covers `profile_id` actually changing (activating a different row). Editing the same
+  active profile's content in place — a new CV upload, a changed deal-breaker, a newly-starred
+  hard skill — kept `profile_id` constant, so every offer that already had a `MatchScore` row for
+  that id stayed permanently excluded from `_fetch_unscored_offers`, showing a stale score
+  indefinitely; there was no notion of "this profile's content changed since this score was
+  computed." Fixed in `app/db/profile_repo.py`'s `upsert_profile`: it now compares the row's
+  previous `data` JSONB against the newly-validated `Profile.model_dump(mode="json")` before
+  overwriting it, and if they differ *and* the row ends up active, calls the new
+  `invalidate_scores_for_profile(session, profile_id)` — a plain `DELETE FROM match_scores WHERE
+  profile_id = :id` — before returning. This is deliberately the cheapest of BUG30's own suggested
+  fixes (full delete-and-redrain, not a `MatchScore.created_at < Profile.updated_at` staleness
+  comparison): it needs no schema change and no edit to `_fetch_unscored_offers` at all — the
+  offers simply reappear in the same "no MatchScore row exists" query the backlog-draining job
+  (BUG24) already polls every `scoring_job_interval_seconds`, so a profile edit's full rescore
+  happens automatically in the background, never blocking the save request itself. The
+  `data_changed` comparison is what keeps a no-op resave (e.g. re-clicking "Set as active" with no
+  edits) from needlessly nuking otherwise-still-valid scores.
 - **`POST /score/batch`** (`app/api/routes/scoring.py`, `app/schemas/scoring.py`'s flat
   `BatchScoringResponse`): calls `run_batch_scoring`, commits, returns the counts. Always `200`
   — there's no per-connector routing to 404 on the way `POST /ingest/{source}` has, and

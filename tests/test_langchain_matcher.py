@@ -2,22 +2,27 @@ import httpx
 import pytest
 from app.connectors.solid_jobs import map_solid_jobs_offer
 from app.llm.matcher import (
-    _CORE_SKILL_MISS_CAP,
     _DEAL_BREAKER_SCORE_CAP,
+    _HARD_SKILL_MISS_CAP,
     DIMENSION_WEIGHTS,
     MatcherError,
     _cap_score_for_deal_breaker,
-    _cap_score_for_missing_core_skill,
+    _cap_score_for_missing_hard_skill,
     _deal_breaker_hit,
     _MatcherOutput,
-    _missing_core_skills,
+    _missing_hard_skills,
     _weighted_total,
     is_langchain_source,
     score_offer_with_langchain,
 )
 from app.schemas.offer import Offer
-from app.schemas.profile import Profile
+from app.schemas.profile import Profile, Skill
 from langchain_core.messages import BaseMessage
+
+
+def _hard_skill(name: str) -> Skill:
+    return Skill(name=name, hard=True)
+
 
 _STRONG_OUTPUT_KWARGS = {
     "skill_match": 0.95,
@@ -59,7 +64,6 @@ def _profile(**overrides: object) -> Profile:
         "salary_min": 15000,
         "salary_target": 20000,
         "deal_breakers": [],
-        "core_skills": [],
     }
     defaults.update(overrides)
     return Profile(**defaults)
@@ -339,9 +343,9 @@ def test_dimension_weights_sum_to_one() -> None:
 
 
 @pytest.mark.asyncio
-async def test_score_offer_with_langchain_no_cap_when_core_skill_present_in_offer_text() -> None:
+async def test_score_offer_with_langchain_no_cap_when_hard_skill_present_in_offer_text() -> None:
     output = _MatcherOutput(**_STRONG_OUTPUT_KWARGS)
-    profile = _profile(core_skills=["Python"])
+    profile = _profile(skills=[_hard_skill("Python")])
     offer = _offer(description="Backend role, Python and Django required.")
 
     score = await score_offer_with_langchain(
@@ -358,9 +362,9 @@ async def test_score_offer_with_langchain_no_cap_when_core_skill_present_in_offe
 
 
 @pytest.mark.asyncio
-async def test_score_offer_with_langchain_caps_score_when_core_skill_missing() -> None:
+async def test_score_offer_with_langchain_caps_score_when_hard_skill_missing() -> None:
     output = _MatcherOutput(**_STRONG_OUTPUT_KWARGS)
-    profile = _profile(core_skills=["Python"])
+    profile = _profile(skills=[_hard_skill("Python")])
     offer = _offer(
         title="Senior Java Engineer",
         description="A great Java role.",
@@ -375,17 +379,17 @@ async def test_score_offer_with_langchain_caps_score_when_core_skill_missing() -
         chain_factory=lambda: _FakeChain(output),
     )
 
-    assert score.score_percent == _CORE_SKILL_MISS_CAP
+    assert score.score_percent == _HARD_SKILL_MISS_CAP
     assert "python" in score.rationale.lower()
-    assert str(_CORE_SKILL_MISS_CAP) in score.rationale
+    assert str(_HARD_SKILL_MISS_CAP) in score.rationale
 
 
 @pytest.mark.asyncio
-async def test_score_offer_with_langchain_core_skill_cap_leaves_already_low_score_unchanged() -> (
+async def test_score_offer_with_langchain_hard_skill_cap_leaves_already_low_score_unchanged() -> (
     None
 ):
     output = _MatcherOutput(**_MODERATELY_LOW_OUTPUT_KWARGS)
-    profile = _profile(core_skills=["Python"])
+    profile = _profile(skills=[_hard_skill("Python")])
     offer = _offer(
         title="Senior Java Engineer",
         description="A great Java role.",
@@ -393,7 +397,7 @@ async def test_score_offer_with_langchain_core_skill_cap_leaves_already_low_scor
     )
 
     uncapped = round(_weighted_total(_MatcherOutput(**_MODERATELY_LOW_OUTPUT_KWARGS)) * 100)
-    assert uncapped < _CORE_SKILL_MISS_CAP
+    assert uncapped < _HARD_SKILL_MISS_CAP
 
     score = await score_offer_with_langchain(
         offer_id=1,
@@ -406,53 +410,63 @@ async def test_score_offer_with_langchain_core_skill_cap_leaves_already_low_scor
     assert score.score_percent == uncapped
 
 
-def test_missing_core_skills_true_when_none_of_multiple_skills_present() -> None:
-    profile = _profile(core_skills=["Python", "Go"])
+def test_missing_hard_skills_true_when_none_of_multiple_skills_present() -> None:
+    profile = _profile(skills=[_hard_skill("Python"), _hard_skill("Go")])
     offer = _offer(description="A great Java role using Kotlin and Scala.")
 
-    assert _missing_core_skills(profile, offer) is True
+    assert _missing_hard_skills(profile, offer) is True
 
 
-def test_missing_core_skills_false_when_at_least_one_of_multiple_present() -> None:
-    profile = _profile(core_skills=["Python", "Go"])
+def test_missing_hard_skills_false_when_at_least_one_of_multiple_present() -> None:
+    profile = _profile(skills=[_hard_skill("Python"), _hard_skill("Go")])
     offer = _offer(description="A great Go role.")
 
-    assert _missing_core_skills(profile, offer) is False
+    assert _missing_hard_skills(profile, offer) is False
 
 
-def test_missing_core_skills_false_when_core_skills_empty() -> None:
-    profile = _profile(core_skills=[])
+def test_missing_hard_skills_false_when_no_skill_flagged_hard() -> None:
+    profile = _profile(skills=[Skill(name="Python", hard=False)])
     offer = _offer(description="A great Java role.")
 
-    assert _missing_core_skills(profile, offer) is False
+    assert _missing_hard_skills(profile, offer) is False
 
 
-def test_missing_core_skills_word_boundary_avoids_java_javascript_false_positive() -> None:
-    profile = _profile(core_skills=["Java"])
+def test_missing_hard_skills_false_when_skills_empty() -> None:
+    profile = _profile(skills=[])
+    offer = _offer(description="A great Java role.")
+
+    assert _missing_hard_skills(profile, offer) is False
+
+
+def test_missing_hard_skills_word_boundary_avoids_java_javascript_false_positive() -> None:
+    profile = _profile(skills=[_hard_skill("Java")])
     offer = _offer(description="We use JavaScript and TypeScript extensively.")
 
-    assert _missing_core_skills(profile, offer) is True
+    assert _missing_hard_skills(profile, offer) is True
 
 
-def test_missing_core_skills_matches_punctuation_variants() -> None:
-    profile = _profile(core_skills=["on-site"])
+def test_missing_hard_skills_matches_punctuation_variants() -> None:
+    profile = _profile(skills=[_hard_skill("on-site")])
 
-    assert _missing_core_skills(profile, _offer(description="This is onsite work.")) is False
-    assert _missing_core_skills(profile, _offer(description="This is on-site work.")) is False
-    assert _missing_core_skills(profile, _offer(description="This is on site work.")) is False
+    assert _missing_hard_skills(profile, _offer(description="This is onsite work.")) is False
+    assert _missing_hard_skills(profile, _offer(description="This is on-site work.")) is False
+    assert _missing_hard_skills(profile, _offer(description="This is on site work.")) is False
 
 
-def test_missing_core_skills_skips_blank_core_skill_entries() -> None:
-    profile = _profile(core_skills=["", "Python"])
+def test_missing_hard_skills_skips_skill_name_that_tokenizes_to_nothing() -> None:
+    # Skill.name has min_length=1, so this uses a separator-only name ("-") that passes
+    # that constraint but tokenizes to an empty list, exercising _tokenize's "if not
+    # tokens: continue" branch rather than an empty string.
+    profile = _profile(skills=[_hard_skill("-"), _hard_skill("Python")])
     offer = _offer(description="A great Java role using Kotlin and Scala.")
 
-    assert _missing_core_skills(profile, offer) is True
+    assert _missing_hard_skills(profile, offer) is True
 
 
 @pytest.mark.asyncio
-async def test_score_offer_with_langchain_deal_breaker_and_core_skill_miss_both_apply() -> None:
+async def test_score_offer_with_langchain_deal_breaker_and_hard_skill_miss_both_apply() -> None:
     output = _MatcherOutput(**_STRONG_OUTPUT_KWARGS)
-    profile = _profile(deal_breakers=["on-site only"], core_skills=["Python"])
+    profile = _profile(deal_breakers=["on-site only"], skills=[_hard_skill("Python")])
     offer = _offer(description="This is an On-Site Only Java role, no exceptions.")
 
     score = await score_offer_with_langchain(
@@ -463,7 +477,7 @@ async def test_score_offer_with_langchain_deal_breaker_and_core_skill_miss_both_
         chain_factory=lambda: _FakeChain(output),
     )
 
-    assert score.score_percent == min(_DEAL_BREAKER_SCORE_CAP, _CORE_SKILL_MISS_CAP)
+    assert score.score_percent == min(_DEAL_BREAKER_SCORE_CAP, _HARD_SKILL_MISS_CAP)
     assert "on-site only" in score.rationale.lower()
     assert "python" in score.rationale.lower()
 
@@ -472,7 +486,7 @@ async def test_score_offer_with_langchain_deal_breaker_and_core_skill_miss_both_
     ("score_percent", "expected"),
     [(10, 10), (24, 24), (25, 25), (60, 25), (92, 25)],
 )
-def test_cap_score_for_missing_core_skill_only_lowers_never_raises(
+def test_cap_score_for_missing_hard_skill_only_lowers_never_raises(
     score_percent: int, expected: int
 ) -> None:
-    assert _cap_score_for_missing_core_skill(score_percent) == expected
+    assert _cap_score_for_missing_hard_skill(score_percent) == expected
