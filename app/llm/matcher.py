@@ -33,6 +33,8 @@ LANGCHAIN_SOURCES = frozenset({SOLID_JOBS, JUSTJOINIT, NOFLUFFJOBS})
 
 _DEAL_BREAKER_SCORE_CAP: int = 40
 
+_CORE_SKILL_MISS_CAP: int = 25
+
 _CONSERVATIVE_SALARY_SCORE_CAP: float = 0.5
 
 _LLM_REQUEST_TIMEOUT_SECONDS = 120.0
@@ -131,14 +133,8 @@ def _tokenize(text: str) -> list[str]:
     return [word for word in _WORD_SEPARATOR_RE.split(text.strip().lower()) if word]
 
 
-def _deal_breaker_hit(profile: Profile, offer: Offer) -> str | None:
-    # Tokens are joined with an *optional* (zero-or-more) separator, not a required one,
-    # so "on-site only" matches "on-site only", "onsite only", and "on site only" alike —
-    # a hyphen in the deal-breaker may or may not appear as any separator in the offer text.
-    # Single-token deal-breakers (e.g. "Java") get no internal joiner at all, so the outer
-    # \b anchors alone still block a false match inside "JavaScript" (no boundary exists
-    # between "java" and "script" there since both are word characters).
-    haystack = " ".join(
+def _offer_haystack(offer: Offer) -> str:
+    return " ".join(
         filter(
             None,
             [
@@ -150,6 +146,16 @@ def _deal_breaker_hit(profile: Profile, offer: Offer) -> str | None:
             ],
         )
     ).lower()
+
+
+def _deal_breaker_hit(profile: Profile, offer: Offer) -> str | None:
+    # Tokens are joined with an *optional* (zero-or-more) separator, not a required one,
+    # so "on-site only" matches "on-site only", "onsite only", and "on site only" alike —
+    # a hyphen in the deal-breaker may or may not appear as any separator in the offer text.
+    # Single-token deal-breakers (e.g. "Java") get no internal joiner at all, so the outer
+    # \b anchors alone still block a false match inside "JavaScript" (no boundary exists
+    # between "java" and "script" there since both are word characters).
+    haystack = _offer_haystack(offer)
     for deal_breaker in profile.deal_breakers:
         tokens = _tokenize(deal_breaker)
         if not tokens:
@@ -160,8 +166,29 @@ def _deal_breaker_hit(profile: Profile, offer: Offer) -> str | None:
     return None
 
 
+def _missing_core_skills(profile: Profile, offer: Offer) -> bool:
+    # Inverse of _deal_breaker_hit: True only when profile.core_skills is non-empty and
+    # none of them are found in the offer haystack (OR semantics — any single match clears
+    # the veto). Uses the exact same word-boundary/optional-separator regex construction.
+    if not profile.core_skills:
+        return False
+    haystack = _offer_haystack(offer)
+    for core_skill in profile.core_skills:
+        tokens = _tokenize(core_skill)
+        if not tokens:
+            continue
+        pattern = r"\b" + r"[\s\-_/]*".join(re.escape(token) for token in tokens) + r"\b"
+        if re.search(pattern, haystack):
+            return False
+    return True
+
+
 def _cap_score_for_deal_breaker(score_percent: int) -> int:
     return min(score_percent, _DEAL_BREAKER_SCORE_CAP)
+
+
+def _cap_score_for_missing_core_skill(score_percent: int) -> int:
+    return min(score_percent, _CORE_SKILL_MISS_CAP)
 
 
 def _apply_missing_salary_conservatism(output: _MatcherOutput, profile: Profile) -> _MatcherOutput:
@@ -206,6 +233,14 @@ async def score_offer_with_langchain(
         rationale = (
             f"{rationale} Deal-breaker matched: '{deal_breaker}'; "
             f"score capped at {_DEAL_BREAKER_SCORE_CAP}."
+        )
+
+    if _missing_core_skills(profile, offer):
+        score_percent = _cap_score_for_missing_core_skill(score_percent)
+        rationale = (
+            f"{rationale} None of the required core skills "
+            f"({', '.join(profile.core_skills)}) were found in this offer; "
+            f"score capped at {_CORE_SKILL_MISS_CAP}."
         )
 
     dimensions = {dim: getattr(output, dim) for dim in DIMENSION_WEIGHTS}

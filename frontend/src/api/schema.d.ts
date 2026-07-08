@@ -564,6 +564,8 @@ export interface components {
       remote_preference?: boolean | null;
       /** Deal Breakers */
       deal_breakers?: string[];
+      /** Core Skills */
+      core_skills?: string[];
     };
     /** ProfileResponse */
     ProfileResponse: {

@@ -1035,7 +1035,8 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   `team_size` — distinct from `past_roles`, for a CV's own "Selected Projects"-style section),
   `industry_tags` (`list[str]`), `headline`, `summary`, `email`, `phone`, `location`, `links`
   (`list[str]`), `contract_type_preference`, `salary_min`, `salary_target`,
-  `location_preference`, `remote_preference`, `deal_breakers` (`list[str]`). `industry_tags` also
+  `location_preference`, `remote_preference`, `deal_breakers` (`list[str]`), `core_skills`
+  (`list[str]`, P3US32). `industry_tags` also
   exists on `Offer`/`OfferSummary` (`app/schemas/offer.py`, `offers.industry_tags` JSONB column)
   so postings can carry the same domain tags for future matching (BUG09).
 - **Three deliberate looseness decisions**, required by the acceptance criteria's "no fixed/
@@ -1119,7 +1120,7 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   `past_roles`, `education`, `certifications`, `languages`, `projects`, `industry_tags`,
   `headline`, `summary`, `email`, `phone`, `location`, `links`) — it deliberately omits `Profile`'s
   preference fields (`contract_type_preference`, `salary_min`, `salary_target`,
-  `location_preference`, `remote_preference`, `deal_breakers`), because a CV's text has no basis
+  `location_preference`, `remote_preference`, `deal_breakers`, `core_skills`), because a CV's text has no basis
   for those and the LLM must never be given a schema slot it could be tempted to fill with an
   inference. `extract_profile_from_cv_text` maps `CVExtraction` into a full `Profile` via
   `Profile(**extraction.model_dump())`, leaving every preference field at its own default (`None`
@@ -1336,6 +1337,26 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   between tokens, so `"on-site only"` matches `"on-site only"`, `"onsite only"`, and `"on site only"`
   alike, while a single-token deal-breaker like `"Java"` keeps plain word-boundary anchors and so
   never matches inside `"JavaScript"`.
+- **Core skill miss cap (P3US32)** is `deal_breakers`/`_deal_breaker_hit` inverted: a positive
+  "must mention at least one of these" check where `deal_breakers` is a negative "must mention
+  none of these" one. Live investigation found a Java-only offer scoring 86% for a Python-only
+  profile — `skill_match` (30% weight) got hedged to ~0.5 by the LLM while the other five
+  dimensions scored ~1.0, and nothing let one dimension veto the total from the positive side the
+  way `deal_breakers` already vetoes it from the negative side. `_missing_core_skills(profile,
+  offer)` returns `True` only when `Profile.core_skills` is non-empty and *none* of its entries are
+  found in the offer haystack — OR semantics fall out naturally, since the loop returns `False` on
+  the first match. It reuses `_deal_breaker_hit`'s exact tokenize/regex/haystack machinery (factored
+  into a shared `_offer_haystack(offer)` helper both functions call) rather than inventing new
+  matching logic, so the same punctuation-variant and word-boundary guarantees apply symmetrically
+  (`"Java"` still won't false-match inside `"JavaScript"`). `_cap_score_for_missing_core_skill`
+  caps `score_percent` at `_CORE_SKILL_MISS_CAP = 25`, only ever lowering, never raising. Both caps
+  are applied unconditionally in sequence in `score_offer_with_langchain` (deal-breaker check
+  first, by precedent) — since `_CORE_SKILL_MISS_CAP` (25) is lower than `_DEAL_BREAKER_SCORE_CAP`
+  (40), this composes as `min()` of both cap values for free, with no extra bookkeeping, when an
+  offer trips both checks at once; each cap independently appends its own explanation to
+  `rationale`, so a doubly-capped score's rationale names both the matched deal-breaker and the
+  missing core skills. An empty `core_skills` list (the default) never triggers this cap, so
+  existing uncapped scores are unaffected.
 - **Missing-field conservatism is a code-level backstop, not prompt-only** —
   `_apply_missing_salary_conservatism` clamps `salary_fit` to `<= 0.5` and appends a note to the
   rationale whenever `Profile.salary_min` and `Profile.salary_target` are both absent, regardless of
