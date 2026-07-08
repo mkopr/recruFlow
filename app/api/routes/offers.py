@@ -1,5 +1,7 @@
+from typing import Any, Literal
+
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import ColumnElement, and_, func, or_, select
 
 from app.api.deps import SessionDep
 from app.db.models import MatchScore as MatchScoreModel
@@ -100,6 +102,11 @@ async def list_offers(
     ),
     applied: bool | None = Query(default=None),
     show_hidden: bool = Query(default=False),
+    order_by: Literal["posted_at", "score_percent"] = Query(
+        default="posted_at",
+        description="Field to sort the full result set by before paginating",
+    ),
+    order: Literal["asc", "desc"] = Query(default="desc"),
     limit: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     offset: int = Query(default=0, ge=0),
 ) -> OfferListResponse:
@@ -154,15 +161,30 @@ async def list_offers(
 
     total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
 
-    page_stmt = (
-        stmt.order_by(
+    order_clauses: tuple[ColumnElement[Any], ...]
+    if order_by == "score_percent":
+        # Unscored offers (score_percent is null) always sort last, regardless of
+        # asc/desc direction, matching the client's prior local-sort behaviour.
+        score_order = (
+            latest_score.c.score_percent.asc()
+            if order == "asc"
+            else latest_score.c.score_percent.desc()
+        )
+        order_clauses = (
+            score_order.nulls_last(),
             OfferModel.posted_at.desc().nulls_last(),
             OfferModel.created_at.desc(),
             OfferModel.id.desc(),
         )
-        .limit(limit)
-        .offset(offset)
-    )
+    else:
+        posted_order = OfferModel.posted_at.asc() if order == "asc" else OfferModel.posted_at.desc()
+        order_clauses = (
+            posted_order.nulls_last(),
+            OfferModel.created_at.desc(),
+            OfferModel.id.desc(),
+        )
+
+    page_stmt = stmt.order_by(*order_clauses).limit(limit).offset(offset)
 
     rows = (await session.execute(page_stmt)).all()
     items = [

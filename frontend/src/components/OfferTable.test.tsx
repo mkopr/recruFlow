@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as offerScoreApi from '../api/offerScore';
 import * as offersApi from '../api/offers';
-import type { OfferSummary } from '../api/offers';
+import type { OfferListSort, OfferSummary } from '../api/offers';
 import { OfferTable } from './OfferTable';
 
 vi.mock('../api/offerScore', () => ({
@@ -18,6 +18,9 @@ vi.mock('../api/offers', () => ({
 const fetchOfferScoreMock = vi.mocked(offerScoreApi.fetchOfferScore);
 const patchOfferMock = vi.mocked(offersApi.patchOffer);
 const onOfferPatchedMock = vi.fn();
+const onScoreHeaderClickMock = vi.fn();
+
+const DEFAULT_SORT: OfferListSort = { orderBy: 'posted_at', order: 'desc' };
 
 function makeOffer(overrides: Partial<OfferSummary> = {}): OfferSummary {
   return {
@@ -61,22 +64,36 @@ function makeScore(
   };
 }
 
+function renderTable(
+  offers: OfferSummary[],
+  overrides: {
+    loading?: boolean;
+    minScore?: number | '';
+    sort?: OfferListSort;
+  } = {},
+) {
+  render(
+    <OfferTable
+      offers={offers}
+      loading={overrides.loading ?? false}
+      minScore={overrides.minScore ?? ''}
+      sort={overrides.sort ?? DEFAULT_SORT}
+      onScoreHeaderClick={onScoreHeaderClickMock}
+      onOfferPatched={onOfferPatchedMock}
+    />,
+  );
+}
+
 beforeEach(() => {
   fetchOfferScoreMock.mockReset();
   patchOfferMock.mockReset();
   onOfferPatchedMock.mockReset();
+  onScoreHeaderClickMock.mockReset();
 });
 
 describe('OfferTable', () => {
   it('renders required columns with correct values', () => {
-    render(
-      <OfferTable
-        offers={[makeOffer()]}
-        loading={false}
-        minScore=""
-        onOfferPatched={onOfferPatchedMock}
-      />,
-    );
+    renderTable([makeOffer()]);
 
     expect(screen.getByText('Senior Backend Engineer')).toBeInTheDocument();
     expect(screen.getByText('Acme')).toBeInTheDocument();
@@ -90,26 +107,20 @@ describe('OfferTable', () => {
   });
 
   it('shows an empty state when there are no offers', () => {
-    render(
-      <OfferTable offers={[]} loading={false} minScore="" onOfferPatched={onOfferPatchedMock} />,
-    );
+    renderTable([]);
 
     expect(screen.getByText(/no offers yet/i)).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
   it('does not show the empty state while loading with no offers yet', () => {
-    render(
-      <OfferTable offers={[]} loading={true} minScore="" onOfferPatched={onOfferPatchedMock} />,
-    );
+    renderTable([], { loading: true });
 
     expect(screen.queryByText(/no offers yet/i)).not.toBeInTheDocument();
   });
 
   it('shows a distinct empty state naming the active minimum score filter', () => {
-    render(
-      <OfferTable offers={[]} loading={false} minScore={50} onOfferPatched={onOfferPatchedMock} />,
-    );
+    renderTable([], { minScore: 50 });
 
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
     expect(
@@ -118,99 +129,59 @@ describe('OfferTable', () => {
   });
 
   it('formats a min-only salary range with a plus sign', () => {
-    render(
-      <OfferTable
-        offers={[makeOffer({ salary_min: 20000, salary_max: null })]}
-        loading={false}
-        minScore=""
-        onOfferPatched={onOfferPatchedMock}
-      />,
-    );
+    renderTable([makeOffer({ salary_min: 20000, salary_max: null })]);
 
     expect(screen.getByText('20,000+ PLN')).toBeInTheDocument();
   });
 
   it('formats a max-only salary range with "up to"', () => {
-    render(
-      <OfferTable
-        offers={[makeOffer({ salary_min: null, salary_max: 25000 })]}
-        loading={false}
-        minScore=""
-        onOfferPatched={onOfferPatchedMock}
-      />,
-    );
+    renderTable([makeOffer({ salary_min: null, salary_max: 25000 })]);
 
     expect(screen.getByText('up to 25,000 PLN')).toBeInTheDocument();
   });
 
   it('defaults to PLN when currency is null but salary is present', () => {
-    render(
-      <OfferTable
-        offers={[makeOffer({ salary_min: 20000, salary_max: null, salary_currency: null })]}
-        loading={false}
-        minScore=""
-        onOfferPatched={onOfferPatchedMock}
-      />,
-    );
+    renderTable([makeOffer({ salary_min: 20000, salary_max: null, salary_currency: null })]);
 
     expect(screen.getByText('20,000+ PLN')).toBeInTheDocument();
   });
 
   it('shows a dash when no salary information is present', () => {
-    render(
-      <OfferTable
-        offers={[makeOffer({ salary_min: null, salary_max: null })]}
-        loading={false}
-        minScore=""
-        onOfferPatched={onOfferPatchedMock}
-      />,
-    );
+    renderTable([makeOffer({ salary_min: null, salary_max: null })]);
 
     expect(screen.getByText('-')).toBeInTheDocument();
   });
 
-  it('sorts offers by posted date, newest first', () => {
-    const older = makeOffer({ id: 1, title: 'Older', posted_at: '2026-01-01T00:00:00Z' });
-    const newer = makeOffer({ id: 2, title: 'Newer', posted_at: '2026-06-01T00:00:00Z' });
+  it('renders offers in the order given by the server, without re-sorting client-side (BUG31)', () => {
+    // The server owns ordering now; a low-scored offer appearing first here (as
+    // it would under a score-desc sort) must not get client-side-reshuffled by
+    // posted_at, or "page 2 of a score sort" would silently break again.
+    const olderFirst = makeOffer({
+      id: 1,
+      title: 'ListedFirst',
+      posted_at: '2026-01-01T00:00:00Z',
+    });
+    const newerSecond = makeOffer({
+      id: 2,
+      title: 'ListedSecond',
+      posted_at: '2026-06-01T00:00:00Z',
+    });
 
-    render(
-      <OfferTable
-        offers={[older, newer]}
-        loading={false}
-        minScore=""
-        onOfferPatched={onOfferPatchedMock}
-      />,
-    );
+    renderTable([olderFirst, newerSecond]);
 
     const rows = screen.getAllByRole('row').slice(1);
-    expect(rows[0]).toHaveTextContent('Newer');
-    expect(rows[1]).toHaveTextContent('Older');
+    expect(rows[0]).toHaveTextContent('ListedFirst');
+    expect(rows[1]).toHaveTextContent('ListedSecond');
   });
 
   it('renders a score badge for an offer with a score', () => {
-    const offer = makeOffer({ id: 1, score_percent: 92 });
-    render(
-      <OfferTable
-        offers={[offer]}
-        loading={false}
-        minScore=""
-        onOfferPatched={onOfferPatchedMock}
-      />,
-    );
+    renderTable([makeOffer({ id: 1, score_percent: 92 })]);
 
     expect(screen.getByText('92%')).toBeInTheDocument();
   });
 
   it('renders the not-yet-scored badge for an offer with no score', () => {
-    const offer = makeOffer({ id: 1, score_percent: null });
-    render(
-      <OfferTable
-        offers={[offer]}
-        loading={false}
-        minScore=""
-        onOfferPatched={onOfferPatchedMock}
-      />,
-    );
+    renderTable([makeOffer({ id: 1, score_percent: null })]);
 
     expect(screen.getByText(/not yet scored/i)).toBeInTheDocument();
   });
@@ -221,14 +192,7 @@ describe('OfferTable', () => {
       makeScore({ score_percent: 92, rationale: 'Strong fit' }),
     );
 
-    render(
-      <OfferTable
-        offers={[offer]}
-        loading={false}
-        minScore=""
-        onOfferPatched={onOfferPatchedMock}
-      />,
-    );
+    renderTable([offer]);
 
     await userEvent.click(screen.getByRole('button', { name: /score 92%/i }));
 
@@ -239,14 +203,7 @@ describe('OfferTable', () => {
 
   it('does not open a drawer when clicking the not-yet-scored badge', async () => {
     const offer = makeOffer({ id: 1, score_percent: null });
-    render(
-      <OfferTable
-        offers={[offer]}
-        loading={false}
-        minScore=""
-        onOfferPatched={onOfferPatchedMock}
-      />,
-    );
+    renderTable([offer]);
 
     expect(screen.getByText(/not yet scored/i)).toBeInTheDocument();
     await userEvent.click(screen.getByText(/not yet scored/i));
@@ -255,82 +212,45 @@ describe('OfferTable', () => {
     expect(fetchOfferScoreMock).not.toHaveBeenCalled();
   });
 
-  it('sorts by score ascending on the first header click, then descending on the second click', async () => {
-    const offerMid = makeOffer({
-      id: 1,
-      title: 'OfferMid',
-      posted_at: '2026-01-01T00:00:00Z',
-      score_percent: 55,
-    });
-    const offerHigh = makeOffer({
-      id: 2,
-      title: 'OfferHigh',
-      posted_at: '2026-02-01T00:00:00Z',
-      score_percent: 92,
-    });
-    const offerLow = makeOffer({
-      id: 3,
-      title: 'OfferLow',
-      posted_at: '2026-03-01T00:00:00Z',
-      score_percent: 20,
-    });
+  it('calls onScoreHeaderClick when the Score header is clicked, without re-sorting locally', async () => {
+    const offerMid = makeOffer({ id: 1, title: 'OfferMid', score_percent: 55 });
+    const offerHigh = makeOffer({ id: 2, title: 'OfferHigh', score_percent: 92 });
+    const offerLow = makeOffer({ id: 3, title: 'OfferLow', score_percent: 20 });
 
-    render(
-      <OfferTable
-        offers={[offerMid, offerHigh, offerLow]}
-        loading={false}
-        minScore=""
-        onOfferPatched={onOfferPatchedMock}
-      />,
-    );
+    renderTable([offerMid, offerHigh, offerLow]);
 
     await userEvent.click(screen.getByRole('button', { name: 'Score' }));
-    let rows = screen.getAllByRole('row').slice(1);
-    expect(rows[0]).toHaveTextContent('OfferLow');
-    expect(rows[1]).toHaveTextContent('OfferMid');
-    expect(rows[2]).toHaveTextContent('OfferHigh');
 
-    await userEvent.click(screen.getByRole('button', { name: 'Score' }));
-    rows = screen.getAllByRole('row').slice(1);
-    expect(rows[0]).toHaveTextContent('OfferHigh');
-    expect(rows[1]).toHaveTextContent('OfferMid');
+    expect(onScoreHeaderClickMock).toHaveBeenCalledTimes(1);
+    const rows = screen.getAllByRole('row').slice(1);
+    expect(rows[0]).toHaveTextContent('OfferMid');
+    expect(rows[1]).toHaveTextContent('OfferHigh');
     expect(rows[2]).toHaveTextContent('OfferLow');
   });
 
-  it('keeps unscored offers last regardless of score sort direction', async () => {
-    const scoredOffer = makeOffer({ id: 1, title: 'Scored', score_percent: 77 });
-    const unscoredOffer = makeOffer({ id: 2, title: 'Unscored', score_percent: null });
+  it('shows an ascending indicator on the Score header when sorted by score ascending', () => {
+    renderTable([makeOffer()], { sort: { orderBy: 'score_percent', order: 'asc' } });
 
-    render(
-      <OfferTable
-        offers={[scoredOffer, unscoredOffer]}
-        loading={false}
-        minScore=""
-        onOfferPatched={onOfferPatchedMock}
-      />,
-    );
+    expect(screen.getByRole('button', { name: 'Score ▲' })).toBeInTheDocument();
+  });
 
-    await userEvent.click(screen.getByRole('button', { name: 'Score' }));
-    let rows = screen.getAllByRole('row').slice(1);
-    expect(rows[rows.length - 1]).toHaveTextContent('Unscored');
+  it('shows a descending indicator on the Score header when sorted by score descending', () => {
+    renderTable([makeOffer()], { sort: { orderBy: 'score_percent', order: 'desc' } });
 
-    await userEvent.click(screen.getByRole('button', { name: 'Score' }));
-    rows = screen.getAllByRole('row').slice(1);
-    expect(rows[rows.length - 1]).toHaveTextContent('Unscored');
+    expect(screen.getByRole('button', { name: 'Score ▼' })).toBeInTheDocument();
+  });
+
+  it('shows no sort indicator on the Score header when sorted by posted date', () => {
+    renderTable([makeOffer()], { sort: DEFAULT_SORT });
+
+    expect(screen.getByRole('button', { name: 'Score' })).toBeInTheDocument();
   });
 
   it('renders both scored and unscored offers as given (filtering happens server-side)', () => {
     const scoredOffer = makeOffer({ id: 1, title: 'Scored', score_percent: 77 });
     const unscoredOffer = makeOffer({ id: 2, title: 'Unscored', score_percent: null });
 
-    render(
-      <OfferTable
-        offers={[scoredOffer, unscoredOffer]}
-        loading={false}
-        minScore=""
-        onOfferPatched={onOfferPatchedMock}
-      />,
-    );
+    renderTable([scoredOffer, unscoredOffer]);
 
     expect(screen.getByText('Scored')).toBeInTheDocument();
     expect(screen.getByText('Unscored')).toBeInTheDocument();
@@ -341,14 +261,7 @@ describe('OfferTable', () => {
     const updated = { ...offer, applied: true };
     patchOfferMock.mockResolvedValue(updated);
 
-    render(
-      <OfferTable
-        offers={[offer]}
-        loading={false}
-        minScore=""
-        onOfferPatched={onOfferPatchedMock}
-      />,
-    );
+    renderTable([offer]);
 
     await userEvent.click(screen.getByRole('checkbox', { name: /applied to/i }));
 
@@ -361,14 +274,7 @@ describe('OfferTable', () => {
     const updated = { ...offer, hide: true };
     patchOfferMock.mockResolvedValue(updated);
 
-    render(
-      <OfferTable
-        offers={[offer]}
-        loading={false}
-        minScore=""
-        onOfferPatched={onOfferPatchedMock}
-      />,
-    );
+    renderTable([offer]);
 
     await userEvent.click(screen.getByRole('button', { name: /hide senior backend engineer/i }));
 
@@ -380,14 +286,7 @@ describe('OfferTable', () => {
     const withNotes = makeOffer({ id: 1, title: 'With Notes', notes: 'foo' });
     const withoutNotes = makeOffer({ id: 2, title: 'Without Notes', notes: null });
 
-    render(
-      <OfferTable
-        offers={[withNotes, withoutNotes]}
-        loading={false}
-        minScore=""
-        onOfferPatched={onOfferPatchedMock}
-      />,
-    );
+    renderTable([withNotes, withoutNotes]);
 
     expect(screen.getByRole('button', { name: /notes for with notes/i })).toHaveTextContent('📝');
     expect(screen.getByRole('button', { name: /notes for without notes/i })).toHaveTextContent(
@@ -400,14 +299,7 @@ describe('OfferTable', () => {
     const updated = { ...offer, notes: 'new notes' };
     patchOfferMock.mockResolvedValue(updated);
 
-    render(
-      <OfferTable
-        offers={[offer]}
-        loading={false}
-        minScore=""
-        onOfferPatched={onOfferPatchedMock}
-      />,
-    );
+    renderTable([offer]);
 
     await userEvent.click(screen.getByRole('button', { name: /notes for senior backend/i }));
     await userEvent.type(screen.getByRole('textbox'), 'new notes');

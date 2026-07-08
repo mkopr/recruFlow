@@ -905,6 +905,9 @@ export interface operations {
         min_score?: number | null;
         applied?: boolean | null;
         show_hidden?: boolean;
+        /** @description Field to sort the full result set by before paginating */
+        order_by?: 'posted_at' | 'score_percent';
+        order?: 'asc' | 'desc';
         limit?: number;
         offset?: number;
       };

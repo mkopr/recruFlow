@@ -4,6 +4,7 @@ import {
   fetchOffers,
   type OfferListFilters,
   type OfferListPage,
+  type OfferListSort,
   type OfferSummary,
 } from '../api/offers';
 
@@ -25,7 +26,11 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'failed to load offers';
 }
 
-export function useOffers(filters: OfferListFilters, page: OfferListPage): UseOffersResult {
+export function useOffers(
+  filters: OfferListFilters,
+  sort: OfferListSort,
+  page: OfferListPage,
+): UseOffersResult {
   const [offers, setOffers] = useState<OfferSummary[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -33,6 +38,7 @@ export function useOffers(filters: OfferListFilters, page: OfferListPage): UseOf
   const isFirstRun = useRef(true);
 
   const { source, remote, seniority, minSalary, minScore, applied, showHidden } = filters;
+  const { orderBy, order } = sort;
   const { limit, offset } = page;
 
   // react-hooks/set-state-in-effect forbids an effect calling a hoisted
@@ -47,6 +53,7 @@ export function useOffers(filters: OfferListFilters, page: OfferListPage): UseOf
       try {
         const result = await fetchOffers(
           { source, remote, seniority, minSalary, minScore, applied, showHidden },
+          { orderBy, order },
           { limit, offset },
         );
         if (!ignore) {
@@ -78,12 +85,25 @@ export function useOffers(filters: OfferListFilters, page: OfferListPage): UseOf
       ignore = true;
       clearTimeout(timer);
     };
-  }, [source, remote, seniority, minSalary, minScore, applied, showHidden, limit, offset]);
+  }, [
+    source,
+    remote,
+    seniority,
+    minSalary,
+    minScore,
+    applied,
+    showHidden,
+    orderBy,
+    order,
+    limit,
+    offset,
+  ]);
 
   const refetch = useCallback(() => {
     setLoading(true);
     fetchOffers(
       { source, remote, seniority, minSalary, minScore, applied, showHidden },
+      { orderBy, order },
       { limit, offset },
     )
       .then((result) => {
@@ -97,7 +117,19 @@ export function useOffers(filters: OfferListFilters, page: OfferListPage): UseOf
       .finally(() => {
         setLoading(false);
       });
-  }, [source, remote, seniority, minSalary, minScore, applied, showHidden, limit, offset]);
+  }, [
+    source,
+    remote,
+    seniority,
+    minSalary,
+    minScore,
+    applied,
+    showHidden,
+    orderBy,
+    order,
+    limit,
+    offset,
+  ]);
 
   const updateOffer = useCallback(
     (updated: OfferSummary) => {

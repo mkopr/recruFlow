@@ -21,8 +21,17 @@ export interface OfferListPage {
   offset: number;
 }
 
+export type OfferOrderBy = 'posted_at' | 'score_percent';
+export type OfferOrder = 'asc' | 'desc';
+
+export interface OfferListSort {
+  orderBy: OfferOrderBy;
+  order: OfferOrder;
+}
+
 export async function fetchOffers(
   filters: OfferListFilters,
+  sort: OfferListSort,
   page: OfferListPage,
 ): Promise<OfferListResponse> {
   const { data, error } = await apiClient.GET('/offers', {
@@ -35,6 +44,8 @@ export async function fetchOffers(
         min_score: filters.minScore,
         applied: filters.applied,
         show_hidden: filters.showHidden,
+        order_by: sort.orderBy,
+        order: sort.order,
         limit: page.limit,
         offset: page.offset,
       },

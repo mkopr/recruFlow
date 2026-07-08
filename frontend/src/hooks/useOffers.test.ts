@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as offersApi from '../api/offers';
-import type { OfferListFilters, OfferListPage, OfferSummary } from '../api/offers';
+import type { OfferListFilters, OfferListPage, OfferListSort, OfferSummary } from '../api/offers';
 import { useOffers } from './useOffers';
 
 vi.mock('../api/offers', () => ({
@@ -12,6 +12,7 @@ vi.mock('../api/offers', () => ({
 const fetchOffersMock = vi.mocked(offersApi.fetchOffers);
 
 const PAGE: OfferListPage = { limit: 50, offset: 0 };
+const SORT: OfferListSort = { orderBy: 'posted_at', order: 'desc' };
 
 function makeOffer(overrides: Partial<OfferSummary> = {}): OfferSummary {
   return {
@@ -46,7 +47,7 @@ beforeEach(() => {
 
 describe('useOffers', () => {
   it('fetches immediately on mount, with no debounce delay', async () => {
-    const { result } = renderHook(() => useOffers({}, PAGE));
+    const { result } = renderHook(() => useOffers({}, SORT, PAGE));
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(fetchOffersMock).toHaveBeenCalledTimes(1);
@@ -55,7 +56,7 @@ describe('useOffers', () => {
   it('exposes the total count returned by the API for pagination', async () => {
     fetchOffersMock.mockResolvedValue({ items: [], total: 137 });
 
-    const { result } = renderHook(() => useOffers({}, PAGE));
+    const { result } = renderHook(() => useOffers({}, SORT, PAGE));
 
     await waitFor(() => expect(result.current.total).toBe(137));
   });
@@ -64,7 +65,7 @@ describe('useOffers', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const { result, rerender } = renderHook(
-        (filters: OfferListFilters) => useOffers(filters, PAGE),
+        (filters: OfferListFilters) => useOffers(filters, SORT, PAGE),
         {
           initialProps: {} as OfferListFilters,
         },
@@ -90,6 +91,7 @@ describe('useOffers', () => {
           minSalary: 150,
           minScore: undefined,
         },
+        SORT,
         PAGE,
       );
     } finally {
@@ -100,7 +102,7 @@ describe('useOffers', () => {
   it('refetches with the new limit/offset when the page changes', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      const { result, rerender } = renderHook((page: OfferListPage) => useOffers({}, page), {
+      const { result, rerender } = renderHook((page: OfferListPage) => useOffers({}, SORT, page), {
         initialProps: PAGE,
       });
 
@@ -119,6 +121,7 @@ describe('useOffers', () => {
           minSalary: undefined,
           minScore: undefined,
         },
+        SORT,
         { limit: 50, offset: 50 },
       );
     } finally {
@@ -126,8 +129,39 @@ describe('useOffers', () => {
     }
   });
 
+  it('refetches with the new sort when the sort changes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { result, rerender } = renderHook((sort: OfferListSort) => useOffers({}, sort, PAGE), {
+        initialProps: SORT,
+      });
+
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      expect(fetchOffersMock).toHaveBeenCalledTimes(1);
+
+      const scoreSort: OfferListSort = { orderBy: 'score_percent', order: 'asc' };
+      rerender(scoreSort);
+
+      await vi.advanceTimersByTimeAsync(300);
+      expect(fetchOffersMock).toHaveBeenCalledTimes(2);
+      expect(fetchOffersMock).toHaveBeenLastCalledWith(
+        {
+          source: undefined,
+          remote: undefined,
+          seniority: undefined,
+          minSalary: undefined,
+          minScore: undefined,
+        },
+        scoreSort,
+        PAGE,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('threads applied and showHidden through to fetchOffers', async () => {
-    const { result } = renderHook(() => useOffers({ applied: true, showHidden: true }, PAGE));
+    const { result } = renderHook(() => useOffers({ applied: true, showHidden: true }, SORT, PAGE));
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(fetchOffersMock).toHaveBeenLastCalledWith(
@@ -140,6 +174,7 @@ describe('useOffers', () => {
         applied: true,
         showHidden: true,
       },
+      SORT,
       PAGE,
     );
   });
@@ -148,7 +183,7 @@ describe('useOffers', () => {
     const offer = makeOffer({ id: 1, applied: false });
     fetchOffersMock.mockResolvedValue({ items: [offer], total: 1 });
 
-    const { result } = renderHook(() => useOffers({}, PAGE));
+    const { result } = renderHook(() => useOffers({}, SORT, PAGE));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     const patched = { ...offer, applied: true };
@@ -163,7 +198,7 @@ describe('useOffers', () => {
     const offer = makeOffer({ id: 1, hide: false });
     fetchOffersMock.mockResolvedValue({ items: [offer], total: 1 });
 
-    const { result } = renderHook(() => useOffers({ showHidden: false }, PAGE));
+    const { result } = renderHook(() => useOffers({ showHidden: false }, SORT, PAGE));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     act(() => {
@@ -177,7 +212,7 @@ describe('useOffers', () => {
     const offer = makeOffer({ id: 1, hide: false });
     fetchOffersMock.mockResolvedValue({ items: [offer], total: 1 });
 
-    const { result } = renderHook(() => useOffers({ showHidden: true }, PAGE));
+    const { result } = renderHook(() => useOffers({ showHidden: true }, SORT, PAGE));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     const patched = { ...offer, hide: true };

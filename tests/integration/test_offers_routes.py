@@ -275,6 +275,181 @@ async def test_list_offers_paginates_with_limit_and_offset(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_list_offers_sorts_by_score_percent_desc_across_full_dataset(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    # Server-side sort must reflect the full dataset, not just the newest page: the
+    # highest score here (92) belongs to the *oldest* posted offer, so a naive
+    # posted_at-ordered page followed by client-side re-sort would never surface it
+    # correctly once paginated (BUG31).
+    await _deactivate_all_profiles(db_session)
+    connector = f"sort-score-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    low = await _create_offer(db_session, source_id, posted_at=datetime(2026, 6, 1, tzinfo=UTC))
+    high = await _create_offer(db_session, source_id, posted_at=datetime(2026, 1, 1, tzinfo=UTC))
+    unscored = await _create_offer(
+        db_session, source_id, posted_at=datetime(2026, 6, 2, tzinfo=UTC)
+    )
+    profile = Profile(name=f"profile-{uuid4()}", is_active=True, data={})
+    db_session.add(profile)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            MatchScore(
+                offer_id=low,
+                profile_id=profile.id,
+                engine="langchain",
+                score_percent=30,
+                dimensions={},
+            ),
+            MatchScore(
+                offer_id=high,
+                profile_id=profile.id,
+                engine="langchain",
+                score_percent=92,
+                dimensions={},
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    try:
+        response = await client.get(
+            "/offers",
+            params={"source": connector, "order_by": "score_percent", "order": "desc"},
+        )
+
+        ids = [entry["id"] for entry in response.json()["items"]]
+        assert ids == [high, low, unscored]
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_list_offers_sorts_by_score_percent_asc_unscored_still_last(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await _deactivate_all_profiles(db_session)
+    connector = f"sort-asc-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    low = await _create_offer(db_session, source_id)
+    high = await _create_offer(db_session, source_id)
+    unscored = await _create_offer(db_session, source_id)
+    profile = Profile(name=f"profile-{uuid4()}", is_active=True, data={})
+    db_session.add(profile)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            MatchScore(
+                offer_id=low,
+                profile_id=profile.id,
+                engine="langchain",
+                score_percent=30,
+                dimensions={},
+            ),
+            MatchScore(
+                offer_id=high,
+                profile_id=profile.id,
+                engine="langchain",
+                score_percent=92,
+                dimensions={},
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    try:
+        response = await client.get(
+            "/offers",
+            params={"source": connector, "order_by": "score_percent", "order": "asc"},
+        )
+
+        ids = [entry["id"] for entry in response.json()["items"]]
+        assert ids == [low, high, unscored]
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_list_offers_score_sort_applies_before_pagination(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    # Regression guard for BUG31: page two of a score-sorted request must be the
+    # next-best scores overall, not whatever posted_at-ordered offers landed there.
+    await _deactivate_all_profiles(db_session)
+    connector = f"sort-page-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    scores = {90: None, 70: None, 50: None, 30: None}
+    offer_ids = {}
+    for score in scores:
+        offer_ids[score] = await _create_offer(db_session, source_id)
+    profile = Profile(name=f"profile-{uuid4()}", is_active=True, data={})
+    db_session.add(profile)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            MatchScore(
+                offer_id=offer_ids[score],
+                profile_id=profile.id,
+                engine="langchain",
+                score_percent=score,
+                dimensions={},
+            )
+            for score in scores
+        ]
+    )
+    await db_session.commit()
+
+    try:
+        page_two = await client.get(
+            "/offers",
+            params={
+                "source": connector,
+                "order_by": "score_percent",
+                "order": "desc",
+                "limit": 2,
+                "offset": 2,
+            },
+        )
+
+        ids = [entry["id"] for entry in page_two.json()["items"]]
+        assert ids == [offer_ids[50], offer_ids[30]]
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_list_offers_order_asc_reverses_default_posted_at_sort(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    connector = f"order-asc-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    older = await _create_offer(db_session, source_id, posted_at=datetime(2026, 1, 1, tzinfo=UTC))
+    newer = await _create_offer(db_session, source_id, posted_at=datetime(2026, 6, 1, tzinfo=UTC))
+    await db_session.commit()
+
+    try:
+        response = await client.get("/offers", params={"source": connector, "order": "asc"})
+
+        ids = [entry["id"] for entry in response.json()["items"]]
+        assert ids == [older, newer]
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_list_offers_rejects_invalid_order_by(client: httpx.AsyncClient) -> None:
+    response = await client.get("/offers", params={"order_by": "bogus_field"})
+
+    assert response.status_code == 422
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_list_offers_rejects_page_size_above_max(client: httpx.AsyncClient) -> None:
     response = await client.get("/offers", params={"limit": 10000})
 

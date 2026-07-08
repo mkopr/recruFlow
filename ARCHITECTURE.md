@@ -835,6 +835,21 @@ and creates `scheduler_runs` plus its `(source_id, started_at)` index — see "S
   the one-`GET /offers/{id}/score`-request-per-offer fan-out the frontend previously did to render
   score badges for a loaded page.
 
+  **`order_by`/`order` (BUG31)**: BUG26's `ORDER BY` was fixed — clicking the frontend's "Score"
+  column header only re-sorted whatever 50 rows the current page already held, so "sort by score"
+  never surfaced the actual best/worst-matched offers across the full (18k+) backlog, only within
+  whatever page the fixed `posted_at DESC` order happened to place them on. `GET /offers` now takes
+  `order_by` (`posted_at` default, or `score_percent`) and `order` (`asc`/`desc`, default `desc`),
+  applied to the query **before** `LIMIT`/`OFFSET` so a requested page reflects the full dataset's
+  order. Score-sorted results always place unscored offers (`score_percent IS NULL`) last via
+  `.nulls_last()` regardless of `order` direction — matching the frontend's prior client-side
+  convention — with the existing `posted_at DESC NULLS LAST, created_at DESC, id DESC` chain kept as
+  a tiebreaker beneath it. On the frontend, clicking the "Score" header
+  (`OfferTable.tsx`) no longer sorts the already-fetched `offers` prop locally; it calls an
+  `onScoreHeaderClick` callback owned by `OfferListPage.tsx`, which flips `order_by`/`order` state,
+  resets to page one (same as any other filter change), and flows through `useOffers.ts` into a
+  server refetch.
+
   **`source`**: the response's `source` field is the connector identity string
   (`Source.connector`), falling back to `Source.name` when `connector` is `NULL` (covers
   non-scheduler-managed `Source` rows, e.g. `app/db/seed.py`'s `"seed"` fixture row) — a `source`

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import type { OfferListFilters } from '../api/offers';
+import type { OfferListFilters, OfferListSort } from '../api/offers';
 import { OfferFilters } from '../components/OfferFilters';
 import { OfferTable } from '../components/OfferTable';
 import { ScoreFilter } from '../components/ScoreFilter';
@@ -13,17 +13,19 @@ import { useSchedulerStatus } from '../hooks/useSchedulerStatus';
 import { useScoringStatus } from '../hooks/useScoringStatus';
 
 const PAGE_SIZE = 50;
+const DEFAULT_SORT: OfferListSort = { orderBy: 'posted_at', order: 'desc' };
 
 export function OfferListPage() {
   const [filters, setFilters] = useState<OfferListFilters>({});
   const [minScore, setMinScore] = useState<number | ''>('');
   const [page, setPage] = useState(0);
+  const [sort, setSort] = useState<OfferListSort>(DEFAULT_SORT);
 
   const activeFilters: OfferListFilters = {
     ...filters,
     minScore: minScore === '' ? undefined : minScore,
   };
-  const { offers, total, loading, error, refetch, updateOffer } = useOffers(activeFilters, {
+  const { offers, total, loading, error, refetch, updateOffer } = useOffers(activeFilters, sort, {
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
   });
@@ -45,6 +47,18 @@ export function OfferListPage() {
   const handleMinScoreChange = (next: number | '') => {
     setPage(0);
     setMinScore(next);
+  };
+
+  // Sorting by score reorders the full backlog server-side (BUG31), so a click
+  // resets to page one just like a filter change rather than reshuffling
+  // whatever offers happen to already be loaded.
+  const handleScoreHeaderClick = () => {
+    setPage(0);
+    setSort((current) =>
+      current.orderBy === 'score_percent'
+        ? { orderBy: 'score_percent', order: current.order === 'asc' ? 'desc' : 'asc' }
+        : { orderBy: 'score_percent', order: 'asc' },
+    );
   };
 
   // A background scoring run can complete well after the ingest response comes back
@@ -92,6 +106,8 @@ export function OfferListPage() {
         offers={offers}
         loading={loading}
         minScore={minScore}
+        sort={sort}
+        onScoreHeaderClick={handleScoreHeaderClick}
         onOfferPatched={updateOffer}
       />
 

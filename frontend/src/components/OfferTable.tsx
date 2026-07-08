@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import { patchOffer, type OfferSummary } from '../api/offers';
+import { patchOffer, type OfferListSort, type OfferSummary } from '../api/offers';
 import { useOfferScoreDetail } from '../hooks/useOfferScoreDetail';
 import { NotesEditor } from './NotesEditor';
 import { ScoreBadge } from './ScoreBadge';
@@ -10,6 +10,8 @@ interface OfferTableProps {
   offers: OfferSummary[];
   loading: boolean;
   minScore: number | '';
+  sort: OfferListSort;
+  onScoreHeaderClick: () => void;
   onOfferPatched: (updated: OfferSummary) => void;
 }
 
@@ -29,35 +31,6 @@ function formatSalary(offer: OfferSummary): string {
 function formatPostedDate(postedAt: string | null): string {
   if (!postedAt) return '-';
   return new Date(postedAt).toLocaleDateString();
-}
-
-function sortByPostedDateDesc(offers: OfferSummary[]): OfferSummary[] {
-  return [...offers].sort((a, b) => {
-    if (a.posted_at === b.posted_at) return 0;
-    if (a.posted_at === null) return 1;
-    if (b.posted_at === null) return -1;
-    return new Date(b.posted_at).getTime() - new Date(a.posted_at).getTime();
-  });
-}
-
-function sortByScore(offers: OfferSummary[], direction: 'asc' | 'desc'): OfferSummary[] {
-  const scored: OfferSummary[] = [];
-  const unscored: OfferSummary[] = [];
-
-  for (const offer of offers) {
-    if (offer.score_percent != null) {
-      scored.push(offer);
-    } else {
-      unscored.push(offer);
-    }
-  }
-
-  scored.sort((a, b) => {
-    const diff = (a.score_percent as number) - (b.score_percent as number);
-    return direction === 'asc' ? diff : -diff;
-  });
-
-  return [...scored, ...unscored];
 }
 
 function NoOffersEmptyState() {
@@ -83,9 +56,15 @@ function getEmptyState(offers: OfferSummary[], minScore: number | '', loading: b
   return <NoOffersEmptyState />;
 }
 
-export function OfferTable({ offers, loading, minScore, onOfferPatched }: OfferTableProps) {
+export function OfferTable({
+  offers,
+  loading,
+  minScore,
+  sort,
+  onScoreHeaderClick,
+  onOfferPatched,
+}: OfferTableProps) {
   const [selectedOfferId, setSelectedOfferId] = useState<number | null>(null);
-  const [scoreSort, setScoreSort] = useState<'asc' | 'desc' | null>(null);
   const [notesOfferId, setNotesOfferId] = useState<number | null>(null);
   const { score: selectedScore } = useOfferScoreDetail(selectedOfferId);
 
@@ -94,18 +73,14 @@ export function OfferTable({ offers, loading, minScore, onOfferPatched }: OfferT
     return emptyState;
   }
 
-  const sortedOffers =
-    scoreSort !== null ? sortByScore(offers, scoreSort) : sortByPostedDateDesc(offers);
-
   const selectedOffer =
     selectedOfferId != null ? offers.find((offer) => offer.id === selectedOfferId) : undefined;
 
   const notesOffer =
     notesOfferId != null ? offers.find((offer) => offer.id === notesOfferId) : undefined;
 
-  const handleScoreHeaderClick = () => {
-    setScoreSort((current) => (current === 'asc' ? 'desc' : 'asc'));
-  };
+  const scoreSortIndicator =
+    sort.orderBy === 'score_percent' ? (sort.order === 'asc' ? ' ▲' : ' ▼') : '';
 
   const handleToggleApplied = async (offer: OfferSummary) => {
     const updated = await patchOffer(offer.id, { applied: !offer.applied });
@@ -136,8 +111,8 @@ export function OfferTable({ offers, loading, minScore, onOfferPatched }: OfferT
               <th className="px-4 py-3 font-medium">Seniority</th>
               <th className="px-4 py-3 font-medium">Posted</th>
               <th className="px-4 py-3 font-medium">
-                <button type="button" className="font-medium" onClick={handleScoreHeaderClick}>
-                  Score
+                <button type="button" className="font-medium" onClick={onScoreHeaderClick}>
+                  Score{scoreSortIndicator}
                 </button>
               </th>
               <th className="px-4 py-3 font-medium">Applied</th>
@@ -146,7 +121,7 @@ export function OfferTable({ offers, loading, minScore, onOfferPatched }: OfferT
             </tr>
           </thead>
           <tbody>
-            {sortedOffers.map((offer) => (
+            {offers.map((offer) => (
               <tr
                 key={offer.id}
                 className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-surface-hover)]"
