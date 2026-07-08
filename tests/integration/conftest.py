@@ -10,8 +10,6 @@ from alembic.config import Config
 from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Profile as ProfileModel
 from app.db.session import get_engine, get_sessionmaker
-from app.scoring import batch
-from app.scoring.batch import BatchScoringSummary
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
@@ -23,16 +21,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 os.environ.setdefault(
     "DATABASE_URL", "postgresql+asyncpg://recruflow:recruflow@localhost:5433/recruflow_test"
 )
-
-# Force app.main (and every router module it imports, e.g. app.api.routes.scoring's own
-# `from app.scoring.batch import run_batch_scoring`) to resolve its name-bound imports against
-# the real, unpatched functions now, at collection time. Every test file's `client`/
-# `scheduled_client` fixture does `from app.main import app` lazily, inside the test; if that
-# import happened for the first time while `_stub_post_ingestion_batch_scoring` below had
-# already monkeypatched `batch.run_batch_scoring`, the route module's own name-bound
-# `run_batch_scoring` would permanently capture the stub instead of the real function, since
-# Python resolves `from x import y` once, at import time, not as a live reference to `x.y`.
-import app.main  # noqa: E402,F401
 
 REPO_ROOT = Path(__file__).parent.parent.parent
 
@@ -70,20 +58,6 @@ async def db_session(db_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, Non
     async with sessionmaker() as session:
         yield session
         await session.rollback()
-
-
-@pytest.fixture(autouse=True)
-def _stub_post_ingestion_batch_scoring(monkeypatch: pytest.MonkeyPatch) -> None:
-    # app.scheduler.service's post-ingestion hook (P3US25) calls this, unconditionally, on
-    # every scheduler run. Tests that predate that hook (and every other scheduler/ingestion
-    # test not specifically about batch scoring) never expect it to fire real LLM calls
-    # against whatever active Profile happens to be left over from another test's state, so
-    # this stubs it out by default; tests/integration/test_batch_scoring.py's own hook-wiring
-    # tests re-monkeypatch this same attribute to observe the call instead.
-    async def _noop(session: AsyncSession) -> BatchScoringSummary:
-        return BatchScoringSummary(scored=0, skipped=0, failed=0)
-
-    monkeypatch.setattr(batch, "run_batch_scoring", _noop)
 
 
 async def reset_test_profiles(session: AsyncSession, names: list[str]) -> None:

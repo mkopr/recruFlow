@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -48,6 +49,13 @@ class ScoringProgress:
 
 
 _progress = ScoringProgress()
+
+# BUG29: run_batch_scoring has independent callers (the scheduled backlog job and the
+# manual /score/batch route) that can otherwise overlap in the same event loop -- each
+# opens its own session and awaits real network calls to Ollama, leaving plenty of time
+# for a second call to pick up the same "unscored" offers before the first commits. This
+# lock serializes every run_batch_scoring call regardless of caller.
+_scoring_lock = asyncio.Lock()
 
 
 def get_scoring_progress() -> ScoringProgress:
@@ -122,6 +130,16 @@ async def run_batch_scoring(
     *,
     limit: int | None = None,
     chain_factory: Callable[[], MatcherChain] | None = None,
+) -> BatchScoringSummary:
+    async with _scoring_lock:
+        return await _run_batch_scoring_locked(session, limit=limit, chain_factory=chain_factory)
+
+
+async def _run_batch_scoring_locked(
+    session: AsyncSession,
+    *,
+    limit: int | None,
+    chain_factory: Callable[[], MatcherChain] | None,
 ) -> BatchScoringSummary:
     profile_row = await get_active_profile(session)
     if profile_row is None:

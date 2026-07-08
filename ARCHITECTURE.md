@@ -1411,26 +1411,44 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   — there's no per-connector routing to 404 on the way `POST /ingest/{source}` has, and
   `run_batch_scoring` never raises (mirrors `score_offers_with_langchain`'s own
   never-raise-out-of-a-batch convention).
-- **Automatic post-ingestion trigger, moved to the shared lifecycle (BUG16)**: the trigger used
-  to live in `app/scheduler/service.py`, called only from `_run_source_async` — meaning
+- **Automatic post-ingestion trigger (BUG16), removed again by BUG29**: the trigger used to live
+  in `app/scheduler/service.py`, called only from `_run_source_async` — meaning
   `POST /ingest/{source}` (the *only* fetch action `FetchNowButton.tsx` actually calls) never
   scored anything, ever, since it goes through a sibling code path
-  (`app/ingestion/service.py`'s `_trigger_ingest_async`) that never called it. Offers fetched
-  through the UI's one fetch button stayed unscored indefinitely, unless an unrelated background
-  APScheduler interval happened to catch up on the backlog later. The fix moves
+  (`app/ingestion/service.py`'s `_trigger_ingest_async`) that never called it. BUG16's fix moved
   `_trigger_batch_scoring_after_ingestion()` into `app/ingestion/lifecycle.py`'s
-  `run_with_lifecycle` — the one call site genuinely shared by manual `/ingest`, manual
-  `/scheduler/run`, and automatic APScheduler jobs alike (all three funnel through it) — and
-  calls it unconditionally after `dispatch_ingestion` returns, on both the success and error
-  branches, since batch scoring sweeps all unscored offers regardless of whether this
-  particular run's connector succeeded. `app/scheduler/service.py` no longer has its own copy.
-  The hook's own exceptions are still caught and logged (`logger.exception`), never propagated —
-  a bug in batch scoring must never make an already-completed ingestion run report failure for a
-  connector that actually succeeded. `app/ingestion/lifecycle.py` imports `app.scoring.batch`
-  qualified (`from app.scoring import batch`, not `from app.scoring.batch import
-  run_batch_scoring`) specifically so tests can monkeypatch `batch.run_batch_scoring` and have
-  the trigger pick up the patched version — a name-bound `from x import y` import resolves once,
-  at import time, and would not observe a later `monkeypatch.setattr(x, "y", ...)`.
+  `run_with_lifecycle` — the one call site shared by manual `/ingest`, manual `/scheduler/run`,
+  and automatic APScheduler jobs alike — calling it unconditionally after `dispatch_ingestion`
+  returns, on both the success and error branches. Once BUG24 added the dedicated
+  `scoring:backlog` job on its own independent interval, this made *two* unsynchronized triggers
+  race the same unscored backlog: an ingestion run and a `scoring:backlog` tick landing close
+  together could each fetch the same "unscored" offers before either committed, producing
+  duplicate `MatchScore` rows for the same offer/profile pair (BUG29, measured at ~43% wasted
+  duplicate LLM calls against the live backlog). BUG29 removes
+  `_trigger_batch_scoring_after_ingestion()` and both call sites in `run_with_lifecycle` entirely
+  — `scoring:backlog` is now the *only* automatic trigger, exactly matching BUG24's original
+  intent of a backlog-drain "fully independent of any source's ingestion schedule." Ingestion
+  itself no longer scores anything; a freshly-ingested offer is picked up on the backlog job's
+  next tick (or immediately via manual `POST /score/batch`), not synchronously with the fetch.
+- **Mutual exclusion inside `run_batch_scoring` itself (BUG29)**: rather than trust every current
+  and future caller to never overlap, `app/scoring/batch.py` now serializes all calls on a
+  module-level `asyncio.Lock` (`_scoring_lock`) — `run_batch_scoring` is a thin wrapper that
+  acquires the lock and delegates to `_run_batch_scoring_locked`. This is what actually closes
+  the race: the scheduled `scoring:backlog` tick and a manual `POST /score/batch` call are still
+  two independent callers, each opening its own session, so removing BUG16's trigger alone only
+  removed one of several possible overlaps. With the lock, a second caller's own
+  `_fetch_unscored_offers` query runs only after the first caller's transaction has committed, so
+  it never sees an offer the first call is still in the middle of scoring.
+- **No unique constraint added on `match_scores (offer_id, profile_id)`**: BUG29's own writeup
+  suggested one, but P3US21 (above) already documents a deliberate decision to allow multiple
+  `MatchScore` rows per offer over time (re-scores), with reads always taking the most recent row
+  — `tests/integration/test_offers_routes.py`'s `test_rescoring_offer_inserts_new_row_without_overwriting_existing`
+  and its two sibling "most recent score" tests exercise exactly this. A hard uniqueness
+  constraint would foreclose that intentional future capability for no real benefit now that the
+  actual race is closed at the trigger and lock level. BUG29 instead ships a one-off data-only
+  migration (`134e4fa8b06d`) that deletes the accidental duplicate rows the race had already
+  produced, keeping the newest row per `(offer_id, profile_id)` pair — pure cleanup, no schema
+  change.
 - **Bounded batch size and live progress (BUG16)**: with the trigger now firing on every
   ingestion door, a single manual `/ingest` call could otherwise try to score an unbounded
   backlog synchronously (this repo's dev database had ~15k offers ingested-but-never-scored by
@@ -1458,14 +1476,13 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   creates itself, and cleans up those fake-connector Source/Offer/MatchScore rows in a
   `finally` block afterward (mirroring `test_offers_routes.py`'s own
   `_delete_sources_with_offers`, since `test_scheduler_ensure_sources.py` asserts an exact set
-  of non-null connectors). `tests/integration/conftest.py` also has an autouse fixture stubbing
-  `batch.run_batch_scoring` to a no-op for every other integration test (predating this story),
-  so an ingestion-focused test's scheduler run never triggers a real batch-scoring pass against
-  whatever Profile another test happened to leave active; `conftest.py` eagerly imports
-  `app.main` at collection time (before any monkeypatch fixture can run) so
-  `app/api/routes/scoring.py`'s own name-bound `run_batch_scoring` import resolves against the
-  real function once, permanently, rather than capturing whichever stub happened to be current
-  the first time any test lazily imported `app.main`.
+  of non-null connectors). `tests/integration/conftest.py` used to also carry an autouse fixture
+  stubbing `batch.run_batch_scoring` to a no-op for every other integration test, plus an eager
+  `import app.main` at collection time to stop that stub from being permanently baked into
+  `app/api/routes/scoring.py`'s name-bound import — both existed solely to stop an
+  ingestion-focused test's scheduler run from triggering a real batch-scoring pass, back when
+  ingestion itself triggered scoring (BUG16). BUG29 removed that trigger entirely (see above), so
+  neither guard has anything left to protect against and both were deleted along with it.
 
 ### Offer list with scores (P3US26)
 

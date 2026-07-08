@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import AsyncGenerator, Iterator
 from datetime import UTC, datetime, timedelta
@@ -13,12 +14,14 @@ from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
 from app.db.models import Profile as ProfileModel
 from app.db.models import Source
+from app.db.session import get_sessionmaker
 from app.ingestion.types import IngestionResult
 from app.llm.matcher import _MatcherOutput
 from app.scoring import batch
 from app.scoring.batch import BatchScoringSummary, count_unscored_backlog, run_batch_scoring
+from langchain_core.messages import BaseMessage
 from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from tests.integration.test_langchain_matcher_batch import (
     _STRONG_OUTPUT_KWARGS,
@@ -186,6 +189,61 @@ async def test_run_batch_scoring_does_not_rescore_already_scored_pairs(
         assert len(rows) == 3
     finally:
         await _delete_sources_and_dependents(db_session, [jj_source, nfj_source, sj_source])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_run_batch_scoring_serializes_concurrent_callers_to_prevent_duplicate_scores(
+    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # BUG29: two independent callers (e.g. the scheduled backlog job and a manual
+    # /score/batch request) used to be able to run run_batch_scoring at the same time, each
+    # opening its own session and fetching the same "unscored" offer before either committed,
+    # producing two MatchScore rows for the same offer/profile pair. run_batch_scoring now
+    # serializes on a module-level lock, so the second caller's own _fetch_unscored_offers
+    # query only runs after the first caller has committed and excludes what it just scored.
+    connector = _fake_connector()
+    _isolate_langchain_sources(monkeypatch, connector)
+    sessionmaker = get_sessionmaker(db_engine)
+
+    class _SlowChain:
+        async def ainvoke(self, messages: list[BaseMessage]) -> _MatcherOutput:
+            await asyncio.sleep(0.05)
+            return _MatcherOutput(**_STRONG_OUTPUT_KWARGS)
+
+    async with sessionmaker() as session:
+        await _deactivate_all_profiles(session)
+        source_id = await _create_source(session, connector=connector)
+        await _create_offer(session, source_id)
+        profile = await _create_profile(session)
+        await session.commit()
+
+    try:
+
+        async def _call() -> BatchScoringSummary:
+            async with sessionmaker() as session:
+                summary = await run_batch_scoring(session, chain_factory=lambda: _SlowChain())
+                await session.commit()
+                return summary
+
+        summary_a, summary_b = await asyncio.gather(_call(), _call())
+
+        assert summary_a.scored + summary_b.scored == 1
+
+        async with sessionmaker() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(MatchScoreModel).where(MatchScoreModel.profile_id == profile.id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(rows) == 1
+    finally:
+        async with sessionmaker() as session:
+            await _delete_sources_and_dependents(session, [source_id])
 
 
 @pytest.mark.integration
@@ -379,9 +437,12 @@ async def test_run_batch_scoring_logs_per_run_summary(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_post_scheduler_run_triggers_batch_scoring_after_ingestion_completes(
+async def test_post_scheduler_run_does_not_trigger_batch_scoring_on_success(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # BUG29: ingestion used to unconditionally trigger a scoring run of its own, racing the
+    # dedicated `scoring:backlog` job (BUG24) and producing duplicate MatchScore rows for the
+    # same offer/profile pair. The backlog job now owns draining unscored offers exclusively.
     async def _fake(
         session: AsyncSession, source: object, *, force_refresh: bool = False
     ) -> IngestionResult:
@@ -400,12 +461,12 @@ async def test_post_scheduler_run_triggers_batch_scoring_after_ingestion_complet
     response = await scheduled_client.post("/scheduler/run/justjoinit")
 
     assert response.status_code == 200
-    assert len(calls) == 1
+    assert len(calls) == 0
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_post_scheduler_run_triggers_batch_scoring_even_when_connector_errors(
+async def test_post_scheduler_run_does_not_trigger_batch_scoring_when_connector_errors(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def _raise(session: AsyncSession, source: object, **kwargs: object) -> IngestionResult:
@@ -425,7 +486,7 @@ async def test_post_scheduler_run_triggers_batch_scoring_even_when_connector_err
 
     assert response.status_code == 200
     assert response.json()["status"] == "error"
-    assert len(calls) == 1
+    assert len(calls) == 0
 
 
 @pytest.mark.integration

@@ -1,5 +1,4 @@
 import asyncio
-from functools import partial
 from typing import Any
 from uuid import uuid4
 
@@ -16,9 +15,7 @@ from app.ingestion.persist import ingest_offer
 from app.ingestion.types import IngestionResult as JustJoinItIngestionResult
 from app.ingestion.types import IngestionResult as NoFluffJobsIngestionResult
 from app.ingestion.types import IngestionResult as SolidJobsIngestionResult
-from app.llm.matcher import _MatcherOutput
 from app.scoring import batch
-from app.scoring.batch import run_batch_scoring
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,7 +29,6 @@ from tests.integration.test_justjoinit_connector_ingestion import (
     _paged_payload,
     _raw_offer,
 )
-from tests.integration.test_langchain_matcher_batch import _STRONG_OUTPUT_KWARGS, _FakeChain
 from tests.integration.test_offers_routes import _create_source, _deactivate_all_profiles
 
 
@@ -274,12 +270,14 @@ async def test_health_endpoint_responds_during_ingest_run(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_ingest_triggers_batch_scoring_for_newly_persisted_offer(
+async def test_ingest_does_not_trigger_batch_scoring_for_newly_persisted_offer(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # BUG16: POST /ingest/{source} -- the only ingestion path FetchNowButton.tsx ever calls --
-    # must trigger scoring same as POST /scheduler/run/{source} does. A fake connector name is
-    # registered against the real justjoinit dispatcher, mirroring
+    # BUG29: POST /ingest/{source} used to trigger a scoring run of its own (BUG16), which
+    # raced the dedicated `scoring:backlog` job (BUG24) and produced duplicate MatchScore rows
+    # for the same offer/profile pair. Ingestion now only persists offers; draining the
+    # unscored backlog is the backlog job's job alone. A fake connector name is registered
+    # against the real justjoinit dispatcher, mirroring
     # test_ingest_known_connector_without_configured_source_returns_404's own pattern, so this
     # test can isolate LANGCHAIN_SOURCES to just its own Source instead of racing the huge
     # backlog of real, pre-existing justjoinit/nofluffjobs offers already in the shared dev DB.
@@ -288,19 +286,14 @@ async def test_ingest_triggers_batch_scoring_for_newly_persisted_offer(
         registry.CONNECTOR_REGISTRY, connector, registry.CONNECTOR_REGISTRY[JUSTJOINIT]
     )
     _isolate_langchain_sources(monkeypatch, connector)
-    # conftest.py's `_stub_post_ingestion_batch_scoring` no-ops real scoring by default for
-    # every other ingestion/scheduler test; this test is specifically about observing a real
-    # MatchScore appear, so it restores the real implementation for its own duration, binding a
-    # fake chain via the real chain_factory parameter instead of reaching into the matcher's
-    # private LLM-chain builder.
-    monkeypatch.setattr(
-        batch,
-        "run_batch_scoring",
-        partial(
-            run_batch_scoring,
-            chain_factory=lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
-        ),
-    )
+
+    scoring_calls: list[None] = []
+
+    async def _fake_run_batch_scoring(session: AsyncSession) -> object:
+        scoring_calls.append(None)
+        raise AssertionError("ingestion must not trigger batch scoring")
+
+    monkeypatch.setattr(batch, "run_batch_scoring", _fake_run_batch_scoring)
 
     canonical_url = _unique_url("justjoinit-scoring-offer")
 
@@ -334,6 +327,7 @@ async def test_ingest_triggers_batch_scoring_for_newly_persisted_offer(
 
         assert response.status_code == 200
         assert response.json()["ok"] is True
+        assert scoring_calls == []
 
         async with sessionmaker() as session:
             offer_id = await session.scalar(
@@ -347,7 +341,7 @@ async def test_ingest_triggers_batch_scoring_for_newly_persisted_offer(
                     MatchScoreModel.profile_id == profile.id,
                 )
             )
-            assert score is not None
+            assert score is None
     finally:
         async with sessionmaker() as session:
             await _delete_sources_and_dependents(session, [source_id])
