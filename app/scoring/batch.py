@@ -4,13 +4,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
-from app.db.models import Source
+from app.db.models import ScoringFailure, Source
 from app.db.profile_repo import get_active_profile
 from app.llm import matcher
 from app.llm.matcher import MatcherChain, score_offers_with_langchain
@@ -62,6 +62,21 @@ def get_scoring_progress() -> ScoringProgress:
     return _progress
 
 
+def _open_scoring_failures(profile_id: int) -> Select[tuple[int]]:
+    """Offer ids with an unresolved ScoringFailure for this profile.
+
+    Excluded from selection so a batch doesn't keep spending its whole limit
+    re-attempting offers that fail deterministically (e.g. BUG32's salary_fit
+    validation bug) -- that starved genuinely-new offers of any progress since
+    the same handful of offers are always "newest unscored" and get reselected
+    every run. Resolving (or retrying via POST /failures/scoring/{id}/retry)
+    the underlying ScoringFailure row makes an offer eligible again.
+    """
+    return select(ScoringFailure.offer_id).where(
+        ScoringFailure.profile_id == profile_id, ScoringFailure.status == "open"
+    )
+
+
 async def _fetch_unscored_offers(
     session: AsyncSession, profile_id: int, *, limit: int
 ) -> list[tuple[OfferModel, str]]:
@@ -73,6 +88,7 @@ async def _fetch_unscored_offers(
         .join(Source, OfferModel.source_id == Source.id)
         .where(Source.connector.in_(matcher.LANGCHAIN_SOURCES))
         .where(OfferModel.id.not_in(already_scored))
+        .where(OfferModel.id.not_in(_open_scoring_failures(profile_id)))
         .order_by(
             OfferModel.posted_at.desc().nulls_last(),
             OfferModel.created_at.desc(),
@@ -108,6 +124,7 @@ async def _count_unscored_offers(session: AsyncSession, profile_id: int) -> int:
         .join(Source, OfferModel.source_id == Source.id)
         .where(Source.connector.in_(matcher.LANGCHAIN_SOURCES))
         .where(OfferModel.id.not_in(already_scored))
+        .where(OfferModel.id.not_in(_open_scoring_failures(profile_id)))
     )
     return (await session.execute(stmt)).scalar_one()
 
