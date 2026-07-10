@@ -12,7 +12,7 @@ from app.ingestion.normalize import (
     normalize_salary,
     normalize_seniority,
 )
-from app.ingestion.runner import run_paginated_ingestion
+from app.ingestion.runner import resolve_fetch_range, run_paginated_ingestion
 from app.ingestion.types import IngestionResult
 
 SOLID_JOBS_OFFERS_URL_TEMPLATE = "https://solid.jobs/public-api/offers/{division}"
@@ -114,6 +114,7 @@ async def run_solid_jobs_ingestion(
     page_size = int(config.get("page_size", 100))
     max_pages = int(config.get("max_pages", 100))
     already_seen_stop_threshold = int(config.get("already_seen_stop_threshold", 20))
+    since, until = resolve_fetch_range(config.get("fetch_range"))
 
     def fetch_page(
         page_index: int, page_size: int
@@ -147,4 +148,6 @@ async def run_solid_jobs_ingestion(
         already_seen_stop_threshold=already_seen_stop_threshold,
         force_refresh=force_refresh,
         logger=logger,
+        since=since,
+        until=until,
     )

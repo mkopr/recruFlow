@@ -2030,6 +2030,122 @@ number the user types in, no persisted config in between. See the P3US29 section
   page-reset-on-filter-change, ties the pieces together). New `/failures` route + nav link in
   `App.tsx`.
 
+### Connector fetch date range + auto-fetch toggle (P3US34)
+
+- **Purpose**: P3US28's per-source `config_json` mechanics (live `AsyncIOScheduler` job, JSONB
+  config, `build_job_id`, `build_source_status` mapper) already had the exact shape needed for
+  two more orthogonal per-connector knobs: what `posted_at` window a run accepts (**Fetch
+  Range**), and whether a connector's automatic job runs at all (**Auto-Fetch**) — see
+  `CONTEXT.md` for the canonical glossary definitions. No migration: both new keys
+  (`fetch_range`, `auto_fetch_enabled`) live in the existing freeform `Source.config_json` JSONB
+  column alongside `schedule`.
+- **`DEFAULT_SOURCE_CONFIGS`** (`app/scheduler/service.py`) gained `"auto_fetch_enabled": True`
+  for all three built-in connectors. `_default_fetch_range()` is a separate function (not a
+  static dict entry) returning `{"mode": "range", "since": (now - 7 days).isoformat(), "until":
+  None}` computed fresh on every call — `DEFAULT_SOURCE_CONFIGS` is a module-level constant
+  evaluated once at import time, which would freeze "seed time" at process start rather than
+  actual insert time for a source added while the app has been running for days.
+  `ensure_sources_exist` merges it in per-insert (`{**config, "fetch_range":
+  _default_fetch_range()}`); because the insert is `on_conflict_do_nothing`, this only ever
+  applies on a source's first-ever insert — **existing rows from before this story are not
+  backfilled** and simply read back `fetch_range={}` / `auto_fetch_enabled` via the fail-open
+  defaults below (deliberate: matches `parse_schedule`'s existing fail-soft convention, and
+  avoids an unconditional startup `UPDATE` for a one-time migration concern).
+- **`set_source_fetch_range`/`set_all_source_fetch_ranges`,
+  `set_source_auto_fetch`/`set_all_source_auto_fetch`** (`app/scheduler/service.py`): structurally
+  identical to P3US28's `set_source_interval`/`set_all_source_intervals` — same
+  `resolve_source_by_connector` reuse for `404` mapping, same flush-not-commit (callers commit),
+  same reassign-the-whole-dict pattern (`source.config_json = {**source.config_json,
+  "fetch_range": ...}`) required by `config_json` being a plain JSONB column with no SQLAlchemy
+  `Mutable` wrapper.
+- **`build_source_status`** (`app/scheduler/runs.py`) adds `fetch_range=(source.config_json or
+  {}).get("fetch_range", {})` and `auto_fetch_enabled=(...).get("auto_fetch_enabled", True)` —
+  default `True` on a missing key so a pre-existing row (seeded before this story) fails open to
+  "enabled," and default `{}` for `fetch_range` reads back as "no filtering" via
+  `resolve_fetch_range` below.
+- **`register_jobs`** (`app/scheduler/lifecycle.py`): unchanged except one added line after
+  `scheduler.add_job(...)` — `if not (source.config_json or {}).get("auto_fetch_enabled", True):
+  scheduler.pause_job(job_id)`. Job registration itself (the `add_job` call and its kwargs) is
+  untouched; only the post-registration paused state differs, per the story's own acceptance
+  criteria.
+- **Four new routes** (`app/api/routes/scheduler.py`), same shape as P3US28's interval routes
+  (`SessionDep`, `try/except SchedulerLookupError → HTTPException(404, ...)`, commit before
+  touching the live scheduler so a mid-request crash never leaves it out of sync with a
+  persisted-but-uncommitted config change):
+  - `PUT /scheduler/sources/{source}/fetch-range` / `PUT /scheduler/sources/fetch-range` take
+    `FetchRangeUpdateRequest { mode: "range" | "all", since: datetime | None, until: datetime |
+    None }` (`app/schemas/scheduler.py`). A `@model_validator(mode="after")` requires `since` when
+    `mode == "range"`, rejects `since > until`, and forces `since`/`until` to `None` when `mode ==
+    "all"` — so `"all"` is always the same canonical shape once persisted, regardless of what a
+    caller sent alongside it. No scheduler interaction — `fetch_range` never affects the live
+    trigger, only what the next run (automatic or manual) fetches.
+  - `PUT /scheduler/sources/{source}/auto-fetch` / `PUT /scheduler/sources/auto-fetch` take
+    `AutoFetchUpdateRequest { enabled: bool }` and additionally call
+    `scheduler.resume_job`/`scheduler.pause_job(build_job_id(connector))` — takes effect on the
+    live scheduler immediately, no restart required, mirroring P3US28's live-reschedule behavior.
+    `POST /scheduler/run/{source}` (manual trigger) is completely unaffected either way — turning
+    Auto-Fetch off pauses the *scheduled* job only, per `docs/adr/0018`.
+  - The bulk variants apply one value to every connector with a non-null `connector` in a single
+    call (same `set_all_source_*` shape as P3US28's bulk interval endpoint) — a deliberate,
+    silent overwrite of any prior per-connector customization, matching that precedent exactly.
+- **Range filtering — `app/ingestion/runner.py`**, implemented exactly once inside the shared
+  `run_paginated_ingestion`, so every connector that calls it gets filtering for free:
+  - `resolve_fetch_range(fetch_range: dict | None) -> tuple[datetime | None, datetime | None]`
+    returns `(None, None)` — "no filtering" — for `mode: "all"`, a missing key, or any
+    malformed/unrecognised shape (the single place both "`all` disables the filter entirely" and
+    "malformed config fails open" live, mirroring `triggers.py`'s `parse_schedule`).
+  - `_parse_datetime(value)` wraps a module-level `TypeAdapter(datetime | None)` in a
+    try/except, so it uniformly accepts a raw ISO string (SOLID.Jobs/JustJoin.it's
+    `posted_at` shape), an already-parsed `datetime` (NoFluffJobs' shape, via its own
+    `_epoch_ms_to_datetime`), or `None` — never raising.
+  - `run_paginated_ingestion` gained `since`/`until: datetime | None = None` keyword params
+    (defaulted, so every pre-existing call/test is a byte-for-byte no-op unless a caller opts
+    in). Per offer: an unparseable/missing `posted_at` is treated as `datetime.now(UTC)`,
+    evaluated fresh per offer (not once per run — a rate-limited paginated run can span a long
+    time) — used **only** for this comparison, never written back onto the persisted `Offer`
+    (`posted_at` stays whatever the source actually gave, or `None`); see
+    `docs/adr/0017-fetch-range-posted-at-fallback-and-sort-order-trust.md` for the full
+    reasoning, including why this is strictly better than an unconditional keep-everything
+    fallback (it still respects an `until` upper bound, and it can never be mistaken for "old" by
+    the early-stop below). An offer outside `[since, until]` is `continue`d — never reaching
+    `ingest_offer`, and never touching `consecutive_already_seen` in either direction — so a
+    narrow range can never look like "we've caught up" and truncate pagination for an unrelated
+    reason. Applies identically regardless of `force_refresh`: `fetch_range` is a deliberate
+    user-configured scope, not a pagination-performance shortcut like already-seen dedup — see
+    `docs/adr/0018-manual-triggers-respect-fetch-range.md`.
+  - **Early-stop-on-old-page**: once every offer on a (non-empty) page has an effective date
+    `>= since` is false for none of them — i.e. the whole page is older than the cutoff —
+    pagination stops before fetching the next page, since all three connectors' feeds are
+    confirmed newest-first today. This assumption is trusted without a runtime guard (documented,
+    not defended against a future sort-order change) per `docs/adr/0017`.
+- **Three near-identical one-line connector diffs** (`app/connectors/solid_jobs.py`,
+  `justjoinit.py`, `nofluffjobs.py`): each `run_x_ingestion` adds `since, until =
+  resolve_fetch_range(config.get("fetch_range"))` alongside its existing
+  `page_size`/`max_pages`/`already_seen_stop_threshold` config reads, threading `since=since,
+  until=until` into its `run_paginated_ingestion(...)` call — consistent with how those other
+  per-connector config values are already duplicated rather than centralized. A new connector
+  that reuses `run_paginated_ingestion` gets range filtering for free with one
+  `DEFAULT_SOURCE_CONFIGS` entry, per the story's own acceptance criteria.
+- **Frontend**: `frontend/src/api/scheduler.ts` gained `updateSourceFetchRange`/
+  `updateAllSourceFetchRanges`/`updateSourceAutoFetch`/`updateAllSourceAutoFetch` (same
+  throw-on-error shape as the existing interval functions).
+  `frontend/src/hooks/useFetchRangeSettings.ts` wraps `useSchedulerStatus()` (reused, not
+  reimplemented) and tracks one combined `savingByConnector: Record<string, boolean>` map plus a
+  shared `error` — a row's range and auto-fetch controls share one saving flag, since the story
+  treats "each row saves independently" at the whole-row level, not per-control.
+  `frontend/src/components/FetchRangeSection.tsx` renders one row per `KNOWN_SOURCES` entry: an
+  auto-fetch checkbox (saves immediately on change), a mode `<select>` ("Date range"/"Fetch
+  all"), and — only when mode is "Date range" — since/until `datetime-local` inputs behind their
+  own explicit per-row Save button; `toDatetimeLocalValue`/`fromDatetimeLocalValue` do the
+  ISO-string ⇄ local-datetime-input conversion at this UI boundary only, exactly like
+  `FetchCadenceSection.tsx`'s `secondsToMinutes` converts at its own boundary — the API layer
+  only ever deals in ISO strings. Two independent "apply to all" controls (range, and
+  auto-fetch on/off) below the per-connector rows, since the two knobs are independently
+  toggleable per the acceptance criteria. `SettingsPage.tsx` renders this between
+  `FetchCadenceSection` and `NotificationsSection` — grouped there because cadence and
+  range/auto-fetch all govern the same automatic scheduled job, sourced from the same `GET
+  /scheduler/status` call.
+
 ### Makefile targets
 
 - `install` — `uv sync --all-groups` + `cd frontend && pnpm install`.

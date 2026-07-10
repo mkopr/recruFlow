@@ -21,6 +21,8 @@ function baseResult(
       connector: source.id,
       name: source.id,
       schedule: { type: 'interval', seconds: 300 },
+      fetch_range: { mode: 'all', since: null, until: null },
+      auto_fetch_enabled: true,
       last_fetched_at: null,
       last_run_id: null,
       last_run_started_at: null,

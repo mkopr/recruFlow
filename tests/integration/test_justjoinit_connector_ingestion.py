@@ -352,3 +352,33 @@ async def test_run_justjoinit_ingestion_respects_max_pages_ceiling(
     assert result.ok is True
     assert result.fetched == 3
     assert result.created == 3
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_run_justjoinit_ingestion_range_mode_skips_offers_outside_since_until(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = await _create_source(
+        db_session,
+        config_json={
+            "fetch_range": {
+                "mode": "range",
+                "since": "2026-06-01T00:00:00Z",
+                "until": "2026-06-30T00:00:00Z",
+            }
+        },
+    )
+    in_range = _raw_offer(publishedAt="2026-06-15T00:00:00Z")
+    out_of_range = _raw_offer(publishedAt="2026-05-01T00:00:00Z")
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda *a, **kw: _FakeResponse(json_data=_offers_payload([in_range, out_of_range])),
+    )
+
+    result = await run_justjoinit_ingestion(db_session, source)
+    await db_session.commit()
+
+    assert result.fetched == 2
+    assert result.created == 1

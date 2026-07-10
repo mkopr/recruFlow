@@ -384,3 +384,111 @@ async def test_run_solid_jobs_ingestion_respects_max_pages_ceiling(
     assert result.ok is True
     assert result.fetched == 3
     assert result.created == 3
+
+
+# US34 -- fetch_range integration for this connector. justjoinit/nofluffjobs get at least one
+# equivalent smoke test added by the same pattern; the filtering logic itself lives in the
+# shared runner (see tests/test_ingestion_runner.py) but each connector's raw posted_at shape
+# (an ISO string here, an already-parsed datetime for nofluffjobs) is worth a direct check.
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_run_solid_jobs_ingestion_range_mode_skips_offers_outside_since_until(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = await _create_source(
+        db_session,
+        config_json={
+            "fetch_range": {
+                "mode": "range",
+                "since": "2026-06-01T00:00:00Z",
+                "until": "2026-06-30T00:00:00Z",
+            }
+        },
+    )
+    in_range = _raw_offer(validFrom="2026-06-15T00:00:00Z")
+    out_of_range = _raw_offer(validFrom="2026-05-01T00:00:00Z")
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda *a, **kw: _FakeResponse(json_data=_page_payload([in_range, out_of_range])),
+    )
+
+    result = await run_solid_jobs_ingestion(db_session, source, campaign="recruflow")
+    await db_session.commit()
+
+    assert result.fetched == 2
+    assert result.created == 1
+    rows = (
+        (await db_session.execute(select(OfferModel).where(OfferModel.source_id == source.id)))
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].raw_payload["jobOfferKey"] == in_range["jobOfferKey"]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_run_solid_jobs_ingestion_all_mode_bypasses_date_filtering(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = await _create_source(db_session, config_json={"fetch_range": {"mode": "all"}})
+    offer_a = _raw_offer(validFrom="2026-06-15T00:00:00Z")
+    offer_b = _raw_offer(validFrom="2026-05-01T00:00:00Z")
+    monkeypatch.setattr(
+        httpx, "get", lambda *a, **kw: _FakeResponse(json_data=_page_payload([offer_a, offer_b]))
+    )
+
+    result = await run_solid_jobs_ingestion(db_session, source, campaign="recruflow")
+    await db_session.commit()
+
+    assert result.fetched == 2
+    assert result.created == 2
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_run_solid_jobs_ingestion_range_filter_does_not_trip_already_seen_early_stop(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = await _create_source(
+        db_session,
+        config_json={
+            "page_size": 2,
+            "already_seen_stop_threshold": 2,
+            "fetch_range": {
+                "mode": "range",
+                "since": "2026-06-01T00:00:00Z",
+                "until": "2026-06-30T00:00:00Z",
+            },
+        },
+    )
+    # Page 1's offers are newer than `until` (filtered out, not "old"), so they must never
+    # trip the already-seen threshold and prevent page 2 -- which holds the one in-range offer
+    # -- from being fetched.
+    out_of_range_offers = [
+        _raw_offer(validFrom="2026-07-15T00:00:00Z"),
+        _raw_offer(validFrom="2026-07-16T00:00:00Z"),
+    ]
+    in_range_offer = _raw_offer(validFrom="2026-06-15T00:00:00Z")
+    calls: list[int] = []
+
+    def _fake_get(url: str, *, params: dict[str, Any], **kw: Any) -> _FakeResponse:
+        page_index = params["pageIndex"]
+        calls.append(page_index)
+        if page_index == 0:
+            return _FakeResponse(json_data=_page_payload(out_of_range_offers, page_size=2))
+        if page_index == 1:
+            return _FakeResponse(json_data=_page_payload([in_range_offer], page_size=2))
+        raise AssertionError(f"pagination should have stopped before requesting page {page_index}")
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+
+    result = await run_solid_jobs_ingestion(db_session, source, campaign="recruflow")
+    await db_session.commit()
+
+    assert calls == [0, 1]
+    assert result.fetched == 3
+    assert result.created == 1

@@ -14,7 +14,7 @@ from app.ingestion.normalize import (
     normalize_seniority,
     to_int,
 )
-from app.ingestion.runner import run_paginated_ingestion
+from app.ingestion.runner import resolve_fetch_range, run_paginated_ingestion
 from app.ingestion.types import IngestionResult
 
 NOFLUFFJOBS_OFFERS_URL = "https://nofluffjobs.com/api/joboffers/main"
@@ -94,6 +94,7 @@ async def run_nofluffjobs_ingestion(
     config = source.config_json or {}
     url = config.get("endpoint_url", NOFLUFFJOBS_OFFERS_URL)
     page_size = int(config.get("page_size", 100))
+    since, until = resolve_fetch_range(config.get("fetch_range"))
 
     def fetch_page(cursor: int, page_size: int) -> tuple[list[dict[str, Any]], int | None] | None:
         payload = _fetch_nofluffjobs_json(
@@ -123,4 +124,6 @@ async def run_nofluffjobs_ingestion(
         already_seen_stop_threshold=1,
         force_refresh=force_refresh,
         logger=logger,
+        since=since,
+        until=until,
     )

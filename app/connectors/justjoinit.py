@@ -13,7 +13,7 @@ from app.ingestion.normalize import (
     normalize_seniority,
     to_int,
 )
-from app.ingestion.runner import run_paginated_ingestion
+from app.ingestion.runner import resolve_fetch_range, run_paginated_ingestion
 from app.ingestion.types import IngestionResult
 
 JUSTJOINIT_OFFERS_URL = "https://justjoin.it/api/candidate-api/offers"
@@ -120,6 +120,7 @@ async def run_justjoinit_ingestion(
     max_pages = int(config.get("max_pages", 100))
     rate_limit_delay = float(config.get("rate_limit_delay_seconds", 1.0))
     already_seen_stop_threshold = int(config.get("already_seen_stop_threshold", 20))
+    since, until = resolve_fetch_range(config.get("fetch_range"))
 
     def fetch_page(cursor: int, page_size: int) -> tuple[list[dict[str, Any]], int | None] | None:
         return _fetch_page(url, cursor=cursor, page_size=page_size)
@@ -137,4 +138,6 @@ async def run_justjoinit_ingestion(
         force_refresh=force_refresh,
         logger=logger,
         rate_limit_delay=rate_limit_delay,
+        since=since,
+        until=until,
     )

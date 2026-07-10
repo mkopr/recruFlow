@@ -1,4 +1,5 @@
 import { FetchCadenceSection } from '../components/FetchCadenceSection';
+import { FetchRangeSection } from '../components/FetchRangeSection';
 import { NotificationsSection } from '../components/NotificationsSection';
 
 export function SettingsPage() {
@@ -10,6 +11,14 @@ export function SettingsPage() {
         </p>
       </header>
       <FetchCadenceSection />
+
+      <header>
+        <p className="text-sm text-[var(--color-text-muted)]">
+          Fetch range & auto-fetch: which offers a connector's automatic and manual fetches accept
+          by posting date, and whether its automatic job runs at all.
+        </p>
+      </header>
+      <FetchRangeSection />
 
       <header>
         <p className="text-sm text-[var(--color-text-muted)]">

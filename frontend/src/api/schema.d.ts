@@ -106,6 +106,74 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/scheduler/sources/fetch-range': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /** Update All Source Fetch Ranges */
+    put: operations['update_all_source_fetch_ranges_scheduler_sources_fetch_range_put'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/scheduler/sources/{source}/fetch-range': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /** Update Source Fetch Range */
+    put: operations['update_source_fetch_range_scheduler_sources__source__fetch_range_put'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/scheduler/sources/auto-fetch': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /** Update All Source Auto Fetch */
+    put: operations['update_all_source_auto_fetch_scheduler_sources_auto_fetch_put'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/scheduler/sources/{source}/auto-fetch': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /** Update Source Auto Fetch */
+    put: operations['update_source_auto_fetch_scheduler_sources__source__auto_fetch_put'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/ingest/{source}': {
     parameters: {
       query?: never;
@@ -299,6 +367,11 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    /** AutoFetchUpdateRequest */
+    AutoFetchUpdateRequest: {
+      /** Enabled */
+      enabled: boolean;
+    };
     /** BatchScoringResponse */
     BatchScoringResponse: {
       /** Scored */
@@ -336,6 +409,18 @@ export interface components {
       start_date?: string | null;
       /** End Date */
       end_date?: string | null;
+    };
+    /** FetchRangeUpdateRequest */
+    FetchRangeUpdateRequest: {
+      /**
+       * Mode
+       * @enum {string}
+       */
+      mode: 'range' | 'all';
+      /** Since */
+      since?: string | null;
+      /** Until */
+      until?: string | null;
     };
     /** HTTPValidationError */
     HTTPValidationError: {
@@ -754,6 +839,12 @@ export interface components {
       schedule: {
         [key: string]: unknown;
       };
+      /** Fetch Range */
+      fetch_range: {
+        [key: string]: unknown;
+      };
+      /** Auto Fetch Enabled */
+      auto_fetch_enabled: boolean;
       /** Last Fetched At */
       last_fetched_at: string | null;
       /** Last Run Id */
@@ -937,6 +1028,142 @@ export interface operations {
     requestBody: {
       content: {
         'application/json': components['schemas']['IntervalUpdateRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SourceStatus'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  update_all_source_fetch_ranges_scheduler_sources_fetch_range_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['FetchRangeUpdateRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SchedulerStatusResponse'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  update_source_fetch_range_scheduler_sources__source__fetch_range_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        source: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['FetchRangeUpdateRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SourceStatus'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  update_all_source_auto_fetch_scheduler_sources_auto_fetch_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AutoFetchUpdateRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SchedulerStatusResponse'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  update_source_auto_fetch_scheduler_sources__source__auto_fetch_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        source: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AutoFetchUpdateRequest'];
       };
     };
     responses: {

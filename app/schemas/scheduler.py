@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ManualRunResponse(BaseModel):
@@ -27,6 +27,8 @@ class SourceStatus(BaseModel):
     connector: str
     name: str
     schedule: dict[str, Any]
+    fetch_range: dict[str, Any]
+    auto_fetch_enabled: bool
     last_fetched_at: datetime | None
     last_run_id: int | None
     last_run_started_at: datetime | None
@@ -47,3 +49,26 @@ class SchedulerStatusResponse(BaseModel):
 
 class IntervalUpdateRequest(BaseModel):
     seconds: int = Field(ge=60)
+
+
+class FetchRangeUpdateRequest(BaseModel):
+    mode: Literal["range", "all"]
+    since: datetime | None = None
+    until: datetime | None = None
+
+    @model_validator(mode="after")
+    def _validate_range(self) -> "FetchRangeUpdateRequest":
+        if self.mode == "all":
+            self.since = None
+            self.until = None
+            return self
+
+        if self.since is None:
+            raise ValueError("since is required when mode is 'range'")
+        if self.until is not None and self.since > self.until:
+            raise ValueError("since must not be after until")
+        return self
+
+
+class AutoFetchUpdateRequest(BaseModel):
+    enabled: bool

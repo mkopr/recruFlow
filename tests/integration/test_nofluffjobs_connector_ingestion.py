@@ -251,3 +251,35 @@ async def test_run_nofluffjobs_ingestion_uses_page_size_from_config(
     await db_session.commit()
 
     assert captured_params["pageSize"] == 250
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_run_nofluffjobs_ingestion_range_mode_skips_offers_outside_since_until(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `posted` is epoch-ms, mapped to an already-parsed datetime (unlike the ISO-string
+    # posted_at of the other two connectors) -- exercises that shape through the shared filter.
+    source = await _create_source(
+        db_session,
+        config_json={
+            "fetch_range": {
+                "mode": "range",
+                "since": "2026-06-01T00:00:00Z",
+                "until": "2026-06-30T00:00:00Z",
+            }
+        },
+    )
+    in_range = _raw_offer(posted=1781481600000)  # 2026-06-15T00:00:00Z
+    out_of_range = _raw_offer(posted=1777593600000)  # 2026-05-01T00:00:00Z
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda *a, **kw: _FakeResponse(json_data=_offers_payload([in_range, out_of_range])),
+    )
+
+    result = await run_nofluffjobs_ingestion(db_session, source)
+    await db_session.commit()
+
+    assert result.fetched == 2
+    assert result.created == 1

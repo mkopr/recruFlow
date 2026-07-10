@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -22,17 +22,33 @@ from app.scoring.events import publish_score
 logger = logging.getLogger(__name__)
 
 DEFAULT_SOURCE_CONFIGS: dict[str, dict[str, Any]] = {
-    SOLID_JOBS: {"schedule": {"type": "interval", "seconds": 300}},
-    JUSTJOINIT: {"schedule": {"type": "interval", "seconds": 300}},
-    NOFLUFFJOBS: {"schedule": {"type": "interval", "seconds": 300}},
+    SOLID_JOBS: {"schedule": {"type": "interval", "seconds": 300}, "auto_fetch_enabled": True},
+    JUSTJOINIT: {"schedule": {"type": "interval", "seconds": 300}, "auto_fetch_enabled": True},
+    NOFLUFFJOBS: {"schedule": {"type": "interval", "seconds": 300}, "auto_fetch_enabled": True},
 }
+
+
+def _default_fetch_range() -> dict[str, Any]:
+    """Computed fresh per call (not baked into `DEFAULT_SOURCE_CONFIGS`, a module-level
+    constant evaluated once at import time) so "seed time minus 7 days" reflects the
+    actual moment a source is first inserted, not process start (US34).
+    """
+    return {
+        "mode": "range",
+        "since": (datetime.now(UTC) - timedelta(days=7)).isoformat(),
+        "until": None,
+    }
 
 
 async def ensure_sources_exist(session: AsyncSession) -> None:
     for connector, config in DEFAULT_SOURCE_CONFIGS.items():
         stmt = (
             pg_insert(Source)
-            .values(name=connector, connector=connector, config_json=config)
+            .values(
+                name=connector,
+                connector=connector,
+                config_json={**config, "fetch_range": _default_fetch_range()},
+            )
             .on_conflict_do_nothing(index_elements=[Source.name])
         )
         await session.execute(stmt)
@@ -167,5 +183,39 @@ async def set_all_source_intervals(session: AsyncSession, seconds: int) -> list[
             **source.config_json,
             "schedule": {"type": "interval", "seconds": seconds},
         }
+        await session.flush()
+    return list(sources)
+
+
+async def set_source_fetch_range(
+    session: AsyncSession, connector: str, fetch_range: dict[str, Any]
+) -> Source:
+    source = await resolve_source_by_connector(session, connector)
+    source.config_json = {**source.config_json, "fetch_range": fetch_range}
+    await session.flush()
+    return source
+
+
+async def set_all_source_fetch_ranges(
+    session: AsyncSession, fetch_range: dict[str, Any]
+) -> list[Source]:
+    sources = (await session.scalars(select(Source).where(Source.connector.is_not(None)))).all()
+    for source in sources:
+        source.config_json = {**source.config_json, "fetch_range": fetch_range}
+        await session.flush()
+    return list(sources)
+
+
+async def set_source_auto_fetch(session: AsyncSession, connector: str, enabled: bool) -> Source:
+    source = await resolve_source_by_connector(session, connector)
+    source.config_json = {**source.config_json, "auto_fetch_enabled": enabled}
+    await session.flush()
+    return source
+
+
+async def set_all_source_auto_fetch(session: AsyncSession, enabled: bool) -> list[Source]:
+    sources = (await session.scalars(select(Source).where(Source.connector.is_not(None)))).all()
+    for source in sources:
+        source.config_json = {**source.config_json, "auto_fetch_enabled": enabled}
         await session.flush()
     return list(sources)

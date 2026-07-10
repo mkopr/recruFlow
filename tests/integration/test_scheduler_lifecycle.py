@@ -90,3 +90,84 @@ async def test_register_jobs_excludes_sources_with_null_connector() -> None:
             await session.execute(delete(Source).where(Source.id == source_id))
             await session.commit()
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_register_jobs_pauses_job_for_source_with_auto_fetch_disabled() -> None:
+    engine = get_engine()
+    sessionmaker = get_sessionmaker(engine)
+    connector = f"disabled-{uuid4()}"
+    async with sessionmaker() as session:
+        source = Source(
+            name=connector,
+            connector=connector,
+            config_json={
+                "schedule": {"type": "interval", "seconds": 300},
+                "auto_fetch_enabled": False,
+            },
+        )
+        session.add(source)
+        await session.commit()
+        source_id = source.id
+
+    # `next_run_time` is only assigned once the scheduler is actually running (APScheduler
+    # leaves it unset entirely on a not-yet-started scheduler) -- start/shutdown it here to
+    # match the real app.state.scheduler this behavior is verified against elsewhere.
+    scheduler = AsyncIOScheduler(timezone="UTC")
+    scheduler.start()
+    try:
+        await register_jobs(scheduler, sessionmaker)
+        job = scheduler.get_job(build_job_id(connector))
+        assert job is not None
+        assert job.next_run_time is None
+    finally:
+        scheduler.shutdown(wait=False)
+        async with sessionmaker() as session:
+            await session.execute(delete(Source).where(Source.id == source_id))
+            await session.commit()
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_register_jobs_leaves_job_active_for_source_with_auto_fetch_enabled_or_key_absent() -> (  # noqa: E501
+    None
+):
+    engine = get_engine()
+    sessionmaker = get_sessionmaker(engine)
+    connector_enabled = f"enabled-{uuid4()}"
+    connector_absent = f"absent-{uuid4()}"
+    async with sessionmaker() as session:
+        enabled_source = Source(
+            name=connector_enabled,
+            connector=connector_enabled,
+            config_json={
+                "schedule": {"type": "interval", "seconds": 300},
+                "auto_fetch_enabled": True,
+            },
+        )
+        absent_source = Source(
+            name=connector_absent,
+            connector=connector_absent,
+            config_json={"schedule": {"type": "interval", "seconds": 300}},
+        )
+        session.add_all([enabled_source, absent_source])
+        await session.commit()
+        enabled_id = enabled_source.id
+        absent_id = absent_source.id
+
+    scheduler = AsyncIOScheduler(timezone="UTC")
+    scheduler.start()
+    try:
+        await register_jobs(scheduler, sessionmaker)
+        for connector in (connector_enabled, connector_absent):
+            job = scheduler.get_job(build_job_id(connector))
+            assert job is not None
+            assert job.next_run_time is not None
+    finally:
+        scheduler.shutdown(wait=False)
+        async with sessionmaker() as session:
+            await session.execute(delete(Source).where(Source.id.in_([enabled_id, absent_id])))
+            await session.commit()
+        await engine.dispose()

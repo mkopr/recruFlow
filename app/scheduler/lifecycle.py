@@ -41,14 +41,17 @@ async def register_jobs(
         connector = source.connector
         assert connector is not None
         trigger = parse_schedule(source.config_json)
+        job_id = build_job_id(connector)
         scheduler.add_job(
             run_source_sync,
             trigger=trigger,
             kwargs={"connector": connector, "trigger_type": "automatic"},
-            id=build_job_id(connector),
+            id=job_id,
             replace_existing=True,
             max_instances=1,
             coalesce=True,
         )
+        if not (source.config_json or {}).get("auto_fetch_enabled", True):
+            scheduler.pause_job(job_id)
         count += 1
     return count

@@ -9,7 +9,11 @@ def _source(**overrides: object) -> Source:
         id=1,
         name="justjoinit",
         connector="justjoinit",
-        config_json={"schedule": {"type": "interval", "seconds": 900}},
+        config_json={
+            "schedule": {"type": "interval", "seconds": 900},
+            "fetch_range": {"mode": "range", "since": "2026-01-01T00:00:00Z", "until": None},
+            "auto_fetch_enabled": True,
+        },
         last_fetched_at=None,
     )
     defaults.update(overrides)
@@ -25,6 +29,8 @@ def test_build_source_status_with_no_last_run_returns_null_run_fields() -> None:
     assert status.connector == "justjoinit"
     assert status.name == "justjoinit"
     assert status.schedule == {"type": "interval", "seconds": 900}
+    assert status.fetch_range == {"mode": "range", "since": "2026-01-01T00:00:00Z", "until": None}
+    assert status.auto_fetch_enabled is True
     assert status.last_fetched_at is None
     assert status.last_run_id is None
     assert status.last_run_started_at is None
@@ -65,6 +71,35 @@ def test_build_source_status_with_last_run_maps_all_run_fields() -> None:
     assert status.last_run_created == 3
     assert status.last_run_warning is True
     assert status.last_run_error_message is None
+
+
+def test_build_source_status_includes_fetch_range_and_auto_fetch_enabled() -> None:
+    fetch_range = {
+        "mode": "range",
+        "since": "2026-06-01T00:00:00Z",
+        "until": "2026-06-30T00:00:00Z",
+    }
+    source = _source(
+        config_json={
+            "schedule": {"type": "interval", "seconds": 900},
+            "fetch_range": fetch_range,
+            "auto_fetch_enabled": False,
+        }
+    )
+
+    status = build_source_status(source, None)
+
+    assert status.fetch_range == fetch_range
+    assert status.auto_fetch_enabled is False
+
+
+def test_build_source_status_defaults_auto_fetch_enabled_true_when_key_absent() -> None:
+    source = _source(config_json={"schedule": {"type": "interval", "seconds": 900}})
+
+    status = build_source_status(source, None)
+
+    assert status.auto_fetch_enabled is True
+    assert status.fetch_range == {}
 
 
 def test_build_source_status_asserts_connector_is_present() -> None:
