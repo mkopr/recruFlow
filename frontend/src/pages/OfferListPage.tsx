@@ -11,15 +11,22 @@ import { KNOWN_SOURCES } from '../constants';
 import { useOffers } from '../hooks/useOffers';
 import { useSchedulerStatus } from '../hooks/useSchedulerStatus';
 import { useScoringStatus } from '../hooks/useScoringStatus';
+import { loadOfferListPrefs, saveOfferListPrefs } from '../lib/offerListPrefs';
 
 const PAGE_SIZE = 50;
-const DEFAULT_SORT: OfferListSort = { orderBy: 'posted_at', order: 'desc' };
 
 export function OfferListPage() {
-  const [filters, setFilters] = useState<OfferListFilters>({});
-  const [minScore, setMinScore] = useState<number | ''>('');
+  // Loaded once per mount (BUG33) — filters/minScore/sort persist across
+  // reloads and navigation instead of resetting to blank every time.
+  const [initialPrefs] = useState(loadOfferListPrefs);
+  const [filters, setFilters] = useState<OfferListFilters>(initialPrefs.filters);
+  const [minScore, setMinScore] = useState<number | ''>(initialPrefs.minScore);
   const [page, setPage] = useState(0);
-  const [sort, setSort] = useState<OfferListSort>(DEFAULT_SORT);
+  const [sort, setSort] = useState<OfferListSort>(initialPrefs.sort);
+
+  useEffect(() => {
+    saveOfferListPrefs({ filters, minScore, sort });
+  }, [filters, minScore, sort]);
 
   const activeFilters: OfferListFilters = {
     ...filters,

@@ -161,8 +161,10 @@ describe('useOffers', () => {
     }
   });
 
-  it('threads applied and showHidden through to fetchOffers', async () => {
-    const { result } = renderHook(() => useOffers({ applied: true, showHidden: true }, SORT, PAGE));
+  it('threads showApplied and showHidden through to fetchOffers', async () => {
+    const { result } = renderHook(() =>
+      useOffers({ showApplied: true, showHidden: true }, SORT, PAGE),
+    );
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(fetchOffersMock).toHaveBeenLastCalledWith(
@@ -172,7 +174,7 @@ describe('useOffers', () => {
         seniority: undefined,
         minSalary: undefined,
         minScore: undefined,
-        applied: true,
+        showApplied: true,
         showHidden: true,
       },
       SORT,

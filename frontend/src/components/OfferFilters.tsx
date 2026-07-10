@@ -34,8 +34,8 @@ export function OfferFilters({ filters, onChange }: OfferFiltersProps) {
     onChange({ ...filters, minSalary: parsed });
   };
 
-  const handleAppliedChange = (event: ChangeEvent<HTMLSelectElement>) => {
-    onChange({ ...filters, applied: selectValueToBool(event.target.value) });
+  const handleShowAppliedChange = (event: ChangeEvent<HTMLInputElement>) => {
+    onChange({ ...filters, showApplied: event.target.checked });
   };
 
   const handleShowHiddenChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -93,18 +93,18 @@ export function OfferFilters({ filters, onChange }: OfferFiltersProps) {
         />
       </label>
 
-      <label className="flex flex-col gap-1 text-sm text-[var(--color-text-muted)]">
-        Applied
-        <select
-          className="input"
-          value={boolToSelectValue(filters.applied)}
-          onChange={handleAppliedChange}
-        >
-          <option value="">Any</option>
-          <option value="true">Applied</option>
-          <option value="false">Not applied</option>
-        </select>
-      </label>
+      <div className="flex flex-col gap-1 text-sm text-[var(--color-text-muted)]">
+        <span>Applied</span>
+        <label className="input flex items-center gap-2 text-[var(--color-text)]">
+          <input
+            type="checkbox"
+            className="h-4 w-4 accent-[var(--color-accent)]"
+            checked={filters.showApplied ?? false}
+            onChange={handleShowAppliedChange}
+          />
+          Show applied offers
+        </label>
+      </div>
 
       <div className="flex flex-col gap-1 text-sm text-[var(--color-text-muted)]">
         <span>Visibility</span>

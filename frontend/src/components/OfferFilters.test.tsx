@@ -55,13 +55,13 @@ describe('OfferFilters', () => {
     expect(onChange).toHaveBeenLastCalledWith({ minSalary: 0 });
   });
 
-  it('calls onChange with a boolean when applied is selected', async () => {
+  it('calls onChange with showApplied when the checkbox is toggled', async () => {
     const onChange = vi.fn();
     renderFilters({}, onChange);
 
-    await userEvent.selectOptions(screen.getByLabelText('Applied'), 'true');
+    await userEvent.click(screen.getByLabelText('Show applied offers'));
 
-    expect(onChange).toHaveBeenCalledWith({ applied: true });
+    expect(onChange).toHaveBeenCalledWith({ showApplied: true });
   });
 
   it('calls onChange with showHidden when the checkbox is toggled', async () => {

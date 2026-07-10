@@ -12,7 +12,7 @@ export interface OfferListFilters {
   seniority?: string;
   minSalary?: number;
   minScore?: number;
-  applied?: boolean;
+  showApplied?: boolean;
   showHidden?: boolean;
 }
 
@@ -42,7 +42,10 @@ export async function fetchOffers(
         seniority: filters.seniority,
         min_salary: filters.minSalary,
         min_score: filters.minScore,
-        applied: filters.applied,
+        // Mirrors show_hidden's "excluded unless opted in" semantics (BUG33):
+        // unchecked -> only not-applied offers; checked -> unfiltered, not
+        // "only applied", so applied never maps to `true` here.
+        applied: filters.showApplied ? undefined : false,
         show_hidden: filters.showHidden,
         order_by: sort.orderBy,
         order: sort.order,

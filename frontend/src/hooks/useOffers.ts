@@ -37,7 +37,7 @@ export function useOffers(
   const [error, setError] = useState<string | null>(null);
   const isFirstRun = useRef(true);
 
-  const { source, remote, seniority, minSalary, minScore, applied, showHidden } = filters;
+  const { source, remote, seniority, minSalary, minScore, showApplied, showHidden } = filters;
   const { orderBy, order } = sort;
   const { limit, offset } = page;
 
@@ -52,7 +52,7 @@ export function useOffers(
       setLoading(true);
       try {
         const result = await fetchOffers(
-          { source, remote, seniority, minSalary, minScore, applied, showHidden },
+          { source, remote, seniority, minSalary, minScore, showApplied, showHidden },
           { orderBy, order },
           { limit, offset },
         );
@@ -91,7 +91,7 @@ export function useOffers(
     seniority,
     minSalary,
     minScore,
-    applied,
+    showApplied,
     showHidden,
     orderBy,
     order,
@@ -102,7 +102,7 @@ export function useOffers(
   const refetch = useCallback(() => {
     setLoading(true);
     fetchOffers(
-      { source, remote, seniority, minSalary, minScore, applied, showHidden },
+      { source, remote, seniority, minSalary, minScore, showApplied, showHidden },
       { orderBy, order },
       { limit, offset },
     )
@@ -123,7 +123,7 @@ export function useOffers(
     seniority,
     minSalary,
     minScore,
-    applied,
+    showApplied,
     showHidden,
     orderBy,
     order,
