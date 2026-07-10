@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
@@ -45,6 +46,7 @@ def _offer_summary(
         applied=offer.applied,
         hide=offer.hide,
         notes=offer.notes,
+        link_opened_at=offer.link_opened_at,
         score_percent=score_percent,
     )
 
@@ -215,8 +217,12 @@ async def patch_offer(offer_id: int, payload: OfferEdit, session: SessionDep) ->
     if offer is None:
         raise HTTPException(status_code=404, detail=f"offer {offer_id} not found")
 
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    update_fields = payload.model_dump(exclude_unset=True)
+    link_opened = update_fields.pop("link_opened", None)
+    for field, value in update_fields.items():
         setattr(offer, field, value)
+    if link_opened and offer.link_opened_at is None:
+        offer.link_opened_at = datetime.now(UTC)
     await session.commit()
     await session.refresh(offer)
 

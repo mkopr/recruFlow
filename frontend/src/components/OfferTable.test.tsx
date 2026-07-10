@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as offerScoreApi from '../api/offerScore';
 import * as offersApi from '../api/offers';
 import type { OfferListSort, OfferSummary } from '../api/offers';
+import * as scoreAlertPrefs from '../lib/scoreAlertPrefs';
 import { OfferTable } from './OfferTable';
 
 vi.mock('../api/offerScore', () => ({
@@ -15,10 +16,24 @@ vi.mock('../api/offers', () => ({
   patchOffer: vi.fn(),
 }));
 
+vi.mock('../lib/scoreAlertPrefs', () => ({
+  loadScoreAlertPrefs: vi.fn(),
+}));
+
 const fetchOfferScoreMock = vi.mocked(offerScoreApi.fetchOfferScore);
 const patchOfferMock = vi.mocked(offersApi.patchOffer);
+const loadScoreAlertPrefsMock = vi.mocked(scoreAlertPrefs.loadScoreAlertPrefs);
 const onOfferPatchedMock = vi.fn();
 const onScoreHeaderClickMock = vi.fn();
+
+function mockScoreAlertPrefs(minScorePercent: number): void {
+  loadScoreAlertPrefsMock.mockReturnValue({
+    sound: 'chime',
+    volume: 0.5,
+    muted: false,
+    minScorePercent,
+  });
+}
 
 const DEFAULT_SORT: OfferListSort = { orderBy: 'posted_at', order: 'desc' };
 
@@ -43,6 +58,7 @@ function makeOffer(overrides: Partial<OfferSummary> = {}): OfferSummary {
     applied: false,
     hide: false,
     notes: null,
+    link_opened_at: null,
     score_percent: null,
     ...overrides,
   };
@@ -87,8 +103,11 @@ function renderTable(
 beforeEach(() => {
   fetchOfferScoreMock.mockReset();
   patchOfferMock.mockReset();
+  patchOfferMock.mockResolvedValue(makeOffer());
+  loadScoreAlertPrefsMock.mockReset();
   onOfferPatchedMock.mockReset();
   onScoreHeaderClickMock.mockReset();
+  mockScoreAlertPrefs(90);
 });
 
 describe('OfferTable', () => {
@@ -307,5 +326,103 @@ describe('OfferTable', () => {
 
     expect(patchOfferMock).toHaveBeenCalledWith(1, { notes: 'new notes' });
     await waitFor(() => expect(onOfferPatchedMock).toHaveBeenCalledWith(updated));
+  });
+
+  it('applies the highlight class to a row scoring at or above the alert threshold that has not been opened', () => {
+    mockScoreAlertPrefs(80);
+    renderTable([
+      makeOffer({
+        score_percent: 90,
+        link_opened_at: null,
+        canonical_url: 'https://example.com/jobs/1',
+      }),
+    ]);
+
+    const row = screen.getAllByRole('row')[1];
+    expect(row.className).toContain('card-accent');
+  });
+
+  it('does not highlight a row below the alert threshold', () => {
+    mockScoreAlertPrefs(80);
+    renderTable([makeOffer({ score_percent: 70 })]);
+
+    const row = screen.getAllByRole('row')[1];
+    expect(row.className).not.toContain('card-accent');
+  });
+
+  it('does not highlight an offer that has already been opened', () => {
+    mockScoreAlertPrefs(80);
+    renderTable([makeOffer({ score_percent: 95, link_opened_at: '2026-01-01T00:00:00Z' })]);
+
+    const row = screen.getAllByRole('row')[1];
+    expect(row.className).not.toContain('card-accent');
+  });
+
+  it('does not highlight an unscored offer regardless of threshold', () => {
+    mockScoreAlertPrefs(0);
+    renderTable([makeOffer({ score_percent: null })]);
+
+    const row = screen.getAllByRole('row')[1];
+    expect(row.className).not.toContain('card-accent');
+  });
+
+  it('does not highlight a high-scoring offer with no canonical_url', () => {
+    mockScoreAlertPrefs(80);
+    renderTable([makeOffer({ score_percent: 95, canonical_url: null, title: 'No Link Offer' })]);
+
+    const row = screen.getAllByRole('row')[1];
+    expect(row.className).not.toContain('card-accent');
+    expect(screen.getByText('No Link Offer')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'No Link Offer' })).not.toBeInTheDocument();
+  });
+
+  it('clicking the title link on a highlighted offer optimistically clears the highlight and fires a fire-and-forget PATCH', async () => {
+    mockScoreAlertPrefs(80);
+    const offer = makeOffer({
+      id: 1,
+      score_percent: 90,
+      link_opened_at: null,
+      canonical_url: 'https://example.com/jobs/1',
+    });
+    let resolvePatch: (value: OfferSummary) => void = () => {};
+    patchOfferMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolvePatch = resolve;
+      }),
+    );
+
+    renderTable([offer]);
+
+    await userEvent.click(screen.getByRole('link', { name: offer.title }));
+
+    expect(patchOfferMock).toHaveBeenCalledWith(1, { link_opened: true });
+    expect(onOfferPatchedMock).toHaveBeenCalledTimes(1);
+    const patchedArg = onOfferPatchedMock.mock.calls[0][0] as OfferSummary;
+    expect(patchedArg.link_opened_at).not.toBeNull();
+
+    resolvePatch(offer);
+  });
+
+  it('clicking the title link does not call preventDefault / does not block navigation', async () => {
+    const offer = makeOffer({ canonical_url: 'https://example.com/jobs/1' });
+    renderTable([offer]);
+
+    const link = screen.getByRole('link', { name: offer.title });
+    await userEvent.click(link);
+
+    expect(link).toHaveAttribute('href', offer.canonical_url as string);
+    expect(link).toHaveAttribute('target', '_blank');
+  });
+
+  it('clicking the title link on an already-opened offer is a no-op — no duplicate PATCH', async () => {
+    const offer = makeOffer({
+      canonical_url: 'https://example.com/jobs/1',
+      link_opened_at: '2026-01-01T00:00:00Z',
+    });
+    renderTable([offer]);
+
+    await userEvent.click(screen.getByRole('link', { name: offer.title }));
+
+    expect(patchOfferMock).not.toHaveBeenCalled();
   });
 });

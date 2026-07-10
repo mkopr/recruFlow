@@ -543,9 +543,14 @@ stored at ingest time), and `updated_at`. Returns `404` with a clear message for
 
 ### `PATCH /offers/{offer_id}`
 
-Partially updates the user-owned `applied`/`hide`/`notes` fields on an offer — only fields present
-in the request body are changed; everything else on the row is left untouched. Send an explicit
-`null` for `notes` to clear it.
+Partially updates the user-owned `applied`/`hide`/`notes`/`link_opened_at` fields on an offer —
+only fields present in the request body are changed; everything else on the row is left untouched.
+Send an explicit `null` for `notes` to clear it.
+
+`link_opened` is a request-only flag, not a direct field: sending `{"link_opened": true}` sets
+`link_opened_at` to the current server time on the *first* call only — repeat calls are a no-op
+(the stored timestamp never changes once set). There is no way to clear `link_opened_at` back to
+null via the API; `{"link_opened": false}` is accepted but has no effect.
 
 ```bash
 curl -X PATCH http://localhost:8000/offers/42 \
@@ -562,13 +567,15 @@ curl -X PATCH http://localhost:8000/offers/42 \
   "applied": true,
   "hide": false,
   "notes": "Applied via referral",
+  "link_opened_at": null,
   "score_percent": 92
 }
 ```
 
 Returns `404` with the same message convention as `GET /offers/{offer_id}` for an unknown id.
-`applied`/`hide`/`notes` are never touched by `POST /ingest/{source}` or the batch scoring job —
-re-ingesting an already-seen offer leaves these three columns exactly as the user last set them.
+`applied`/`hide`/`notes`/`link_opened_at` are never touched by `POST /ingest/{source}` or the batch
+scoring job — re-ingesting an already-seen offer leaves these four columns exactly as the user last
+set them.
 
 ### `GET /offers/{offer_id}/score`
 

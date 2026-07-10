@@ -784,6 +784,133 @@ async def test_patch_offer_clearing_notes_with_explicit_null(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_get_offer_detail_link_opened_at_starts_null(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    source_id = await _create_source(db_session)
+    offer_id = await _create_offer(db_session, source_id)
+    await db_session.commit()
+
+    response = await client.get(f"/offers/{offer_id}")
+
+    assert response.status_code == 200
+    assert response.json()["link_opened_at"] is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_patch_offer_link_opened_sets_timestamp(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    connector = f"link-open-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    offer_id = await _create_offer(db_session, source_id)
+    await db_session.commit()
+
+    try:
+        response = await client.patch(f"/offers/{offer_id}", json={"link_opened": True})
+
+        assert response.status_code == 200
+        link_opened_at = response.json()["link_opened_at"]
+        assert link_opened_at is not None
+
+        follow_up = await client.get(f"/offers/{offer_id}")
+        assert follow_up.json()["link_opened_at"] == link_opened_at
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_patch_offer_link_opened_is_idempotent(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    connector = f"link-idem-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    offer_id = await _create_offer(db_session, source_id)
+    await db_session.commit()
+
+    try:
+        first = await client.patch(f"/offers/{offer_id}", json={"link_opened": True})
+        second = await client.patch(f"/offers/{offer_id}", json={"link_opened": True})
+
+        assert first.json()["link_opened_at"] == second.json()["link_opened_at"]
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_patch_offer_link_opened_false_does_not_set_timestamp(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    connector = f"link-false-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    offer_id = await _create_offer(db_session, source_id)
+    await db_session.commit()
+
+    try:
+        response = await client.patch(f"/offers/{offer_id}", json={"link_opened": False})
+
+        assert response.status_code == 200
+        assert response.json()["link_opened_at"] is None
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_patch_offer_link_opened_composes_with_other_fields(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    connector = f"link-comp-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    offer_id = await _create_offer(db_session, source_id)
+    await db_session.commit()
+
+    try:
+        response = await client.patch(
+            f"/offers/{offer_id}", json={"link_opened": True, "applied": True}
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["link_opened_at"] is not None
+        assert body["applied"] is True
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_list_offers_includes_link_opened_at(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    connector = f"list-lo-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    opened_id = await _create_offer(db_session, source_id)
+    unopened_id = await _create_offer(db_session, source_id)
+    await db_session.commit()
+
+    opened_at = datetime.now(UTC)
+    try:
+        await db_session.execute(
+            update(OfferModel).where(OfferModel.id == opened_id).values(link_opened_at=opened_at)
+        )
+        await db_session.commit()
+
+        response = await client.get("/offers", params={"source": connector})
+
+        assert response.status_code == 200
+        by_id = {entry["id"]: entry for entry in response.json()["items"]}
+        assert by_id[opened_id]["link_opened_at"] is not None
+        assert by_id[unopened_id]["link_opened_at"] is None
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_list_offers_excludes_hidden_by_default(
     client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
@@ -982,6 +1109,43 @@ async def test_reingest_does_not_reset_user_owned_fields(db_session: AsyncSessio
         assert row is not None
         assert row.applied is True
         assert row.notes == "foo"
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_reingest_does_not_reset_link_opened_at(db_session: AsyncSession) -> None:
+    connector = f"reingest-lo-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    mapped_fields: dict[str, object] = {
+        "source_id": source_id,
+        "title": "Backend Engineer",
+        "company": "Acme",
+        "canonical_url": _unique_url("reingest-link-opened"),
+    }
+
+    try:
+        first_result = await ingest_offer(db_session, mapped_fields, raw_payload={})
+        await db_session.commit()
+        assert first_result is not None
+        offer_id = first_result[0].id
+
+        opened_at = datetime.now(UTC)
+        await db_session.execute(
+            update(OfferModel).where(OfferModel.id == offer_id).values(link_opened_at=opened_at)
+        )
+        await db_session.commit()
+
+        second_result = await ingest_offer(db_session, mapped_fields, raw_payload={})
+        await db_session.commit()
+
+        assert second_result is not None
+        assert second_result[1] is False
+
+        row = await db_session.get(OfferModel, offer_id)
+        assert row is not None
+        assert row.link_opened_at is not None
     finally:
         await _delete_sources_with_offers(db_session, [source_id])
 

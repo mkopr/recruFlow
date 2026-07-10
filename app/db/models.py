@@ -54,6 +54,7 @@ class Offer(Base):
     applied: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     hide: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    link_opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     raw_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

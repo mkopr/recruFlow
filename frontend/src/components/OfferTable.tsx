@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import { patchOffer, type OfferListSort, type OfferSummary } from '../api/offers';
 import { useOfferScoreDetail } from '../hooks/useOfferScoreDetail';
+import { loadScoreAlertPrefs } from '../lib/scoreAlertPrefs';
 import { NotesEditor } from './NotesEditor';
 import { ScoreBadge } from './ScoreBadge';
 import { ScoreDrawer } from './ScoreDrawer';
@@ -31,6 +32,15 @@ function formatSalary(offer: OfferSummary): string {
 function formatPostedDate(postedAt: string | null): string {
   if (!postedAt) return '-';
   return new Date(postedAt).toLocaleDateString();
+}
+
+function isHighlighted(offer: OfferSummary, minScorePercent: number): boolean {
+  return (
+    offer.canonical_url != null &&
+    offer.score_percent != null &&
+    offer.score_percent >= minScorePercent &&
+    offer.link_opened_at == null
+  );
 }
 
 function NoOffersEmptyState() {
@@ -67,6 +77,7 @@ export function OfferTable({
   const [selectedOfferId, setSelectedOfferId] = useState<number | null>(null);
   const [notesOfferId, setNotesOfferId] = useState<number | null>(null);
   const { score: selectedScore } = useOfferScoreDetail(selectedOfferId);
+  const { minScorePercent } = loadScoreAlertPrefs();
 
   const emptyState = getEmptyState(offers, minScore, loading);
   if (emptyState) {
@@ -97,6 +108,12 @@ export function OfferTable({
     onOfferPatched(updated);
   };
 
+  const handleOpenLink = (offer: OfferSummary) => {
+    if (offer.link_opened_at != null) return;
+    onOfferPatched({ ...offer, link_opened_at: new Date().toISOString() });
+    void patchOffer(offer.id, { link_opened: true }).catch(() => {});
+  };
+
   return (
     <div className="card max-h-[70vh] overflow-y-auto">
       <div className="overflow-x-auto">
@@ -124,7 +141,9 @@ export function OfferTable({
             {offers.map((offer) => (
               <tr
                 key={offer.id}
-                className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-surface-hover)]"
+                className={`border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-surface-hover)] ${
+                  isHighlighted(offer, minScorePercent) ? 'card-accent' : ''
+                }`}
               >
                 <td className="px-4 py-3">
                   {offer.canonical_url ? (
@@ -133,6 +152,7 @@ export function OfferTable({
                       target="_blank"
                       rel="noreferrer"
                       className="text-[var(--color-accent)] hover:underline"
+                      onClick={() => handleOpenLink(offer)}
                     >
                       {offer.title}
                     </a>

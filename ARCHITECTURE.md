@@ -1929,6 +1929,62 @@ number the user types in, no persisted config in between. See the P3US29 section
   — the filter row uses `items-end` alignment, so a differently-shaped control breaks the row's
   visual alignment against the select/input fields next to it.
 
+### Offer new-offer highlight until opened (P3US35)
+
+- **Purpose**: closes the last gap in "make the best-matching offers impossible to miss"
+  (P3US28 added a one-shot sound alert on new high scores, P3US29 made its threshold
+  user-configurable via `scoreAlertPrefs.minScorePercent`) — missing the sound (stepped away,
+  muted, tab not focused) previously meant a great match could sit unnoticed in the list forever.
+  This story adds a fourth user-owned `Offer` field, `link_opened_at`, following P3US31's exact
+  migration → model → schema → endpoint → frontend pattern.
+- **Schema/DB**: one Alembic migration (`95644bfde2a0_offer_link_opened_at`, mirroring
+  `bef7908f5330_offer_applied_hide_notes`'s shape) adds `link_opened_at TIMESTAMPTZ NULL` to
+  `offers`, defaulting to null. Included in `OfferSummary`/`OfferDetail` (`app/schemas/offer.py`)
+  alongside `applied`/`hide`/`notes`.
+- **`PATCH /offers/{offer_id}` request-flag-to-server-timestamp**: `OfferEdit` gains
+  `link_opened: bool | None = None` — deliberately a behavioral flag in the request, not a direct
+  passthrough of `link_opened_at`, so the client can never set an arbitrary timestamp; only the
+  server decides `now()`. This means the field can't go through the handler's generic
+  `for field, value in payload.model_dump(exclude_unset=True).items(): setattr(offer, field,
+  value)` loop (there is no `Offer.link_opened` ORM attribute) — `patch_offer` pops `link_opened`
+  out of the dumped payload before that loop runs, then applies it separately:
+  `if link_opened and offer.link_opened_at is None: offer.link_opened_at = datetime.now(UTC)`.
+  Checking `is None` (not just running `datetime.now(UTC)` unconditionally) is the whole
+  idempotency guarantee — a repeat `{"link_opened": true}` call is a no-op on the timestamp
+  because the condition is only ever true once per offer. `{"link_opened": false}` is accepted by
+  the schema but intentionally has no effect; there is no "un-open" acceptance criterion.
+- **Highlight derivation is computed, never stored**: a row is eligible for the highlight when
+  `score_percent != null && score_percent >= scoreAlertPrefs.minScorePercent && link_opened_at ==
+  null && canonical_url != null` (`isHighlighted` in `frontend/src/components/OfferTable.tsx`),
+  recomputed from `GET /offers` data on every load — there is no `is_highlighted` column, no
+  "mark as seen" endpoint, and no per-session cache. This is deliberate, not an oversight: it's
+  the only way lowering `minScorePercent` in Settings can retroactively highlight
+  previously-below-bar, not-yet-opened offers on the very next load with no rescoring or backend
+  change. See `docs/adr/0019-offer-highlight-is-derived-not-stored.md` and the `CONTEXT.md`
+  **Unopened Match Highlight** glossary entry.
+- **Reuses `.card-accent` verbatim** (`frontend/src/index.css`, unmodified) — the same
+  accent-tinted `color-mix` border/background treatment already established for other
+  accent-styled cards, applied at the `<tr>` level, so the highlight reads as part of the
+  existing dark theme rather than a new bolted-on banner color.
+- **Click-to-open wiring** (`OfferTable.tsx`'s title `<a>`, the same anchor P3US26 already
+  rendered when `canonical_url` is set): `onClick={() => handleOpenLink(offer)}` does not call
+  `preventDefault`, so the existing `target="_blank"` navigation is untouched and never blocked
+  or delayed. `handleOpenLink` (a) no-ops if `link_opened_at` is already set (avoids a redundant
+  PATCH on repeat clicks), (b) optimistically calls `onOfferPatched({ ...offer, link_opened_at:
+  new Date().toISOString() })` synchronously so the row's highlight visibly clears the instant
+  it's clicked, without waiting on the network, then (c) fires `void patchOffer(offer.id,
+  { link_opened: true }).catch(() => {})` — fire-and-forget, with a bare `.catch` added (beyond
+  the original story plan) specifically to swallow the rejection `patchOffer` throws on a failed
+  request; without it, an offline/erroring PATCH would surface as an unhandled promise rejection
+  (noisy in the browser console, and can fail a Vitest run outright via other, unrelated tests).
+  No retry or error toast is added — the optimistic local state is treated as sufficient for this
+  session, matching the existing "no client-side snapshot" acceptance criterion's spirit.
+- **Reingestion protection is free, for the same reason P3US31's fields got it**: `link_opened_at`
+  is never part of the ingestion `Offer` schema, so `persist_offer`'s
+  `on_conflict_do_nothing(index_elements=[OfferModel.dedup_hash])` already leaves it untouched on
+  a duplicate `dedup_hash` — no ingestion-path code changes were needed, only a regression test
+  (`test_reingest_does_not_reset_link_opened_at`).
+
 ### Dead letter queues (P3US33)
 
 - **Purpose**: every prior story's handled, anticipated failure (a malformed scraped record, a

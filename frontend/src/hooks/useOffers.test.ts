@@ -35,6 +35,7 @@ function makeOffer(overrides: Partial<OfferSummary> = {}): OfferSummary {
     applied: false,
     hide: false,
     notes: null,
+    link_opened_at: null,
     score_percent: null,
     ...overrides,
   };

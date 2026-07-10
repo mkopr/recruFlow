@@ -580,6 +580,8 @@ export interface components {
       hide: boolean;
       /** Notes */
       notes: string | null;
+      /** Link Opened At */
+      link_opened_at: string | null;
       /**
        * Score Percent
        * @description Active profile's most recent match score (0-100) for this offer, if scored
@@ -605,6 +607,8 @@ export interface components {
       hide?: boolean | null;
       /** Notes */
       notes?: string | null;
+      /** Link Opened */
+      link_opened?: boolean | null;
     };
     /** OfferListResponse */
     OfferListResponse: {
@@ -659,6 +663,8 @@ export interface components {
       hide: boolean;
       /** Notes */
       notes: string | null;
+      /** Link Opened At */
+      link_opened_at: string | null;
       /**
        * Score Percent
        * @description Active profile's most recent match score (0-100) for this offer, if scored

@@ -61,6 +61,7 @@ class OfferSummary(BaseModel):
     applied: bool
     hide: bool
     notes: str | None
+    link_opened_at: datetime | None
     score_percent: int | None = Field(
         default=None,
         ge=0,
@@ -79,6 +80,7 @@ class OfferEdit(BaseModel):
     applied: bool | None = None
     hide: bool | None = None
     notes: str | None = None
+    link_opened: bool | None = None
 
 
 class OfferListResponse(BaseModel):
