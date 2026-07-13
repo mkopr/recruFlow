@@ -245,6 +245,24 @@ async def test_score_offer_with_langchain_wraps_unexpected_failure() -> None:
         )
 
 
+@pytest.mark.parametrize("dimension", list(DIMENSION_WEIGHTS))
+def test_matcher_output_clamps_above_range_dimension_instead_of_raising(dimension: str) -> None:
+    kwargs = {**_STRONG_OUTPUT_KWARGS, dimension: 1.2}
+
+    output = _MatcherOutput(**kwargs)
+
+    assert getattr(output, dimension) == 1.0
+
+
+@pytest.mark.parametrize("dimension", list(DIMENSION_WEIGHTS))
+def test_matcher_output_clamps_below_range_dimension_instead_of_raising(dimension: str) -> None:
+    kwargs = {**_STRONG_OUTPUT_KWARGS, dimension: -0.3}
+
+    output = _MatcherOutput(**kwargs)
+
+    assert getattr(output, dimension) == 0.0
+
+
 def test_weighted_total_matches_manual_calculation() -> None:
     output = _MatcherOutput(
         skill_match=0.8,

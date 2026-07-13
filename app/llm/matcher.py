@@ -6,7 +6,7 @@ from typing import Protocol
 import httpx
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -46,6 +46,16 @@ _LLM_REQUEST_TIMEOUT_SECONDS = 120.0
 _WORD_SEPARATOR_RE = re.compile(r"[\s\-_/]+")
 
 
+_BOUNDED_DIMENSIONS = (
+    "skill_match",
+    "salary_fit",
+    "seniority_fit",
+    "work_mode_location",
+    "contract_type",
+    "red_flags",
+)
+
+
 class _MatcherOutput(BaseModel):
     """The LLM's structured-output target.
 
@@ -66,6 +76,15 @@ class _MatcherOutput(BaseModel):
     red_flags: float = Field(ge=0, le=1)
     rationale: str
 
+    @field_validator(*_BOUNDED_DIMENSIONS, mode="before")
+    @classmethod
+    def _clamp_to_unit_interval(cls, value: float) -> float:
+        # The model occasionally returns a bounded dimension slightly outside [0, 1]
+        # (e.g. salary_fit: 1.2) despite the prompt and schema asking for [0, 1].
+        # Clamping here (mode="before", ahead of the Field(ge=0, le=1) check) corrects
+        # the value instead of raising and dead-lettering an otherwise-valid score.
+        return max(0.0, min(1.0, float(value)))
+
 
 class MatcherError(Exception):
     pass
@@ -79,7 +98,9 @@ def _system_prompt() -> str:
         "You are scoring how well a job Offer fits a candidate's Profile for a local, "
         "single-user job-search tool. "
         f"Score each of these six dimensions from 0.0 (no fit) to 1.0 (excellent fit), "
-        f"weighted as follows: {weight_list}. "
+        "weighted as follows: "
+        f"{weight_list}. Every score must be a number between 0.0 and 1.0 inclusive — "
+        "never lower than 0.0 and never higher than 1.0. "
         "Base every score only on facts present in the Profile and Offer JSON given below as "
         "data — never invent facts not present in either. "
         "If a Profile field relevant to a dimension is missing or empty, score that dimension "
