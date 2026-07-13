@@ -2065,10 +2065,17 @@ number the user types in, no persisted config in between. See the P3US29 section
   tuple[Sequence[Any], int]` mirrors `GET /offers`'s pagination/total-count-subquery pattern,
   ordering by `occurred_at DESC`.
 - **`app/dlq/registry.py`**: `DEAD_LETTER_REGISTRY: dict[str, DeadLetterQueueSpec]` mirrors
-  `CONNECTOR_REGISTRY`'s `dict[str, ...]` shape exactly — `"ingestion"` → `IngestionFailure` +
-  `IngestionFailureResponse` + `{"source_id", "failure_type", "status"}`; `"scoring"` →
-  `ScoringFailure` + `ScoringFailureResponse` + `{"offer_id", "profile_id", "failure_type",
-  "status"}`. A future process (e.g. Phase 4/5's send queue) is one more entry, no route change.
+  `CONNECTOR_REGISTRY`'s `dict[str, ...]` shape, but (BUG39) each spec now owns everything
+  process-specific rather than the route branching on `process ==`: `filterable_params` (the
+  query-param names — not column names — accepted for that process: `{"source", "failure_type",
+  "status"}` for ingestion, `{"offer_id", "profile_id", "failure_type", "status"}` for scoring),
+  `build_filters` (an async callable resolving those params into `list_failures`'s filter dict —
+  `_build_ingestion_filters` does the `source` connector-name → `source_id` lookup,
+  `_build_scoring_filters` just passes `offer_id`/`profile_id` through), and
+  `build_item_response`/`build_list_response` methods wrapping `response_schema.model_validate`
+  so the route resolves the response-type union via one `cast()` at the call site instead of a
+  second `if process ==` branch. A future process (e.g. Phase 4/5's send queue) is one more
+  registry entry — the route body is unchanged.
 - **`app/dlq/retry.py`**: `RETRY_HANDLERS: dict[str, RetryHandler]`, keyed by `failure_type`
   (flat across both tables, since the four `failure_type` strings are globally unique) rather
   than by process, because retry mechanics differ per failure type, not per table.
@@ -2105,7 +2112,11 @@ number the user types in, no persisted config in between. See the P3US29 section
   `Source.connector`, using a `_NO_MATCHING_SOURCE_ID = -1` sentinel for an unknown connector —
   same pattern as `GET /offers`' `_NO_ACTIVE_PROFILE_ID`, so an unrecognized filter value returns
   an empty page rather than an unfiltered one or an error. `status` defaults to `"open"`
-  (`"resolved"`/`"all"` also accepted) rather than showing every historical row by default.
+  (`"resolved"`/`"all"` also accepted) rather than showing every historical row by default. A
+  filter param outside the target process's `spec.filterable_params` (e.g. `offer_id` on
+  `/failures/ingestion`) is a `400`, not silently ignored (BUG39) — `source`/`offer_id`/`profile_id`
+  stay declared on the route signature for OpenAPI/Swagger discoverability, but which ones are
+  legal per process is the registry's call, not the route's.
 - **`POST /failures/{process}/{failure_id}/retry`**: looks up the row by id (404 if missing),
   dispatches to `RETRY_HANDLERS[row.failure_type]` via `perform_retry`, and returns the
   (possibly now-resolved) row.

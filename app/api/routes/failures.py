@@ -1,10 +1,8 @@
 from typing import Literal, cast
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import select
 
 from app.api.deps import SessionDep
-from app.db.models import Source
 from app.dlq.registry import DEAD_LETTER_REGISTRY, DeadLetterQueueSpec
 from app.dlq.retry import perform_retry
 from app.dlq.service import list_failures
@@ -19,10 +17,6 @@ router = APIRouter()
 
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 200
-
-# Sentinel source id: an unknown `source` filter value must yield an always-empty
-# result rather than an unfiltered one, mirroring GET /offers's _NO_ACTIVE_PROFILE_ID.
-_NO_MATCHING_SOURCE_ID = -1
 
 
 def _spec_or_404(process: str) -> DeadLetterQueueSpec:
@@ -46,32 +40,28 @@ async def list_failures_route(
 ) -> IngestionFailureListResponse | ScoringFailureListResponse:
     spec = _spec_or_404(process)
 
-    filters: dict[str, object] = {}
+    process_params = {"source": source, "offer_id": offer_id, "profile_id": profile_id}
+    provided = {key: value for key, value in process_params.items() if value is not None}
+    unsupported = set(provided) - spec.filterable_params
+    if unsupported:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unsupported filter(s) for process {process!r}: {sorted(unsupported)}",
+        )
+
+    filters = await spec.build_filters(session, provided)
     if failure_type is not None:
         filters["failure_type"] = failure_type
     if status != "all":
         filters["status"] = status
-    if process == "ingestion" and source is not None:
-        resolved_id = await session.scalar(select(Source.id).where(Source.connector == source))
-        filters["source_id"] = resolved_id if resolved_id is not None else _NO_MATCHING_SOURCE_ID
-    if process == "scoring":
-        if offer_id is not None:
-            filters["offer_id"] = offer_id
-        if profile_id is not None:
-            filters["profile_id"] = profile_id
 
     rows, total = await list_failures(
         session, spec.model, limit=limit, offset=offset, filters=filters
     )
-    if process == "ingestion":
-        ingestion_items = [
-            cast(IngestionFailureResponse, spec.response_schema.model_validate(row)) for row in rows
-        ]
-        return IngestionFailureListResponse(items=ingestion_items, total=total)
-    scoring_items = [
-        cast(ScoringFailureResponse, spec.response_schema.model_validate(row)) for row in rows
-    ]
-    return ScoringFailureListResponse(items=scoring_items, total=total)
+    return cast(
+        "IngestionFailureListResponse | ScoringFailureListResponse",
+        spec.build_list_response(rows, total),
+    )
 
 
 @router.post("/failures/{process}/{failure_id}/retry")
@@ -85,6 +75,4 @@ async def retry_failure_route(
         raise HTTPException(status_code=404, detail=f"failure {failure_id} not found")
 
     await perform_retry(session, row)
-    if process == "ingestion":
-        return cast(IngestionFailureResponse, spec.response_schema.model_validate(row))
-    return cast(ScoringFailureResponse, spec.response_schema.model_validate(row))
+    return cast("IngestionFailureResponse | ScoringFailureResponse", spec.build_item_response(row))
