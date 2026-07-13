@@ -6,8 +6,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.models import Source
+from app.scheduler.runs import build_source_status, get_latest_run_by_source
 from app.scheduler.service import run_scoring_job_sync, run_source_sync
 from app.scheduler.triggers import parse_schedule
+from app.schemas.scheduler import SourceStatus
 
 SCORING_JOB_ID = "scoring:backlog"
 
@@ -26,6 +28,25 @@ def connector_should_auto_run(config: dict[str, Any]) -> bool:
     return bool(config.get("connector_enabled", True)) and bool(
         config.get("auto_fetch_enabled", True)
     )
+
+
+async def apply_auto_run_toggle(
+    scheduler: AsyncIOScheduler, session: AsyncSession, source: Source
+) -> SourceStatus:
+    """Apply `connector_should_auto_run`'s verdict to the live scheduler job for `source`
+    (resume/pause) and rebuild its status. One seam for the toggle-application step shared
+    by both the single-source and bulk auto-fetch/enabled routes (BUG36), so a future third
+    auto-run flag changes one place instead of four.
+    """
+    assert source.connector is not None
+    job_id = build_job_id(source.connector)
+    if connector_should_auto_run(source.config_json or {}):
+        scheduler.resume_job(job_id)
+    else:
+        scheduler.pause_job(job_id)
+
+    last_run = await get_latest_run_by_source(session, source.id)
+    return build_source_status(source, last_run)
 
 
 def register_scoring_job(scheduler: AsyncIOScheduler, *, interval_seconds: int) -> None:

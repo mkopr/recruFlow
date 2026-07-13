@@ -6,7 +6,7 @@ from app.api.deps import SessionDep
 from app.db.models import Source
 from app.ingestion.lifecycle import ConnectorDisabledError
 from app.ingestion.registry import SchedulerLookupError
-from app.scheduler.lifecycle import build_job_id, connector_should_auto_run
+from app.scheduler.lifecycle import apply_auto_run_toggle, build_job_id
 from app.scheduler.runs import build_source_status, get_latest_run_by_source
 from app.scheduler.service import (
     run_source,
@@ -129,16 +129,7 @@ async def update_all_source_auto_fetch(
     await session.commit()
 
     scheduler = request.app.state.scheduler
-    entries: list[SourceStatus] = []
-    for source in sources:
-        assert source.connector is not None
-        job_id = build_job_id(source.connector)
-        if connector_should_auto_run(source.config_json or {}):
-            scheduler.resume_job(job_id)
-        else:
-            scheduler.pause_job(job_id)
-        last_run = await get_latest_run_by_source(session, source.id)
-        entries.append(build_source_status(source, last_run))
+    entries = [await apply_auto_run_toggle(scheduler, session, source) for source in sources]
     return SchedulerStatusResponse(sources=entries)
 
 
@@ -153,14 +144,7 @@ async def update_source_auto_fetch(
     await session.commit()
 
     scheduler = request.app.state.scheduler
-    job_id = build_job_id(source)
-    if connector_should_auto_run(source_row.config_json or {}):
-        scheduler.resume_job(job_id)
-    else:
-        scheduler.pause_job(job_id)
-
-    last_run = await get_latest_run_by_source(session, source_row.id)
-    return build_source_status(source_row, last_run)
+    return await apply_auto_run_toggle(scheduler, session, source_row)
 
 
 @router.put("/scheduler/sources/enabled")
@@ -171,16 +155,7 @@ async def update_all_source_enabled(
     await session.commit()
 
     scheduler = request.app.state.scheduler
-    entries: list[SourceStatus] = []
-    for source in sources:
-        assert source.connector is not None
-        job_id = build_job_id(source.connector)
-        if connector_should_auto_run(source.config_json or {}):
-            scheduler.resume_job(job_id)
-        else:
-            scheduler.pause_job(job_id)
-        last_run = await get_latest_run_by_source(session, source.id)
-        entries.append(build_source_status(source, last_run))
+    entries = [await apply_auto_run_toggle(scheduler, session, source) for source in sources]
     return SchedulerStatusResponse(sources=entries)
 
 
@@ -195,11 +170,4 @@ async def update_source_enabled(
     await session.commit()
 
     scheduler = request.app.state.scheduler
-    job_id = build_job_id(source)
-    if connector_should_auto_run(source_row.config_json or {}):
-        scheduler.resume_job(job_id)
-    else:
-        scheduler.pause_job(job_id)
-
-    last_run = await get_latest_run_by_source(session, source_row.id)
-    return build_source_status(source_row, last_run)
+    return await apply_auto_run_toggle(scheduler, session, source_row)
