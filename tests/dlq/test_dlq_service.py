@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 from app.db.models import IngestionFailure, ScoringFailure
 from app.dlq.service import record_failure
+from app.dlq.types import FailureType
 
 
 @pytest.mark.asyncio
@@ -15,7 +16,7 @@ async def test_record_failure_executes_upsert_against_the_right_table() -> None:
         IngestionFailure,
         dedup_key="source:1",
         source_id=1,
-        failure_type="page_fetch_failed",
+        failure_type=FailureType.PAGE_FETCH_FAILED,
         error_message="bad",
     )
 
@@ -35,7 +36,7 @@ async def test_record_failure_never_raises_when_session_execute_raises() -> None
         dedup_key="offer:1:profile:2",
         offer_id=1,
         profile_id=2,
-        failure_type="scoring_failed",
+        failure_type=FailureType.SCORING_FAILED,
         error_message="x",
     )
 
@@ -53,7 +54,7 @@ async def test_record_failure_logs_error_on_failure(caplog: pytest.LogCaptureFix
             dedup_key="offer:1:profile:2",
             offer_id=1,
             profile_id=2,
-            failure_type="scoring_failed",
+            failure_type=FailureType.SCORING_FAILED,
             error_message="x",
         )
 

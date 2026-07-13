@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import IngestionFailure
 from app.db.models import Offer as OfferModel
 from app.dlq.service import record_failure
+from app.dlq.types import FailureType
 from app.ingestion.dedup import compute_dedup_hash, normalize_canonical_url
 from app.schemas.offer import Offer
 
@@ -37,7 +38,7 @@ async def normalize_and_validate(session: AsyncSession, raw: dict[str, Any]) -> 
             IngestionFailure,
             dedup_key=_validation_failure_dedup_key(raw),
             source_id=raw["source_id"],
-            failure_type="validation_failed",
+            failure_type=FailureType.VALIDATION_FAILED,
             raw_payload=raw,
             error_message=str(exc),
         )

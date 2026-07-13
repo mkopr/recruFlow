@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import IngestionFailure, Source
 from app.db.session import get_engine, get_sessionmaker
 from app.dlq.service import record_failure
+from app.dlq.types import FailureType
 from app.ingestion.registry import dispatch_ingestion, resolve_source_by_connector
 from app.ingestion.types import IngestionResult
 
@@ -48,7 +49,7 @@ async def record_run_fetch_failure(
         IngestionFailure,
         dedup_key=f"source:{source.id}",
         source_id=source.id,
-        failure_type="run_fetch_failed",
+        failure_type=FailureType.RUN_FETCH_FAILED,
         error_message=result.error_message or "ingestion failed",
         **fields,
     )

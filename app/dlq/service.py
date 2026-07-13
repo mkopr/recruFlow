@@ -6,11 +6,18 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.dlq.types import FailureType
+
 logger = logging.getLogger(__name__)
 
 
 async def record_failure(
-    session: AsyncSession, model_cls: type[Any], *, dedup_key: str, **fields: Any
+    session: AsyncSession,
+    model_cls: type[Any],
+    *,
+    dedup_key: str,
+    failure_type: FailureType,
+    **fields: Any,
 ) -> None:
     """Upsert a dead letter row for `dedup_key`, reopening it if it was resolved.
 
@@ -19,22 +26,39 @@ async def record_failure(
     on the existing row rather than appending a sibling row. Never raises: a bug in the
     dead letter write path must not take down the ingestion/scoring call site it's
     instrumenting.
+
+    `failure_type` is pulled out of the otherwise-generic `**fields` catch-all (BUG38) so
+    every call site is checked against `FailureType` -- the same vocabulary `app.dlq.retry`
+    dispatches on -- rather than a bare string only `RETRY_HANDLERS` happens to agree with.
     """
     try:
         stmt = (
             pg_insert(model_cls)
-            .values(dedup_key=dedup_key, status="open", occurred_at=func.now(), **fields)
+            .values(
+                dedup_key=dedup_key,
+                status="open",
+                occurred_at=func.now(),
+                failure_type=failure_type,
+                **fields,
+            )
             .on_conflict_do_update(
                 index_elements=["dedup_key"],
-                set_={**fields, "status": "open", "resolved_at": None, "occurred_at": func.now()},
+                set_={
+                    **fields,
+                    "failure_type": failure_type,
+                    "status": "open",
+                    "resolved_at": None,
+                    "occurred_at": func.now(),
+                },
             )
         )
         await session.execute(stmt)
     except Exception:
         logger.error(
-            "failed to record %s failure: dedup_key=%r fields=%r",
+            "failed to record %s failure: dedup_key=%r failure_type=%r fields=%r",
             model_cls.__name__,
             dedup_key,
+            failure_type,
             fields,
             exc_info=True,
         )

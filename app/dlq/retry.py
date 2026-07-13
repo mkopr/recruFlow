@@ -9,6 +9,7 @@ from app.db.models import IngestionFailure, ScoringFailure, Source
 from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
 from app.db.models import Profile as ProfileModel
+from app.dlq.types import FailureType
 from app.ingestion.persist import persist_offer
 from app.ingestion.service import trigger_ingest
 from app.llm.matcher import MatcherError, score_offer_with_langchain
@@ -16,6 +17,19 @@ from app.schemas.offer import Offer
 from app.schemas.profile import Profile
 
 RetryHandler = Callable[[AsyncSession, Any], Awaitable[bool]]
+
+
+class UnknownFailureTypeError(LookupError):
+    """Raised when a dead letter row's `failure_type` doesn't match any `FailureType`
+    member (BUG38) -- e.g. stale data from before a type was renamed, or a row written
+    directly against the DB rather than through `record_failure`. Replaces a bare
+    `KeyError` so this failure mode is named and easy to catch, rather than looking like
+    an accidental dict typo at the call site.
+    """
+
+    def __init__(self, failure_type: str) -> None:
+        super().__init__(f"no retry handler registered for failure_type={failure_type!r}")
+        self.failure_type = failure_type
 
 
 def _mark_still_failing(row: Any, error_message: str) -> None:
@@ -82,26 +96,38 @@ async def _retry_scoring_failed(session: AsyncSession, row: ScoringFailure) -> b
 # record_failure upsert (app/scheduler/service.py, app/ingestion/service.py), so this
 # handler doesn't need to touch `row` itself on failure -- only the caller's
 # `session.refresh(row)` after a `False` return picks that up.
-RETRY_HANDLERS: dict[str, RetryHandler] = {
-    "validation_failed": _retry_validation_failed,
-    "page_fetch_failed": _retry_fetch_failed,
-    "run_fetch_failed": _retry_fetch_failed,
-    "scoring_failed": _retry_scoring_failed,
+RETRY_HANDLERS: dict[FailureType, RetryHandler] = {
+    FailureType.VALIDATION_FAILED: _retry_validation_failed,
+    FailureType.PAGE_FETCH_FAILED: _retry_fetch_failed,
+    FailureType.RUN_FETCH_FAILED: _retry_fetch_failed,
+    FailureType.SCORING_FAILED: _retry_scoring_failed,
 }
+
+# Fails at import time (and in CI) if a new FailureType member is ever added without a
+# matching handler here -- the closest thing to a compile-time exhaustiveness check a
+# plain dict literal can get (BUG38).
+assert set(RETRY_HANDLERS) == set(FailureType), "RETRY_HANDLERS must cover every FailureType"
 
 
 # These two never mutate `row` themselves on failure (see _retry_fetch_failed) -- a
 # fresh failure lands on the same row from a *different* session via record_failure's
 # upsert, so the caller must re-read it rather than trust its own possibly-stale copy.
-_EXTERNALLY_RECORDED_FAILURE_TYPES = frozenset({"page_fetch_failed", "run_fetch_failed"})
+_EXTERNALLY_RECORDED_FAILURE_TYPES = frozenset(
+    {FailureType.PAGE_FETCH_FAILED, FailureType.RUN_FETCH_FAILED}
+)
 
 
 async def perform_retry(session: AsyncSession, row: Any) -> None:
-    handler = RETRY_HANDLERS[row.failure_type]
+    try:
+        failure_type = FailureType(row.failure_type)
+    except ValueError as exc:
+        raise UnknownFailureTypeError(row.failure_type) from exc
+
+    handler = RETRY_HANDLERS[failure_type]
     succeeded = await handler(session, row)
     if succeeded:
         row.status = "resolved"
         row.resolved_at = datetime.now(UTC)
-    elif row.failure_type in _EXTERNALLY_RECORDED_FAILURE_TYPES:
+    elif failure_type in _EXTERNALLY_RECORDED_FAILURE_TYPES:
         await session.refresh(row)
     await session.commit()

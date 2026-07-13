@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import IngestionFailure
 from app.dlq.service import record_failure
+from app.dlq.types import FailureType
 from app.ingestion.persist import ingest_offer
 from app.ingestion.types import IngestionResult
 
@@ -93,7 +94,7 @@ async def run_paginated_ingestion(  # noqa: C901
                 IngestionFailure,
                 dedup_key=f"source:{source_id}",
                 source_id=source_id,
-                failure_type="page_fetch_failed",
+                failure_type=FailureType.PAGE_FETCH_FAILED,
                 page=page_index,
                 error_message=f"failed to fetch {source_name} page {page_index}",
             )
