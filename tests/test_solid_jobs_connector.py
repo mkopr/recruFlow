@@ -1,27 +1,8 @@
 from typing import Any
 
-import httpx
 import pytest
-from app.connectors import solid_jobs
-from app.connectors.solid_jobs import (
-    _extract_offers,
-    _fetch_solid_jobs_json,
-    build_offer_params,
-    build_offer_url,
-    map_solid_jobs_offer,
-)
+from app.connectors.solid_jobs import SolidJobsConnector, build_offer_params, build_offer_url
 from app.ingestion.normalize import SOLID_JOBS
-
-
-class _FakeResponse:
-    def __init__(self, *, json_data: Any = None) -> None:
-        self._json_data = json_data
-
-    def raise_for_status(self) -> None:
-        pass
-
-    def json(self) -> Any:
-        return self._json_data
 
 
 def test_build_offer_url_uses_division_from_config() -> None:
@@ -74,49 +55,37 @@ def test_build_offer_params_omits_absent_filters() -> None:
     assert "search.minimumSalary" not in result
 
 
-def test_fetch_solid_jobs_json_pins_api_version_header(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, Any] = {}
+def test_build_headers_pins_api_version() -> None:
+    connector = SolidJobsConnector(campaign="recruflow")
 
-    def _fake_get(url: str, **kwargs: Any) -> _FakeResponse:
-        captured.update(kwargs)
-        return _FakeResponse(json_data={"jobs": []})
-
-    monkeypatch.setattr(httpx, "get", _fake_get)
-
-    _fetch_solid_jobs_json("https://solid.jobs/public-api/offers/IT", params={})
-
-    assert captured["headers"]["X-Api-Version"] == "1.0"
+    assert connector.build_headers({}) == {"X-Api-Version": "1.0"}
 
 
-def test_fetch_solid_jobs_json_returns_parsed_payload_on_success(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    payload = {"jobs": [{"title": "a"}], "pageIndex": 0, "pageSize": 1, "totalCount": 1}
-    monkeypatch.setattr(httpx, "get", lambda *a, **kw: _FakeResponse(json_data=payload))
+def test_build_url_ignores_endpoint_url_override_and_uses_division_template() -> None:
+    # Unlike JustJoin.it/NoFluffJobs, SOLID.Jobs's URL is division-templated, not a static
+    # default with an optional `endpoint_url` config override -- `build_url` must delegate to
+    # `build_offer_url`, not the generic `JobBoardConnector.build_url` hook.
+    connector = SolidJobsConnector(campaign="recruflow")
 
-    result = _fetch_solid_jobs_json("https://solid.jobs/public-api/offers/IT", params={})
+    result = connector.build_url({"division": "Engineering", "endpoint_url": "https://ignored"})
 
-    assert result == payload
+    assert result == "https://solid.jobs/public-api/offers/Engineering"
 
 
-def test_extract_offers_delegates_to_shared_envelope_extractor_with_jobs_key(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_solid_jobs_next_cursor_matches_pre_refactor_behavior() -> None:
+    connector = SolidJobsConnector(campaign="recruflow")
+
+    assert connector.next_cursor({}, [{}] * 100, cursor=0, page_size=100) == 1
+    assert connector.next_cursor({}, [{}] * 5, cursor=0, page_size=100) is None
+
+
+def test_extract_offers_uses_jobs_envelope_key() -> None:
     # shared envelope-shape behaviour (bare list, dict-with-key, None, wrong type,
     # non-dict items) is covered once in tests/test_ingestion_normalize.py
-    calls: dict[str, Any] = {}
+    connector = SolidJobsConnector(campaign="recruflow")
 
-    def _fake_extract_envelope_list(payload: Any, key: str, **kwargs: Any) -> Any:
-        calls["args"] = (payload, key, kwargs)
-        return [{"title": "a"}]
-
-    monkeypatch.setattr(solid_jobs, "extract_envelope_list", _fake_extract_envelope_list)
-
-    result = _extract_offers({"jobs": [{"title": "a"}]})
-
-    assert result == [{"title": "a"}]
-    assert calls["args"][1] == "jobs"
-    assert calls["args"][2] == {}
+    assert connector.envelope_key == "jobs"
+    assert connector.extract_offers({"jobs": [{"title": "a"}]}) == [{"title": "a"}]
 
 
 def test_map_solid_jobs_offer_maps_all_known_fields() -> None:
@@ -135,7 +104,7 @@ def test_map_solid_jobs_offer_maps_all_known_fields() -> None:
         "description": "great role",
     }
 
-    result = map_solid_jobs_offer(1, raw)
+    result = SolidJobsConnector(campaign="recruflow").map_offer(1, raw)
 
     assert result == {
         "source_id": 1,
@@ -158,7 +127,7 @@ def test_map_solid_jobs_offer_maps_all_known_fields() -> None:
 def test_map_solid_jobs_offer_does_not_treat_hybrid_as_remote() -> None:
     raw = {"title": "Backend Engineer", "company": "Acme", "isRemote": False, "isHybrid": True}
 
-    result = map_solid_jobs_offer(1, raw)
+    result = SolidJobsConnector(campaign="recruflow").map_offer(1, raw)
 
     assert result["remote"] is False
 
@@ -166,7 +135,7 @@ def test_map_solid_jobs_offer_does_not_treat_hybrid_as_remote() -> None:
 def test_map_solid_jobs_offer_handles_missing_optional_fields() -> None:
     raw = {"title": "Backend Engineer", "company": "Acme"}
 
-    result = map_solid_jobs_offer(1, raw)
+    result = SolidJobsConnector(campaign="recruflow").map_offer(1, raw)
 
     assert result["external_id"] is None
     assert result["canonical_url"] is None
@@ -184,6 +153,8 @@ def test_map_solid_jobs_offer_handles_missing_optional_fields() -> None:
 def test_map_solid_jobs_offer_calls_shared_normalize_functions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.connectors import solid_jobs
+
     calls: dict[str, tuple[Any, ...]] = {}
 
     def _record(name: str) -> Any:
@@ -208,7 +179,7 @@ def test_map_solid_jobs_offer_calls_shared_normalize_functions(
         "experienceLevel": "Senior",
         "salary": {"from": 18000, "to": 24000, "currency": "PLN"},
     }
-    map_solid_jobs_offer(1, raw)
+    SolidJobsConnector(campaign="recruflow").map_offer(1, raw)
 
     assert calls["normalize_remote"][0] == SOLID_JOBS
     assert calls["normalize_seniority"][0] == SOLID_JOBS

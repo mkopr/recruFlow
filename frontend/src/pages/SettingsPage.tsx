@@ -1,5 +1,4 @@
-import { FetchCadenceSection } from '../components/FetchCadenceSection';
-import { FetchRangeSection } from '../components/FetchRangeSection';
+import { ConnectorSettingsSection } from '../components/ConnectorSettingsSection';
 import { NotificationsSection } from '../components/NotificationsSection';
 import { OfferCleanupSection } from '../components/OfferCleanupSection';
 
@@ -8,18 +7,11 @@ export function SettingsPage() {
     <div className="mx-auto flex w-full max-w-screen-lg flex-col gap-6 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
       <header>
         <p className="text-sm text-[var(--color-text-muted)]">
-          Fetch cadence: how often each connector automatically checks for new offers.
+          Connectors: each job board's fetch cadence, date range, auto-fetch, and stop/start state,
+          one card per connector.
         </p>
       </header>
-      <FetchCadenceSection />
-
-      <header>
-        <p className="text-sm text-[var(--color-text-muted)]">
-          Fetch range & auto-fetch: which offers a connector's automatic and manual fetches accept
-          by posting date, and whether its automatic job runs at all.
-        </p>
-      </header>
-      <FetchRangeSection />
+      <ConnectorSettingsSection />
 
       <header>
         <p className="text-sm text-[var(--color-text-muted)]">

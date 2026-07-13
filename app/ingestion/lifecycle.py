@@ -16,6 +16,14 @@ OnSuccess = Callable[[AsyncSession, Source, IngestionResult], Awaitable[None]]
 OnError = Callable[[AsyncSession, Source, Exception], Awaitable[None]]
 
 
+class ConnectorDisabledError(Exception):
+    """Raised when a Connector's `connector_enabled` flag is `False` (P3US37). Distinct from
+    `SchedulerLookupError` (registry.py) -- that family means "this connector doesn't exist,"
+    this means "it exists but is stopped" -- so callers can map the two to different HTTP
+    statuses (404 vs 409) without a type check inside a shared except block.
+    """
+
+
 async def run_with_lifecycle(
     connector: str,
     *,
@@ -41,6 +49,9 @@ async def run_with_lifecycle(
         sessionmaker = get_sessionmaker(engine)
         async with sessionmaker() as session:
             source = await resolve_source_by_connector(session, connector)
+
+            if not (source.config_json or {}).get("connector_enabled", True):
+                raise ConnectorDisabledError(f"connector {connector!r} is stopped")
 
             if before_dispatch is not None:
                 await before_dispatch(session, source)

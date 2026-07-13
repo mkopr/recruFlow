@@ -4,20 +4,24 @@ from sqlalchemy import select
 
 from app.api.deps import SessionDep
 from app.db.models import Source
+from app.ingestion.lifecycle import ConnectorDisabledError
 from app.ingestion.registry import SchedulerLookupError
-from app.scheduler.lifecycle import build_job_id
+from app.scheduler.lifecycle import build_job_id, connector_should_auto_run
 from app.scheduler.runs import build_source_status, get_latest_run_by_source
 from app.scheduler.service import (
     run_source,
     set_all_source_auto_fetch,
+    set_all_source_enabled,
     set_all_source_fetch_ranges,
     set_all_source_intervals,
     set_source_auto_fetch,
+    set_source_enabled,
     set_source_fetch_range,
     set_source_interval,
 )
 from app.schemas.scheduler import (
     AutoFetchUpdateRequest,
+    ConnectorEnabledUpdateRequest,
     FetchRangeUpdateRequest,
     IntervalUpdateRequest,
     ManualRunResponse,
@@ -32,6 +36,8 @@ router = APIRouter()
 async def trigger_run(source: str) -> ManualRunResponse:
     try:
         record = await run_source(source, trigger_type="manual")
+    except ConnectorDisabledError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except SchedulerLookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return ManualRunResponse.model_validate(record)
@@ -127,7 +133,7 @@ async def update_all_source_auto_fetch(
     for source in sources:
         assert source.connector is not None
         job_id = build_job_id(source.connector)
-        if payload.enabled:
+        if connector_should_auto_run(source.config_json or {}):
             scheduler.resume_job(job_id)
         else:
             scheduler.pause_job(job_id)
@@ -148,7 +154,49 @@ async def update_source_auto_fetch(
 
     scheduler = request.app.state.scheduler
     job_id = build_job_id(source)
-    if payload.enabled:
+    if connector_should_auto_run(source_row.config_json or {}):
+        scheduler.resume_job(job_id)
+    else:
+        scheduler.pause_job(job_id)
+
+    last_run = await get_latest_run_by_source(session, source_row.id)
+    return build_source_status(source_row, last_run)
+
+
+@router.put("/scheduler/sources/enabled")
+async def update_all_source_enabled(
+    payload: ConnectorEnabledUpdateRequest, request: Request, session: SessionDep
+) -> SchedulerStatusResponse:
+    sources = await set_all_source_enabled(session, payload.enabled)
+    await session.commit()
+
+    scheduler = request.app.state.scheduler
+    entries: list[SourceStatus] = []
+    for source in sources:
+        assert source.connector is not None
+        job_id = build_job_id(source.connector)
+        if connector_should_auto_run(source.config_json or {}):
+            scheduler.resume_job(job_id)
+        else:
+            scheduler.pause_job(job_id)
+        last_run = await get_latest_run_by_source(session, source.id)
+        entries.append(build_source_status(source, last_run))
+    return SchedulerStatusResponse(sources=entries)
+
+
+@router.put("/scheduler/sources/{source}/enabled")
+async def update_source_enabled(
+    source: str, payload: ConnectorEnabledUpdateRequest, request: Request, session: SessionDep
+) -> SourceStatus:
+    try:
+        source_row = await set_source_enabled(session, source, payload.enabled)
+    except SchedulerLookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await session.commit()
+
+    scheduler = request.app.state.scheduler
+    job_id = build_job_id(source)
+    if connector_should_auto_run(source_row.config_json or {}):
         scheduler.resume_job(job_id)
     else:
         scheduler.pause_job(job_id)

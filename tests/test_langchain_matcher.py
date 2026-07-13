@@ -1,6 +1,6 @@
 import httpx
 import pytest
-from app.connectors.solid_jobs import map_solid_jobs_offer
+from app.connectors.solid_jobs import SolidJobsConnector
 from app.llm.matcher import (
     _DEAL_BREAKER_SCORE_CAP,
     _HARD_SKILL_MISS_CAP,
@@ -339,7 +339,7 @@ async def test_score_offer_with_langchain_handles_solid_jobs_offer_missing_optio
     None
 ):
     raw = {"title": "Backend Engineer", "company": "Acme"}
-    mapped_fields = map_solid_jobs_offer(1, raw)
+    mapped_fields = SolidJobsConnector(campaign="recruflow").map_offer(1, raw)
     offer = Offer(**mapped_fields)
 
     output = _MatcherOutput(**_STRONG_OUTPUT_KWARGS)

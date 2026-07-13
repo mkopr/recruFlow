@@ -2,11 +2,11 @@ from uuid import uuid4
 
 import pytest
 from app.config import get_settings
-from app.connectors import justjoinit, nofluffjobs, solid_jobs
 from app.db.models import Source
 from app.ingestion import registry
 from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
 from app.ingestion.registry import (
+    ConnectorSpec,
     SourceNotConfiguredError,
     UnknownConnectorError,
     dispatch_ingestion,
@@ -67,27 +67,15 @@ async def test_resolve_source_by_connector_unconfigured_raises_source_not_config
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_dispatch_ingestion_solid_jobs_passes_campaign_from_settings(
-    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    source = Source(name=f"solid-jobs-{uuid4()}", connector=SOLID_JOBS, config_json={})
-    db_session.add(source)
-    await db_session.flush()
+async def test_solid_jobs_registry_entry_uses_settings_campaign() -> None:
+    # SOLID.Jobs's campaign is now bound into the registered ConnectorSpec's dispatch (a bound
+    # SolidJobsConnector.run method) at CONNECTOR_REGISTRY construction time, not threaded
+    # through dispatch_ingestion per-call — so this test inspects the real, unmonkeypatched
+    # registry entry's bound instance instead of monkeypatching-and-capturing a kwarg.
+    dispatch = registry.CONNECTOR_REGISTRY[SOLID_JOBS].dispatch
+    connector_instance = dispatch.__self__  # type: ignore[attr-defined]
 
-    captured: dict[str, str] = {}
-
-    async def _fake_run_solid_jobs_ingestion(
-        session: AsyncSession, src: Source, *, campaign: str, force_refresh: bool = False
-    ) -> IngestionResult:
-        captured["campaign"] = campaign
-        return IngestionResult(ok=True, fetched=0, created=0)
-
-    monkeypatch.setattr(solid_jobs, "run_solid_jobs_ingestion", _fake_run_solid_jobs_ingestion)
-
-    result = await dispatch_ingestion(db_session, source)
-
-    assert captured["campaign"] == get_settings().solid_jobs_campaign
-    assert result == IngestionResult(ok=True, fetched=0, created=0)
+    assert connector_instance.campaign == get_settings().solid_jobs_campaign
 
 
 @pytest.mark.integration
@@ -101,13 +89,17 @@ async def test_dispatch_ingestion_threads_force_refresh_to_justjoinit(
 
     captured: dict[str, bool] = {}
 
-    async def _fake_run_justjoinit_ingestion(
-        session: AsyncSession, src: Source, *, force_refresh: bool = False
+    async def _fake_dispatch(
+        session: AsyncSession, source: Source, force_refresh: bool
     ) -> IngestionResult:
         captured["force_refresh"] = force_refresh
         return IngestionResult(ok=True, fetched=0, created=0)
 
-    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake_run_justjoinit_ingestion)
+    monkeypatch.setitem(
+        registry.CONNECTOR_REGISTRY,
+        JUSTJOINIT,
+        ConnectorSpec(name=JUSTJOINIT, label="JustJoin.it", dispatch=_fake_dispatch),
+    )
 
     result = await dispatch_ingestion(db_session, source, force_refresh=True)
 
@@ -126,13 +118,17 @@ async def test_dispatch_ingestion_threads_force_refresh_to_nofluffjobs(
 
     captured: dict[str, bool] = {}
 
-    async def _fake_run_nofluffjobs_ingestion(
-        session: AsyncSession, src: Source, *, force_refresh: bool = False
+    async def _fake_dispatch(
+        session: AsyncSession, source: Source, force_refresh: bool
     ) -> IngestionResult:
         captured["force_refresh"] = force_refresh
         return IngestionResult(ok=True, fetched=0, created=0)
 
-    monkeypatch.setattr(nofluffjobs, "run_nofluffjobs_ingestion", _fake_run_nofluffjobs_ingestion)
+    monkeypatch.setitem(
+        registry.CONNECTOR_REGISTRY,
+        NOFLUFFJOBS,
+        ConnectorSpec(name=NOFLUFFJOBS, label="NoFluffJobs", dispatch=_fake_dispatch),
+    )
 
     result = await dispatch_ingestion(db_session, source, force_refresh=True)
 

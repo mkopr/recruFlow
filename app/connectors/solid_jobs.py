@@ -1,36 +1,17 @@
 import logging
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.connectors.http import fetch_json
-from app.db.models import Source
+from app.connectors.base import JobBoardConnector
 from app.ingestion.normalize import (
     SOLID_JOBS,
-    extract_envelope_list,
     normalize_remote,
     normalize_salary,
     normalize_seniority,
 )
-from app.ingestion.runner import resolve_fetch_range, run_paginated_ingestion
-from app.ingestion.types import IngestionResult
 
 SOLID_JOBS_OFFERS_URL_TEMPLATE = "https://solid.jobs/public-api/offers/{division}"
 
 logger = logging.getLogger(__name__)
-
-
-def _fetch_solid_jobs_json(
-    url: str, *, params: dict[str, Any], timeout: float = 10.0
-) -> Any | None:
-    return fetch_json(
-        url,
-        source_name="SOLID.Jobs",
-        logger=logger,
-        params=params,
-        headers={"X-Api-Version": "1.0"},
-        timeout=timeout,
-    )
 
 
 def build_offer_url(config: dict[str, Any]) -> str:
@@ -67,87 +48,64 @@ def build_offer_params(
     return params
 
 
-def _extract_offers(payload: Any) -> list[dict[str, Any]] | None:
+class SolidJobsConnector(JobBoardConnector):
+    name = "SOLID.Jobs"
     # Confirmed live 2026-07-05 (see ADR 0012): the direct API wraps offers under "jobs",
     # the same envelope key sjctl's own "search" subcommand used -- not "results"/"data".
-    return extract_envelope_list(payload, "jobs")
+    envelope_key = "jobs"
 
+    def __init__(self, *, campaign: str) -> None:
+        self.campaign = campaign
 
-def map_solid_jobs_offer(source_id: int, raw: dict[str, Any]) -> dict[str, Any]:
-    raw_salary = raw.get("salary")
-    salary: dict[str, Any] = raw_salary if isinstance(raw_salary, dict) else {}
+    def default_url(self) -> str:
+        return build_offer_url({})
 
-    raw_locations = raw.get("locations")
-    location = (
-        ", ".join(str(loc) for loc in raw_locations)
-        if isinstance(raw_locations, list) and raw_locations
-        else None
-    )
+    def build_url(self, config: dict[str, Any]) -> str:
+        return build_offer_url(config)
 
-    salary_min, salary_max, salary_currency = normalize_salary(
-        SOLID_JOBS, salary.get("from"), salary.get("to"), salary.get("currency")
-    )
+    def build_headers(self, config: dict[str, Any]) -> dict[str, str]:
+        return {"X-Api-Version": "1.0"}
 
-    return {
-        "source_id": source_id,
-        "external_id": raw.get("jobOfferKey"),
-        "canonical_url": raw.get("url"),
-        "title": raw.get("title") or "",
-        "company": raw.get("company") or "",
-        "location": location,
-        "remote": normalize_remote(SOLID_JOBS, raw.get("isRemote", False)),
-        "seniority": normalize_seniority(SOLID_JOBS, raw.get("experienceLevel")),
-        "salary_min": salary_min,
-        "salary_max": salary_max,
-        "salary_currency": salary_currency,
-        "contract_type": salary.get("employmentType"),
-        "posted_at": raw.get("validFrom"),
-        "description": raw.get("description"),
-    }
-
-
-async def run_solid_jobs_ingestion(
-    session: AsyncSession, source: Source, *, campaign: str, force_refresh: bool = False
-) -> IngestionResult:
-    config = source.config_json or {}
-    url = build_offer_url(config)
-    page_size = int(config.get("page_size", 100))
-    max_pages = int(config.get("max_pages", 100))
-    already_seen_stop_threshold = int(config.get("already_seen_stop_threshold", 20))
-    since, until = resolve_fetch_range(config.get("fetch_range"))
-
-    def fetch_page(
-        page_index: int, page_size: int
-    ) -> tuple[list[dict[str, Any]], int | None] | None:
-        params = build_offer_params(
-            config, campaign=campaign, page_index=page_index, page_size=page_size
+    def build_params(
+        self, config: dict[str, Any], *, cursor: Any, page_size: int
+    ) -> dict[str, Any]:
+        return build_offer_params(
+            config, campaign=self.campaign, page_index=cursor, page_size=page_size
         )
-        payload = _fetch_solid_jobs_json(url, params=params)
-        if payload is None:
-            return None
 
-        offers = _extract_offers(payload)
-        if offers is None:
-            logger.error(
-                "SOLID.Jobs returned unexpected JSON shape: url=%r page_index=%d", url, page_index
-            )
-            return None
+    def next_cursor(
+        self, payload: Any, offers: list[dict[str, Any]], *, cursor: Any, page_size: int
+    ) -> Any | None:
+        return cursor + 1 if len(offers) >= page_size else None
 
-        next_cursor = page_index + 1 if len(offers) >= page_size else None
-        return offers, next_cursor
+    def map_offer(self, source_id: int, raw: dict[str, Any]) -> dict[str, Any]:
+        raw_salary = raw.get("salary")
+        salary: dict[str, Any] = raw_salary if isinstance(raw_salary, dict) else {}
 
-    return await run_paginated_ingestion(
-        session,
-        source.id,
-        source_name="SOLID.Jobs",
-        fetch_page=fetch_page,
-        map_offer=map_solid_jobs_offer,
-        initial_cursor=0,
-        page_size=page_size,
-        max_pages=max_pages,
-        already_seen_stop_threshold=already_seen_stop_threshold,
-        force_refresh=force_refresh,
-        logger=logger,
-        since=since,
-        until=until,
-    )
+        raw_locations = raw.get("locations")
+        location = (
+            ", ".join(str(loc) for loc in raw_locations)
+            if isinstance(raw_locations, list) and raw_locations
+            else None
+        )
+
+        salary_min, salary_max, salary_currency = normalize_salary(
+            SOLID_JOBS, salary.get("from"), salary.get("to"), salary.get("currency")
+        )
+
+        return {
+            "source_id": source_id,
+            "external_id": raw.get("jobOfferKey"),
+            "canonical_url": raw.get("url"),
+            "title": raw.get("title") or "",
+            "company": raw.get("company") or "",
+            "location": location,
+            "remote": normalize_remote(SOLID_JOBS, raw.get("isRemote", False)),
+            "seniority": normalize_seniority(SOLID_JOBS, raw.get("experienceLevel")),
+            "salary_min": salary_min,
+            "salary_max": salary_max,
+            "salary_currency": salary_currency,
+            "contract_type": salary.get("employmentType"),
+            "posted_at": raw.get("validFrom"),
+            "description": raw.get("description"),
+        }

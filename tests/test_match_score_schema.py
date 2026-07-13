@@ -18,19 +18,6 @@ def test_match_score_accepts_valid_payload_with_langchain_engine() -> None:
     assert score.model_dump()["engine"] == "langchain"
 
 
-def test_match_score_accepts_valid_payload_with_sjctl_engine() -> None:
-    score = MatchScore(
-        offer_id=1,
-        profile_id=1,
-        engine="sjctl",
-        score_percent=75,
-        dimensions={"skill_match": 0.8},
-        rationale="Good skill overlap",
-    )
-
-    assert score.model_dump()["engine"] == "sjctl"
-
-
 def test_match_score_rejects_invalid_engine() -> None:
     with pytest.raises(ValidationError):
         MatchScore(

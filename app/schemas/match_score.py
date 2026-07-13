@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-MatchEngine = Literal["langchain", "sjctl"]
+MatchEngine = Literal["langchain"]
 
 
 class MatchScore(BaseModel):

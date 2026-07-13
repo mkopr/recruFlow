@@ -3,9 +3,9 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from app.connectors.justjoinit import run_justjoinit_ingestion
-from app.connectors.nofluffjobs import run_nofluffjobs_ingestion
-from app.connectors.solid_jobs import run_solid_jobs_ingestion
+from app.connectors.justjoinit import JustJoinItConnector
+from app.connectors.nofluffjobs import NoFluffJobsConnector
+from app.connectors.solid_jobs import SolidJobsConnector
 from app.db.models import Offer as OfferModel
 from app.db.models import Source
 from sqlalchemy import select
@@ -118,7 +118,7 @@ async def test_all_three_connectors_run_end_to_end_and_persist_valid_offers(
         "get",
         lambda *a, **kw: _FakeResponse(json_data=_solid_jobs_payload([_solid_jobs_raw()])),
     )
-    solid_result = await run_solid_jobs_ingestion(db_session, solid_source, campaign="recruflow")
+    solid_result = await SolidJobsConnector(campaign="recruflow").run(db_session, solid_source)
     await db_session.commit()
 
     monkeypatch.setattr(
@@ -126,7 +126,7 @@ async def test_all_three_connectors_run_end_to_end_and_persist_valid_offers(
         "get",
         lambda *a, **kw: _FakeResponse(json_data=_justjoinit_payload([_justjoinit_raw()])),
     )
-    justjoinit_result = await run_justjoinit_ingestion(db_session, justjoinit_source)
+    justjoinit_result = await JustJoinItConnector().run(db_session, justjoinit_source)
     await db_session.commit()
 
     monkeypatch.setattr(
@@ -134,7 +134,7 @@ async def test_all_three_connectors_run_end_to_end_and_persist_valid_offers(
         "get",
         lambda *a, **kw: _FakeResponse(json_data=_nofluffjobs_payload([_nofluffjobs_raw()])),
     )
-    nofluffjobs_result = await run_nofluffjobs_ingestion(db_session, nofluffjobs_source)
+    nofluffjobs_result = await NoFluffJobsConnector().run(db_session, nofluffjobs_source)
     await db_session.commit()
 
     assert solid_result.ok is True
@@ -160,7 +160,7 @@ async def test_salary_normalised_to_pln_monthly_across_all_sources(
         "get",
         lambda *a, **kw: _FakeResponse(json_data=_solid_jobs_payload([_solid_jobs_raw()])),
     )
-    await run_solid_jobs_ingestion(db_session, solid_source, campaign="recruflow")
+    await SolidJobsConnector(campaign="recruflow").run(db_session, solid_source)
     await db_session.commit()
 
     monkeypatch.setattr(
@@ -168,7 +168,7 @@ async def test_salary_normalised_to_pln_monthly_across_all_sources(
         "get",
         lambda *a, **kw: _FakeResponse(json_data=_justjoinit_payload([_justjoinit_raw()])),
     )
-    await run_justjoinit_ingestion(db_session, justjoinit_source)
+    await JustJoinItConnector().run(db_session, justjoinit_source)
     await db_session.commit()
 
     monkeypatch.setattr(
@@ -176,7 +176,7 @@ async def test_salary_normalised_to_pln_monthly_across_all_sources(
         "get",
         lambda *a, **kw: _FakeResponse(json_data=_nofluffjobs_payload([_nofluffjobs_raw()])),
     )
-    await run_nofluffjobs_ingestion(db_session, nofluffjobs_source)
+    await NoFluffJobsConnector().run(db_session, nofluffjobs_source)
     await db_session.commit()
 
     solid_rows = await _rows_for_source(db_session, solid_source.id)
@@ -204,7 +204,7 @@ async def test_remote_flag_canonical_across_all_sources(
             json_data=_solid_jobs_payload([_solid_jobs_raw(isRemote=True)])
         ),
     )
-    await run_solid_jobs_ingestion(db_session, solid_source, campaign="recruflow")
+    await SolidJobsConnector(campaign="recruflow").run(db_session, solid_source)
     await db_session.commit()
 
     monkeypatch.setattr(
@@ -214,7 +214,7 @@ async def test_remote_flag_canonical_across_all_sources(
             json_data=_justjoinit_payload([_justjoinit_raw(workplaceType="remote")])
         ),
     )
-    await run_justjoinit_ingestion(db_session, justjoinit_source)
+    await JustJoinItConnector().run(db_session, justjoinit_source)
     await db_session.commit()
 
     monkeypatch.setattr(
@@ -226,7 +226,7 @@ async def test_remote_flag_canonical_across_all_sources(
             )
         ),
     )
-    await run_nofluffjobs_ingestion(db_session, nofluffjobs_source)
+    await NoFluffJobsConnector().run(db_session, nofluffjobs_source)
     await db_session.commit()
 
     assert (await _rows_for_source(db_session, solid_source.id))[0].remote is True
@@ -244,7 +244,7 @@ async def test_remote_flag_canonical_across_all_sources(
             json_data=_solid_jobs_payload([_solid_jobs_raw(isRemote=False)])
         ),
     )
-    await run_solid_jobs_ingestion(db_session, solid_source2, campaign="recruflow")
+    await SolidJobsConnector(campaign="recruflow").run(db_session, solid_source2)
     await db_session.commit()
 
     monkeypatch.setattr(
@@ -254,7 +254,7 @@ async def test_remote_flag_canonical_across_all_sources(
             json_data=_justjoinit_payload([_justjoinit_raw(workplaceType="office")])
         ),
     )
-    await run_justjoinit_ingestion(db_session, justjoinit_source2)
+    await JustJoinItConnector().run(db_session, justjoinit_source2)
     await db_session.commit()
 
     monkeypatch.setattr(
@@ -270,7 +270,7 @@ async def test_remote_flag_canonical_across_all_sources(
             )
         ),
     )
-    await run_nofluffjobs_ingestion(db_session, nofluffjobs_source2)
+    await NoFluffJobsConnector().run(db_session, nofluffjobs_source2)
     await db_session.commit()
 
     assert (await _rows_for_source(db_session, solid_source2.id))[0].remote is False
@@ -294,7 +294,7 @@ async def test_seniority_canonical_across_all_sources(
             json_data=_solid_jobs_payload([_solid_jobs_raw(experienceLevel="Senior")])
         ),
     )
-    await run_solid_jobs_ingestion(db_session, solid_source, campaign="recruflow")
+    await SolidJobsConnector(campaign="recruflow").run(db_session, solid_source)
     await db_session.commit()
 
     monkeypatch.setattr(
@@ -304,7 +304,7 @@ async def test_seniority_canonical_across_all_sources(
             json_data=_justjoinit_payload([_justjoinit_raw(experienceLevel="senior")])
         ),
     )
-    await run_justjoinit_ingestion(db_session, justjoinit_source)
+    await JustJoinItConnector().run(db_session, justjoinit_source)
     await db_session.commit()
 
     monkeypatch.setattr(
@@ -314,7 +314,7 @@ async def test_seniority_canonical_across_all_sources(
             json_data=_nofluffjobs_payload([_nofluffjobs_raw(seniority=["Senior"])])
         ),
     )
-    await run_nofluffjobs_ingestion(db_session, nofluffjobs_source)
+    await NoFluffJobsConnector().run(db_session, nofluffjobs_source)
     await db_session.commit()
 
     assert (await _rows_for_source(db_session, solid_source.id))[0].seniority == "senior"
@@ -349,7 +349,7 @@ async def test_cross_posted_offer_is_stored_as_separate_rows_per_source(
             )
         ),
     )
-    await run_justjoinit_ingestion(db_session, justjoinit_source)
+    await JustJoinItConnector().run(db_session, justjoinit_source)
     await db_session.commit()
 
     monkeypatch.setattr(
@@ -367,7 +367,7 @@ async def test_cross_posted_offer_is_stored_as_separate_rows_per_source(
             )
         ),
     )
-    await run_nofluffjobs_ingestion(db_session, nofluffjobs_source)
+    await NoFluffJobsConnector().run(db_session, nofluffjobs_source)
     await db_session.commit()
 
     justjoinit_rows = await _rows_for_source(db_session, justjoinit_source.id)
@@ -399,7 +399,7 @@ async def test_missing_optional_field_stored_as_null_not_placeholder(
         httpx, "get", lambda *a, **kw: _FakeResponse(json_data=_justjoinit_payload([raw]))
     )
 
-    await run_justjoinit_ingestion(db_session, justjoinit_source)
+    await JustJoinItConnector().run(db_session, justjoinit_source)
     await db_session.commit()
 
     rows = await _rows_for_source(db_session, justjoinit_source.id)

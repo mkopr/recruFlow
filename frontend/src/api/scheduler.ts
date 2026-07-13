@@ -96,3 +96,28 @@ export async function updateAllSourceAutoFetch(enabled: boolean): Promise<Source
 
   return data.sources;
 }
+
+export async function updateSourceEnabled(source: string, enabled: boolean): Promise<SourceStatus> {
+  const { data, error } = await apiClient.PUT('/scheduler/sources/{source}/enabled', {
+    params: { path: { source } },
+    body: { enabled },
+  });
+
+  if (error) {
+    throw new Error('failed to update connector enabled state');
+  }
+
+  return data;
+}
+
+export async function updateAllSourceEnabled(enabled: boolean): Promise<SourceStatus[]> {
+  const { data, error } = await apiClient.PUT('/scheduler/sources/enabled', {
+    body: { enabled },
+  });
+
+  if (error) {
+    throw new Error('failed to update connector enabled state');
+  }
+
+  return data.sources;
+}

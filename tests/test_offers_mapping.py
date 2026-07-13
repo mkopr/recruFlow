@@ -162,7 +162,7 @@ def test_match_score_response_maps_all_fields() -> None:
         id=1,
         offer_id=2,
         profile_id=3,
-        engine="sjctl",
+        engine="langchain",
         score_percent=62,
         dimensions={"salary_fit": 0.6},
         rationale="text",
@@ -174,7 +174,7 @@ def test_match_score_response_maps_all_fields() -> None:
     assert result.id == 1
     assert result.offer_id == 2
     assert result.profile_id == 3
-    assert result.engine == "sjctl"
+    assert result.engine == "langchain"
     assert result.score_percent == 62
     assert result.dimensions == {"salary_fit": 0.6}
     assert result.rationale == "text"

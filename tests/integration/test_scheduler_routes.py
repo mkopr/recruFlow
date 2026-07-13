@@ -5,11 +5,11 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from app.connectors import justjoinit, nofluffjobs, solid_jobs
 from app.db.models import Source
 from app.db.session import get_engine, get_sessionmaker
 from app.ingestion import registry
 from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
+from app.ingestion.registry import ConnectorSpec
 from app.ingestion.types import IngestionResult as JustJoinItIngestionResult
 from app.ingestion.types import IngestionResult as NoFluffJobsIngestionResult
 from app.ingestion.types import IngestionResult as SolidJobsIngestionResult
@@ -21,17 +21,23 @@ def _enable_logger() -> None:
     logging.getLogger("app.scheduler.service").disabled = False
 
 
+def _fake_spec(connector: str, dispatch: registry.Connector) -> ConnectorSpec:
+    return ConnectorSpec(
+        name=connector, label=registry.CONNECTOR_REGISTRY[connector].label, dispatch=dispatch
+    )
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_run_source_now_returns_200_and_updates_status(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def _fake(
-        session: AsyncSession, source: Source, *, force_refresh: bool = False
+        session: AsyncSession, source: Source, force_refresh: bool
     ) -> JustJoinItIngestionResult:
         return JustJoinItIngestionResult(ok=True, fetched=2, created=1)
 
-    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, JUSTJOINIT, _fake_spec(JUSTJOINIT, _fake))
 
     response = await scheduled_client.post("/scheduler/run/justjoinit")
     assert response.status_code == 200
@@ -144,11 +150,11 @@ async def test_run_source_now_zero_result_flags_warning_in_status(
     _enable_logger()
 
     async def _fake(
-        session: AsyncSession, source: Source, *, force_refresh: bool = False
+        session: AsyncSession, source: Source, force_refresh: bool
     ) -> NoFluffJobsIngestionResult:
         return NoFluffJobsIngestionResult(ok=True, fetched=0, created=0)
 
-    monkeypatch.setattr(nofluffjobs, "run_nofluffjobs_ingestion", _fake)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, NOFLUFFJOBS, _fake_spec(NOFLUFFJOBS, _fake))
 
     with caplog.at_level(logging.WARNING, logger="app.scheduler.service"):
         response = await scheduled_client.post("/scheduler/run/nofluffjobs")
@@ -172,11 +178,11 @@ async def test_run_source_now_connector_exception_records_error_status_not_stuck
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def _raise(
-        session: AsyncSession, source: Source, **kwargs: object
+        session: AsyncSession, source: Source, force_refresh: bool
     ) -> SolidJobsIngestionResult:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(solid_jobs, "run_solid_jobs_ingestion", _raise)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, SOLID_JOBS, _fake_spec(SOLID_JOBS, _raise))
 
     response = await scheduled_client.post("/scheduler/run/solid_jobs")
 
@@ -196,12 +202,12 @@ async def test_health_endpoint_responds_during_scheduler_run(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def _slow(
-        session: AsyncSession, source: Source, *, force_refresh: bool = False
+        session: AsyncSession, source: Source, force_refresh: bool
     ) -> JustJoinItIngestionResult:
         await asyncio.sleep(1.5)
         return JustJoinItIngestionResult(ok=True, fetched=1, created=1)
 
-    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _slow)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, JUSTJOINIT, _fake_spec(JUSTJOINIT, _slow))
 
     run_task = asyncio.create_task(scheduled_client.post("/scheduler/run/justjoinit"))
     await asyncio.sleep(0.2)

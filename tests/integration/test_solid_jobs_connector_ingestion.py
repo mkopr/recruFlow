@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from app.connectors.solid_jobs import run_solid_jobs_ingestion
+from app.connectors.solid_jobs import SolidJobsConnector
 from app.db.models import Offer as OfferModel
 from app.db.models import Source
 from app.ingestion.types import IngestionResult
@@ -83,7 +83,7 @@ async def test_run_solid_jobs_ingestion_persists_and_maps_offers(
         httpx, "get", lambda *a, **kw: _FakeResponse(json_data=_page_payload([offer]))
     )
 
-    result = await run_solid_jobs_ingestion(db_session, source, campaign="recruflow")
+    result = await SolidJobsConnector(campaign="recruflow").run(db_session, source)
     await db_session.commit()
 
     assert result.ok is True
@@ -107,7 +107,7 @@ async def test_run_solid_jobs_ingestion_handles_zero_offers(
     source = await _create_source(db_session)
     monkeypatch.setattr(httpx, "get", lambda *a, **kw: _FakeResponse(json_data=_page_payload([])))
 
-    result = await run_solid_jobs_ingestion(db_session, source, campaign="recruflow")
+    result = await SolidJobsConnector(campaign="recruflow").run(db_session, source)
     await db_session.commit()
 
     assert result == IngestionResult(ok=True, fetched=0, created=0)
@@ -125,7 +125,7 @@ async def test_run_solid_jobs_ingestion_returns_not_ok_on_transport_failure(
 
     monkeypatch.setattr(httpx, "get", _raise)
 
-    result = await run_solid_jobs_ingestion(db_session, source, campaign="recruflow")
+    result = await SolidJobsConnector(campaign="recruflow").run(db_session, source)
     await db_session.commit()
 
     assert result == IngestionResult(
@@ -149,7 +149,7 @@ async def test_run_solid_jobs_ingestion_returns_not_ok_on_unexpected_shape(
         httpx, "get", lambda *a, **kw: _FakeResponse(json_data={"unexpected": "shape"})
     )
 
-    result = await run_solid_jobs_ingestion(db_session, source, campaign="recruflow")
+    result = await SolidJobsConnector(campaign="recruflow").run(db_session, source)
     await db_session.commit()
 
     assert result.ok is False
@@ -175,7 +175,7 @@ async def test_run_solid_jobs_ingestion_skips_invalid_offer_without_crashing(
         lambda *a, **kw: _FakeResponse(json_data=_page_payload([valid_offer, invalid_offer])),
     )
 
-    result = await run_solid_jobs_ingestion(db_session, source, campaign="recruflow")
+    result = await SolidJobsConnector(campaign="recruflow").run(db_session, source)
     await db_session.commit()
 
     assert result.ok is True
@@ -200,9 +200,9 @@ async def test_run_solid_jobs_ingestion_dedups_on_reingest(
         httpx, "get", lambda *a, **kw: _FakeResponse(json_data=_page_payload([offer]))
     )
 
-    first = await run_solid_jobs_ingestion(db_session, source, campaign="recruflow")
+    first = await SolidJobsConnector(campaign="recruflow").run(db_session, source)
     await db_session.commit()
-    second = await run_solid_jobs_ingestion(db_session, source, campaign="recruflow")
+    second = await SolidJobsConnector(campaign="recruflow").run(db_session, source)
     await db_session.commit()
 
     assert first.created == 1
@@ -232,7 +232,7 @@ async def test_run_solid_jobs_ingestion_sets_campaign_query_param_on_every_page_
 
     monkeypatch.setattr(httpx, "get", _fake_get)
 
-    await run_solid_jobs_ingestion(db_session, source, campaign="recruflow")
+    await SolidJobsConnector(campaign="recruflow").run(db_session, source)
     await db_session.commit()
 
     assert len(captured) >= 1
@@ -264,7 +264,7 @@ async def test_run_solid_jobs_ingestion_applies_division_cities_salary_experienc
 
     monkeypatch.setattr(httpx, "get", _fake_get)
 
-    await run_solid_jobs_ingestion(db_session, source, campaign="recruflow")
+    await SolidJobsConnector(campaign="recruflow").run(db_session, source)
     await db_session.commit()
 
     assert captured["url"] == "https://solid.jobs/public-api/offers/IT"
@@ -291,7 +291,7 @@ async def test_run_solid_jobs_ingestion_stops_pagination_after_consecutive_alrea
         "get",
         lambda *a, **kw: _FakeResponse(json_data=_page_payload(already_seen_offers, page_size=2)),
     )
-    await run_solid_jobs_ingestion(db_session, source, campaign="recruflow")
+    await SolidJobsConnector(campaign="recruflow").run(db_session, source)
     await db_session.commit()
 
     new_offers = [_raw_offer(), _raw_offer()]
@@ -308,7 +308,7 @@ async def test_run_solid_jobs_ingestion_stops_pagination_after_consecutive_alrea
 
     monkeypatch.setattr(httpx, "get", _fake_get)
 
-    result = await run_solid_jobs_ingestion(db_session, source, campaign="recruflow")
+    result = await SolidJobsConnector(campaign="recruflow").run(db_session, source)
     await db_session.commit()
 
     assert calls == [0, 1]
@@ -332,7 +332,7 @@ async def test_run_solid_jobs_ingestion_force_refresh_bypasses_early_stop(
         "get",
         lambda *a, **kw: _FakeResponse(json_data=_page_payload(already_seen_offers, page_size=2)),
     )
-    await run_solid_jobs_ingestion(db_session, source, campaign="recruflow")
+    await SolidJobsConnector(campaign="recruflow").run(db_session, source)
     await db_session.commit()
 
     new_offer = _raw_offer()
@@ -349,8 +349,8 @@ async def test_run_solid_jobs_ingestion_force_refresh_bypasses_early_stop(
 
     monkeypatch.setattr(httpx, "get", _fake_get)
 
-    result = await run_solid_jobs_ingestion(
-        db_session, source, campaign="recruflow", force_refresh=True
+    result = await SolidJobsConnector(campaign="recruflow").run(
+        db_session, source, force_refresh=True
     )
     await db_session.commit()
 
@@ -377,7 +377,7 @@ async def test_run_solid_jobs_ingestion_respects_max_pages_ceiling(
 
     monkeypatch.setattr(httpx, "get", _fake_get)
 
-    result = await run_solid_jobs_ingestion(db_session, source, campaign="recruflow")
+    result = await SolidJobsConnector(campaign="recruflow").run(db_session, source)
     await db_session.commit()
 
     assert calls == [0, 1, 2]
@@ -415,7 +415,7 @@ async def test_run_solid_jobs_ingestion_range_mode_skips_offers_outside_since_un
         lambda *a, **kw: _FakeResponse(json_data=_page_payload([in_range, out_of_range])),
     )
 
-    result = await run_solid_jobs_ingestion(db_session, source, campaign="recruflow")
+    result = await SolidJobsConnector(campaign="recruflow").run(db_session, source)
     await db_session.commit()
 
     assert result.fetched == 2
@@ -441,7 +441,7 @@ async def test_run_solid_jobs_ingestion_all_mode_bypasses_date_filtering(
         httpx, "get", lambda *a, **kw: _FakeResponse(json_data=_page_payload([offer_a, offer_b]))
     )
 
-    result = await run_solid_jobs_ingestion(db_session, source, campaign="recruflow")
+    result = await SolidJobsConnector(campaign="recruflow").run(db_session, source)
     await db_session.commit()
 
     assert result.fetched == 2
@@ -486,7 +486,7 @@ async def test_run_solid_jobs_ingestion_range_filter_does_not_trip_already_seen_
 
     monkeypatch.setattr(httpx, "get", _fake_get)
 
-    result = await run_solid_jobs_ingestion(db_session, source, campaign="recruflow")
+    result = await SolidJobsConnector(campaign="recruflow").run(db_session, source)
     await db_session.commit()
 
     assert calls == [0, 1]

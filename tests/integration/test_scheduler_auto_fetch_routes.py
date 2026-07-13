@@ -1,11 +1,18 @@
 import httpx
 import pytest
-from app.connectors import justjoinit
 from app.db.models import Source
+from app.ingestion import registry
 from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
+from app.ingestion.registry import ConnectorSpec
 from app.ingestion.types import IngestionResult
 from app.scheduler.lifecycle import build_job_id
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+def _fake_spec(connector: str, dispatch: registry.Connector) -> ConnectorSpec:
+    return ConnectorSpec(
+        name=connector, label=registry.CONNECTOR_REGISTRY[connector].label, dispatch=dispatch
+    )
 
 
 @pytest.mark.integration
@@ -24,6 +31,10 @@ async def test_put_auto_fetch_disables_pauses_live_job_without_restart(
     job = app.state.scheduler.get_job(build_job_id(JUSTJOINIT))
     assert job is not None
     assert job.next_run_time is None
+
+    # This suite runs against the persistent db_test instance (not rolled back between
+    # tests/files) -- restore the flag so later tests/files don't inherit a paused job.
+    await scheduled_client.put("/scheduler/sources/justjoinit/auto-fetch", json={"enabled": True})
 
 
 @pytest.mark.integration
@@ -94,12 +105,10 @@ async def test_disabled_source_manual_trigger_still_succeeds(
     # fire). Sleeping past a real interval to prove "no automatic run occurs" would be slow and
     # non-deterministic, so that pause assertion is the equivalent verification for this test:
     # here we only need to show the *manual* path is unaffected.
-    async def _fake(
-        session: AsyncSession, source: Source, *, force_refresh: bool = False
-    ) -> IngestionResult:
+    async def _fake(session: AsyncSession, source: Source, force_refresh: bool) -> IngestionResult:
         return IngestionResult(ok=True, fetched=1, created=1)
 
-    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, JUSTJOINIT, _fake_spec(JUSTJOINIT, _fake))
 
     disable_response = await scheduled_client.put(
         "/scheduler/sources/justjoinit/auto-fetch", json={"enabled": False}
@@ -111,3 +120,5 @@ async def test_disabled_source_manual_trigger_still_succeeds(
     body = run_response.json()
     assert body["status"] == "ok"
     assert body["trigger_type"] == "manual"
+
+    await scheduled_client.put("/scheduler/sources/justjoinit/auto-fetch", json={"enabled": True})

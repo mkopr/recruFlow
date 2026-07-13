@@ -15,7 +15,7 @@ from app.db.models import Offer as OfferModel
 from app.db.models import Profile as ProfileModel
 from app.db.models import ScoringFailure
 from app.dlq.service import record_failure
-from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
+from app.ingestion.registry import CONNECTOR_REGISTRY
 from app.schemas.match_score import MatchScore
 from app.schemas.offer import Offer
 from app.schemas.profile import Profile
@@ -31,7 +31,7 @@ DIMENSION_WEIGHTS: dict[str, float] = {
     "red_flags": 0.05,
 }
 
-LANGCHAIN_SOURCES = frozenset({SOLID_JOBS, JUSTJOINIT, NOFLUFFJOBS})
+LANGCHAIN_SOURCES = frozenset(CONNECTOR_REGISTRY.keys())
 
 _DEAL_BREAKER_SCORE_CAP: int = 40
 

@@ -2,11 +2,11 @@ import logging
 
 import httpx
 import pytest
-from app.connectors import nofluffjobs
 from app.db.models import IngestionFailure, Source
 from app.db.session import get_engine, get_sessionmaker
+from app.ingestion import registry
 from app.ingestion.normalize import NOFLUFFJOBS
-from app.ingestion.registry import resolve_source_by_connector
+from app.ingestion.registry import ConnectorSpec, resolve_source_by_connector
 from app.ingestion.types import IngestionResult as NoFluffJobsIngestionResult
 from app.scheduler.service import ensure_sources_exist, run_source
 from sqlalchemy import select
@@ -15,6 +15,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 def _enable_logger() -> None:
     logging.getLogger("app.scheduler.service").disabled = False
+
+
+def _fake_spec(connector: str, dispatch: registry.Connector) -> ConnectorSpec:
+    return ConnectorSpec(
+        name=connector, label=registry.CONNECTOR_REGISTRY[connector].label, dispatch=dispatch
+    )
 
 
 @pytest.mark.integration
@@ -30,11 +36,11 @@ async def test_scheduled_run_with_zero_offers_logs_warning_and_flags_status(
     await db_session.commit()
 
     async def _fake(
-        session: AsyncSession, source: Source, *, force_refresh: bool = False
+        session: AsyncSession, source: Source, force_refresh: bool
     ) -> NoFluffJobsIngestionResult:
         return NoFluffJobsIngestionResult(ok=True, fetched=0, created=0)
 
-    monkeypatch.setattr(nofluffjobs, "run_nofluffjobs_ingestion", _fake)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, NOFLUFFJOBS, _fake_spec(NOFLUFFJOBS, _fake))
 
     with caplog.at_level(logging.WARNING, logger="app.scheduler.service"):
         record = await run_source(NOFLUFFJOBS, trigger_type="automatic")
@@ -62,11 +68,11 @@ async def test_scheduled_run_first_page_failure_records_ingestion_failure(
     await db_session.commit()
 
     async def _fake(
-        session: AsyncSession, source: Source, *, force_refresh: bool = False
+        session: AsyncSession, source: Source, force_refresh: bool
     ) -> NoFluffJobsIngestionResult:
         return NoFluffJobsIngestionResult(ok=False, fetched=0, created=0, error_message="boom")
 
-    monkeypatch.setattr(nofluffjobs, "run_nofluffjobs_ingestion", _fake)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, NOFLUFFJOBS, _fake_spec(NOFLUFFJOBS, _fake))
 
     record = await run_source(NOFLUFFJOBS, trigger_type="automatic")
 

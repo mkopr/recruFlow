@@ -10,12 +10,14 @@ import httpx
 import pytest
 import pytest_asyncio
 from app.api.routes import scoring as scoring_routes
-from app.connectors import justjoinit
 from app.db.models import IngestionFailure, ScoringFailure, Source
 from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
 from app.db.models import Profile as ProfileModel
 from app.db.session import get_sessionmaker
+from app.ingestion import registry
+from app.ingestion.normalize import JUSTJOINIT
+from app.ingestion.registry import ConnectorSpec
 from app.ingestion.types import IngestionResult
 from app.llm.matcher import _MatcherOutput
 from app.scoring import batch
@@ -69,6 +71,12 @@ def _isolate_langchain_sources(monkeypatch: pytest.MonkeyPatch, *connectors: str
     # module at call time rather than holding its own copy, so patching it here suffices.
     fake = frozenset(connectors)
     monkeypatch.setattr("app.llm.matcher.LANGCHAIN_SOURCES", fake)
+
+
+def _fake_spec(connector: str, dispatch: registry.Connector) -> ConnectorSpec:
+    return ConnectorSpec(
+        name=connector, label=registry.CONNECTOR_REGISTRY[connector].label, dispatch=dispatch
+    )
 
 
 async def _delete_sources_and_dependents(session: AsyncSession, source_ids: list[int]) -> None:
@@ -462,12 +470,10 @@ async def test_post_scheduler_run_does_not_trigger_batch_scoring_on_success(
     # BUG29: ingestion used to unconditionally trigger a scoring run of its own, racing the
     # dedicated `scoring:backlog` job (BUG24) and producing duplicate MatchScore rows for the
     # same offer/profile pair. The backlog job now owns draining unscored offers exclusively.
-    async def _fake(
-        session: AsyncSession, source: object, *, force_refresh: bool = False
-    ) -> IngestionResult:
+    async def _fake(session: AsyncSession, source: Source, force_refresh: bool) -> IngestionResult:
         return IngestionResult(ok=True, fetched=1, created=1)
 
-    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, JUSTJOINIT, _fake_spec(JUSTJOINIT, _fake))
 
     calls: list[None] = []
 
@@ -488,10 +494,10 @@ async def test_post_scheduler_run_does_not_trigger_batch_scoring_on_success(
 async def test_post_scheduler_run_does_not_trigger_batch_scoring_when_connector_errors(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def _raise(session: AsyncSession, source: object, **kwargs: object) -> IngestionResult:
+    async def _raise(session: AsyncSession, source: Source, force_refresh: bool) -> IngestionResult:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _raise)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, JUSTJOINIT, _fake_spec(JUSTJOINIT, _raise))
 
     calls: list[None] = []
 

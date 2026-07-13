@@ -2,29 +2,57 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from app.connectors import nofluffjobs
-from app.connectors.nofluffjobs import _extract_offer_list, map_nofluffjobs_offer
+from app.connectors.nofluffjobs import NoFluffJobsConnector
 from app.ingestion.normalize import NOFLUFFJOBS
 
 
-def test_extract_offer_list_delegates_to_shared_envelope_extractor_with_postings_key(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_default_url_is_the_nofluffjobs_offers_endpoint() -> None:
+    connector = NoFluffJobsConnector()
+
+    assert connector.build_url({}) == "https://nofluffjobs.com/api/joboffers/main"
+
+
+def test_build_url_honors_endpoint_url_override_from_config() -> None:
+    connector = NoFluffJobsConnector()
+
+    assert connector.build_url({"endpoint_url": "https://example.test/offers"}) == (
+        "https://example.test/offers"
+    )
+
+
+def test_build_params_always_requests_pln_monthly_salary() -> None:
+    connector = NoFluffJobsConnector()
+
+    assert connector.build_params({}, cursor=0, page_size=50) == {
+        "pageSize": 50,
+        "salaryCurrency": "PLN",
+        "salaryPeriod": "month",
+    }
+
+
+def test_next_cursor_always_none_single_page_feed() -> None:
+    connector = NoFluffJobsConnector()
+
+    assert connector.next_cursor({}, [{"title": "a"}], cursor=0, page_size=100) is None
+
+
+def test_nofluffjobs_runner_kwargs_always_hardcodes_max_pages_and_threshold() -> None:
+    connector = NoFluffJobsConnector()
+
+    assert connector.runner_kwargs({"max_pages": 99, "already_seen_stop_threshold": 99}) == {
+        "max_pages": 1,
+        "already_seen_stop_threshold": 1,
+    }
+
+
+def test_extract_offers_uses_postings_envelope_key_with_no_bare_list() -> None:
     # shared envelope-shape behaviour (dict-with-key, None, wrong type, non-dict items)
     # is covered once in tests/test_ingestion_normalize.py
-    calls: dict[str, Any] = {}
+    connector = NoFluffJobsConnector()
 
-    def _fake_extract_envelope_list(payload: Any, key: str, **kwargs: Any) -> Any:
-        calls["args"] = (payload, key, kwargs)
-        return [{"title": "a"}]
-
-    monkeypatch.setattr(nofluffjobs, "extract_envelope_list", _fake_extract_envelope_list)
-
-    result = _extract_offer_list({"postings": [{"title": "a"}]})
-
-    assert result == [{"title": "a"}]
-    assert calls["args"][1] == "postings"
-    assert calls["args"][2] == {"allow_bare_list": False}
+    assert connector.envelope_key == "postings"
+    assert connector.extract_offers({"postings": [{"title": "a"}]}) == [{"title": "a"}]
+    assert connector.extract_offers([{"title": "a"}]) is None
 
 
 def test_map_nofluffjobs_offer_maps_all_known_fields() -> None:
@@ -68,7 +96,7 @@ def test_map_nofluffjobs_offer_maps_all_known_fields() -> None:
         "highlighted": False,
     }
 
-    result = map_nofluffjobs_offer(1, raw)
+    result = NoFluffJobsConnector().map_offer(1, raw)
 
     assert result == {
         "source_id": 1,
@@ -93,7 +121,7 @@ def test_map_nofluffjobs_offer_maps_all_known_fields() -> None:
 def test_map_nofluffjobs_offer_handles_missing_optional_fields() -> None:
     raw = {"title": "Backend Engineer", "name": "Acme"}
 
-    result = map_nofluffjobs_offer(1, raw)
+    result = NoFluffJobsConnector().map_offer(1, raw)
 
     assert result["external_id"] is None
     assert result["canonical_url"] is None
@@ -115,8 +143,9 @@ def test_map_nofluffjobs_offer_maps_remote_via_shared_normalizer() -> None:
     remote_raw = {"title": "x", "name": "y", "location": {"fullyRemote": True}}
     hybrid_raw = {"title": "x", "name": "y", "location": {"fullyRemote": False}}
 
-    assert map_nofluffjobs_offer(1, remote_raw)["remote"] is True
-    assert map_nofluffjobs_offer(1, hybrid_raw)["remote"] is False
+    connector = NoFluffJobsConnector()
+    assert connector.map_offer(1, remote_raw)["remote"] is True
+    assert connector.map_offer(1, hybrid_raw)["remote"] is False
 
 
 def test_map_nofluffjobs_offer_joins_multiple_locations() -> None:
@@ -129,7 +158,7 @@ def test_map_nofluffjobs_offer_joins_multiple_locations() -> None:
         },
     }
 
-    result = map_nofluffjobs_offer(1, raw)
+    result = NoFluffJobsConnector().map_offer(1, raw)
 
     assert result["location"] == "Remote, Poznań"
 
@@ -139,7 +168,7 @@ def test_map_nofluffjobs_offer_joins_multiple_seniority_levels() -> None:
     # is a list on the wire -- handled defensively the same way multi-location joins are.
     raw = {"title": "x", "name": "y", "seniority": ["Mid", "Senior"]}
 
-    result = map_nofluffjobs_offer(1, raw)
+    result = NoFluffJobsConnector().map_offer(1, raw)
 
     assert result["seniority"] == "mid, senior"
 
@@ -156,7 +185,7 @@ def test_map_nofluffjobs_offer_uses_location_duplicate_slug_as_external_id_not_r
         "name": "Spyrosoft",
     }
 
-    result = map_nofluffjobs_offer(1, raw)
+    result = NoFluffJobsConnector().map_offer(1, raw)
 
     assert result["external_id"] == "senior-delivery-manager-spyrosoft-Wrocław"
     assert result["canonical_url"] == (
@@ -167,6 +196,8 @@ def test_map_nofluffjobs_offer_uses_location_duplicate_slug_as_external_id_not_r
 def test_map_nofluffjobs_offer_calls_shared_normalize_functions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.connectors import nofluffjobs
+
     calls: dict[str, tuple[Any, ...]] = {}
 
     def _record(name: str) -> Any:
@@ -191,7 +222,7 @@ def test_map_nofluffjobs_offer_calls_shared_normalize_functions(
         "seniority": ["Senior"],
         "salary": {"from": 18000, "to": 24000, "currency": "PLN"},
     }
-    map_nofluffjobs_offer(1, raw)
+    NoFluffJobsConnector().map_offer(1, raw)
 
     assert calls["normalize_remote"][0] == NOFLUFFJOBS
     assert calls["normalize_seniority"][0] == NOFLUFFJOBS

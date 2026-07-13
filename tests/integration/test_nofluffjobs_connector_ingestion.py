@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from app.connectors.nofluffjobs import run_nofluffjobs_ingestion
+from app.connectors.nofluffjobs import NoFluffJobsConnector
 from app.db.models import Offer as OfferModel
 from app.db.models import Source
 from app.ingestion.types import IngestionResult
@@ -78,7 +78,7 @@ async def test_run_nofluffjobs_ingestion_persists_and_maps_offers(
         httpx, "get", lambda *a, **kw: _FakeResponse(json_data=_offers_payload([offer]))
     )
 
-    result = await run_nofluffjobs_ingestion(db_session, source)
+    result = await NoFluffJobsConnector().run(db_session, source)
     await db_session.commit()
 
     assert result == IngestionResult(ok=True, fetched=1, created=1)
@@ -100,7 +100,7 @@ async def test_run_nofluffjobs_ingestion_handles_zero_offers(
     source = await _create_source(db_session)
     monkeypatch.setattr(httpx, "get", lambda *a, **kw: _FakeResponse(json_data=_offers_payload([])))
 
-    result = await run_nofluffjobs_ingestion(db_session, source)
+    result = await NoFluffJobsConnector().run(db_session, source)
     await db_session.commit()
 
     assert result == IngestionResult(ok=True, fetched=0, created=0)
@@ -118,7 +118,7 @@ async def test_run_nofluffjobs_ingestion_returns_not_ok_on_transport_failure(
 
     monkeypatch.setattr(httpx, "get", _raise)
 
-    result = await run_nofluffjobs_ingestion(db_session, source)
+    result = await NoFluffJobsConnector().run(db_session, source)
     await db_session.commit()
 
     assert result == IngestionResult(
@@ -142,7 +142,7 @@ async def test_run_nofluffjobs_ingestion_returns_not_ok_on_unexpected_shape(
         httpx, "get", lambda *a, **kw: _FakeResponse(json_data={"unexpected": "shape"})
     )
 
-    result = await run_nofluffjobs_ingestion(db_session, source)
+    result = await NoFluffJobsConnector().run(db_session, source)
     await db_session.commit()
 
     assert result.ok is False
@@ -168,7 +168,7 @@ async def test_run_nofluffjobs_ingestion_skips_invalid_offer_without_crashing(
         lambda *a, **kw: _FakeResponse(json_data=_offers_payload([valid_offer, invalid_offer])),
     )
 
-    result = await run_nofluffjobs_ingestion(db_session, source)
+    result = await NoFluffJobsConnector().run(db_session, source)
     await db_session.commit()
 
     assert result.ok is True
@@ -193,9 +193,9 @@ async def test_run_nofluffjobs_ingestion_dedups_on_reingest(
         httpx, "get", lambda *a, **kw: _FakeResponse(json_data=_offers_payload([offer]))
     )
 
-    first = await run_nofluffjobs_ingestion(db_session, source)
+    first = await NoFluffJobsConnector().run(db_session, source)
     await db_session.commit()
-    second = await run_nofluffjobs_ingestion(db_session, source)
+    second = await NoFluffJobsConnector().run(db_session, source)
     await db_session.commit()
 
     assert first.created == 1
@@ -226,7 +226,7 @@ async def test_run_nofluffjobs_ingestion_accepts_force_refresh_as_a_no_op(
 
     monkeypatch.setattr(httpx, "get", _fake_get)
 
-    result = await run_nofluffjobs_ingestion(db_session, source, force_refresh=True)
+    result = await NoFluffJobsConnector().run(db_session, source, force_refresh=True)
     await db_session.commit()
 
     assert result == IngestionResult(ok=True, fetched=1, created=1)
@@ -247,7 +247,7 @@ async def test_run_nofluffjobs_ingestion_uses_page_size_from_config(
 
     monkeypatch.setattr(httpx, "get", _fake_get)
 
-    await run_nofluffjobs_ingestion(db_session, source)
+    await NoFluffJobsConnector().run(db_session, source)
     await db_session.commit()
 
     assert captured_params["pageSize"] == 250
@@ -278,7 +278,7 @@ async def test_run_nofluffjobs_ingestion_range_mode_skips_offers_outside_since_u
         lambda *a, **kw: _FakeResponse(json_data=_offers_payload([in_range, out_of_range])),
     )
 
-    result = await run_nofluffjobs_ingestion(db_session, source)
+    result = await NoFluffJobsConnector().run(db_session, source)
     await db_session.commit()
 
     assert result.fetched == 2

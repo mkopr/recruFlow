@@ -3,7 +3,20 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { OfferListFilters } from '../api/offers';
+import * as useKnownSourcesModule from '../hooks/useKnownSources';
 import { OfferFilters } from './OfferFilters';
+
+vi.mock('../hooks/useKnownSources', () => ({
+  useKnownSources: vi.fn(),
+}));
+
+vi.mocked(useKnownSourcesModule.useKnownSources).mockReturnValue({
+  sources: [
+    { id: 'solid_jobs', label: 'SOLID.Jobs' },
+    { id: 'justjoinit', label: 'JustJoin.it' },
+    { id: 'nofluffjobs', label: 'NoFluffJobs' },
+  ],
+});
 
 function renderFilters(filters: OfferListFilters, onChange: (next: OfferListFilters) => void) {
   return render(<OfferFilters filters={filters} onChange={onChange} />);

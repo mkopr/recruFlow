@@ -339,8 +339,10 @@ two). Two shapes are supported, a tagged union on `"type"`:
 `expression` is a standard five-field crontab string. A missing or malformed `"schedule"` value
 never crashes the app — it logs a `WARNING` and falls back to a 1-hour interval.
 
-The three built-in sources ship with a uniform default (`app/scheduler/service.py`'s
-`DEFAULT_SOURCE_CONFIGS`):
+Every connector registered in `CONNECTOR_REGISTRY` (`app/ingestion/registry.py`) ships with the
+same default (`app/scheduler/service.py`'s `_default_config_template()`), applied to every
+registry key by `ensure_sources_exist` — there's no per-connector entry to add for a new
+connector:
 
 | Source | Schedule |
 | --- | --- |
@@ -383,6 +385,57 @@ curl -X PUT http://localhost:8000/scheduler/sources/interval \
 Returns `{"sources": [...]}`, one `SourceStatus` entry per connector, same shape as
 `GET /scheduler/status`. Never `404`s — an empty result set (no connector-tagged sources
 provisioned) simply reschedules nothing.
+
+### `PUT /scheduler/sources/{source}/enabled`
+
+Stops or starts one connector (`connector_enabled` — the Connector Stop/Start switch, P3US37;
+distinct from Auto-Fetch, see `CONTEXT.md`). Disabling rejects both automatic and manual
+ingestion for this connector: `POST /scheduler/run/{source}` (and `POST /ingest/{source}`) return
+`409` while it's disabled, instead of silently no-op'ing or fetching anyway. The live scheduled
+job is paused/resumed to match `connector_enabled AND auto_fetch_enabled` — re-enabling a
+connector whose auto-fetch is currently off leaves the job paused; the two flags never override
+each other.
+
+```bash
+curl -X PUT http://localhost:8000/scheduler/sources/nofluffjobs/enabled \
+  -H 'Content-Type: application/json' \
+  -d '{"enabled": false}'
+```
+
+Returns the updated `SourceStatus`. Same `404` semantics as the interval endpoint above.
+
+### `PUT /scheduler/sources/enabled`
+
+Applies one enabled/disabled value to every connector at once — same bulk pattern as
+`PUT /scheduler/sources/interval`.
+
+```bash
+curl -X PUT http://localhost:8000/scheduler/sources/enabled \
+  -H 'Content-Type: application/json' \
+  -d '{"enabled": true}'
+```
+
+Returns `{"sources": [...]}`, one `SourceStatus` entry per connector.
+
+### `GET /connectors`
+
+Lists every registered connector — the single source of truth `CONNECTOR_REGISTRY`
+(`app/ingestion/registry.py`) provides, not a hand-maintained frontend list. Used by the offer
+and failure filter dropdowns and the Settings page's connector cards; adding a connector to the
+registry makes it appear here (and everywhere else that reads this endpoint) with no frontend
+changes required.
+
+```bash
+curl http://localhost:8000/connectors
+```
+
+```json
+[
+  {"id": "solid_jobs", "label": "SOLID.Jobs"},
+  {"id": "justjoinit", "label": "JustJoin.it"},
+  {"id": "nofluffjobs", "label": "NoFluffJobs"}
+]
+```
 
 ### `POST /scheduler/run/{source}`
 
@@ -820,24 +873,26 @@ a profile by hand, without calling the API directly.
   one blank and clicking **Save** or **Set as active** highlights the offending field(s) in red and
   blocks the request entirely — no network call is made until every required field is filled in.
 
-## Scoring settings
+## Settings page
 
 With `make up` running, open `http://localhost:5173/settings`. There is nothing to configure at
 the domain level for scoring itself — a plain percentage needs no shared calibration table — so
-this page has four sections:
+this page has three sections:
 
-- **Fetch cadence** — one row per connector (sourced from `GET /scheduler/status`), a minutes input
-  pre-filled with that connector's current interval, each saved independently via
-  `PUT /scheduler/sources/{source}/interval`, plus an "apply to all" control that pushes one value
-  to every connector via `PUT /scheduler/sources/interval`. Saving reschedules the live job
-  immediately — no restart needed.
-- **Fetch range & auto-fetch** — one row per connector, an auto-fetch checkbox (pauses/resumes that
-  connector's live scheduled job immediately, without removing it) and a "Date range"/"Fetch all"
-  mode selector with since/until inputs when narrowed, each saved independently via
-  `PUT /scheduler/sources/{source}/fetch-range` and `.../auto-fetch`, plus "apply to all" controls
-  for both knobs. The same range now also governs which offers batch scoring will select (see
+- **Connectors** (`ConnectorSettingsSection`/`ConnectorSettingsCard`, P3US37) — one card per
+  connector (sourced from `GET /connectors`, not a hardcoded list), each grouping that
+  connector's cadence, fetch range + auto-fetch, and stop/start state together. A card's cadence
+  minutes input (`PUT /scheduler/sources/{source}/interval`), auto-fetch checkbox + range mode
+  selector (`.../fetch-range`, `.../auto-fetch`), and Running/Stopped toggle
+  (`.../enabled`) each save independently — a card's own Save buttons disable only while that
+  card is saving. An "Apply to all" bar above the cards pushes one cadence, range, auto-fetch, or
+  stop/start value to every connector via the bulk variant of each endpoint. Saving cadence or
+  auto-fetch/stop-start reschedules or pauses/resumes the live job immediately — no restart
+  needed. The fetch range also governs which offers batch scoring will select (see
   `GET /offers/cleanup-preview` and `DELETE /offers` above) — narrowing a connector's range here
-  shrinks the scoring backlog too, with no separate setting to keep in sync.
+  shrinks the scoring backlog too, with no separate setting to keep in sync. This section replaces
+  the former separate `FetchCadenceSection`/`FetchRangeSection` — see "Connector extensibility +
+  stop/start toggle" in ARCHITECTURE.md for the full design.
 - **Offer cleanup** — a date picker and a "Delete offers older than this date" button (disabled
   until a date is chosen). Clicking it previews the delete via `GET /offers/cleanup-preview` and
   shows a confirmation dialog stating exactly how many offers would be deleted and how many would

@@ -58,6 +58,7 @@ def build_source_status(source: Source, last_run: SchedulerRun | None) -> Source
         schedule=(source.config_json or {}).get("schedule", {}),
         fetch_range=(source.config_json or {}).get("fetch_range", {}),
         auto_fetch_enabled=(source.config_json or {}).get("auto_fetch_enabled", True),
+        connector_enabled=(source.config_json or {}).get("connector_enabled", True),
         last_fetched_at=source.last_fetched_at,
         last_run_id=last_run.id if last_run else None,
         last_run_started_at=last_run.started_at if last_run else None,

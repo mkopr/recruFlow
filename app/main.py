@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
+from app.api.routes.connectors import router as connectors_router
 from app.api.routes.failures import router as failures_router
 from app.api.routes.health import router as health_router
 from app.api.routes.ingestion import router as ingestion_router
@@ -61,6 +62,7 @@ app.add_middleware(
 )
 
 app.include_router(health_router)
+app.include_router(connectors_router)
 app.include_router(scheduler_router)
 app.include_router(ingestion_router)
 app.include_router(offers_router)

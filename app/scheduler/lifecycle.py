@@ -1,3 +1,5 @@
+from typing import Any
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import select
@@ -12,6 +14,18 @@ SCORING_JOB_ID = "scoring:backlog"
 
 def build_job_id(connector: str) -> str:
     return f"scheduler:{connector}"
+
+
+def connector_should_auto_run(config: dict[str, Any]) -> bool:
+    """Whether a Connector's *scheduled* job should be running right now (P3US37): both
+    `connector_enabled` (Connector Stop/Start) and `auto_fetch_enabled` (Auto-Fetch) must be
+    true. The two flags are otherwise independent -- this is the one place they're combined,
+    so `register_jobs`'s startup pause decision and every enabled/auto-fetch route (single and
+    bulk) agree on the same rule instead of each re-deriving it.
+    """
+    return bool(config.get("connector_enabled", True)) and bool(
+        config.get("auto_fetch_enabled", True)
+    )
 
 
 def register_scoring_job(scheduler: AsyncIOScheduler, *, interval_seconds: int) -> None:
@@ -51,7 +65,7 @@ async def register_jobs(
             max_instances=1,
             coalesce=True,
         )
-        if not (source.config_json or {}).get("auto_fetch_enabled", True):
+        if not connector_should_auto_run(source.config_json or {}):
             scheduler.pause_job(job_id)
         count += 1
     return count

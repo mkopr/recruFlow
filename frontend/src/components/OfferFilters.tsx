@@ -1,7 +1,8 @@
 import type { ChangeEvent } from 'react';
 
 import type { OfferListFilters } from '../api/offers';
-import { KNOWN_SOURCES, SENIORITY_LEVELS } from '../constants';
+import { SENIORITY_LEVELS } from '../constants';
+import { useKnownSources } from '../hooks/useKnownSources';
 import { boolToSelectValue, selectValueToBool } from '../lib/triStateBoolean';
 
 interface OfferFiltersProps {
@@ -10,6 +11,8 @@ interface OfferFiltersProps {
 }
 
 export function OfferFilters({ filters, onChange }: OfferFiltersProps) {
+  const { sources: knownSources } = useKnownSources();
+
   const handleSourceChange = (event: ChangeEvent<HTMLSelectElement>) => {
     const value = event.target.value;
     onChange({ ...filters, source: value === '' ? undefined : value });
@@ -48,7 +51,7 @@ export function OfferFilters({ filters, onChange }: OfferFiltersProps) {
         Source
         <select className="input" value={filters.source ?? ''} onChange={handleSourceChange}>
           <option value="">All sources</option>
-          {KNOWN_SOURCES.map((source) => (
+          {knownSources.map((source) => (
             <option key={source.id} value={source.id}>
               {source.label}
             </option>

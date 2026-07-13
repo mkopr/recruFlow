@@ -1,0 +1,130 @@
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
+
+import type { ConnectorOption } from '../api/connectors';
+import type { SourceStatus } from '../api/scheduler';
+import type { UseConnectorSettingsResult } from '../hooks/useConnectorSettings';
+import { ConnectorSettingsCard } from './ConnectorSettingsCard';
+
+function makeSource(overrides: Partial<SourceStatus> = {}): SourceStatus {
+  return {
+    source_id: 1,
+    connector: 'justjoinit',
+    name: 'justjoinit',
+    schedule: { type: 'interval', seconds: 300 },
+    fetch_range: { mode: 'all', since: null, until: null },
+    auto_fetch_enabled: true,
+    connector_enabled: true,
+    last_fetched_at: null,
+    last_run_id: null,
+    last_run_started_at: null,
+    last_run_finished_at: null,
+    last_run_status: null,
+    last_run_trigger_type: null,
+    last_run_fetched: null,
+    last_run_created: null,
+    last_run_warning: false,
+    last_run_error_message: null,
+    ...overrides,
+  };
+}
+
+function makeSettings(
+  overrides: Partial<UseConnectorSettingsResult> = {},
+): UseConnectorSettingsResult {
+  return {
+    sources: [makeSource()],
+    savingByConnector: {},
+    error: null,
+    saveInterval: vi.fn(),
+    saveIntervalAll: vi.fn(),
+    saveRange: vi.fn(),
+    saveRangeAll: vi.fn(),
+    saveAutoFetch: vi.fn(),
+    saveAutoFetchAll: vi.fn(),
+    saveEnabled: vi.fn(),
+    saveEnabledAll: vi.fn(),
+    refetch: vi.fn(),
+    ...overrides,
+  };
+}
+
+const source: ConnectorOption = { id: 'justjoinit', label: 'JustJoin.it' };
+
+describe('ConnectorSettingsCard', () => {
+  it('renders the label, cadence input, auto-fetch checkbox, and stop/start control from status', () => {
+    const settings = makeSettings({
+      sources: [
+        makeSource({
+          schedule: { seconds: 600 },
+          auto_fetch_enabled: false,
+          connector_enabled: false,
+        }),
+      ],
+    });
+
+    render(<ConnectorSettingsCard source={source} settings={settings} />);
+
+    expect(screen.getByText('JustJoin.it')).toBeInTheDocument();
+    expect((screen.getAllByRole('spinbutton')[0] as HTMLInputElement).value).toBe('10');
+    expect(screen.getByRole('checkbox', { name: /Auto-fetch/ })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /Running|Stopped/ })).not.toBeChecked();
+    expect(screen.getByText('Stopped')).toBeInTheDocument();
+  });
+
+  it('clicking Save on the cadence row calls saveInterval with the entered seconds', async () => {
+    const saveInterval = vi.fn();
+    const settings = makeSettings({ saveInterval });
+
+    render(<ConnectorSettingsCard source={source} settings={settings} />);
+
+    await userEvent.click(screen.getAllByRole('button', { name: /Save/ })[0]!);
+
+    expect(saveInterval).toHaveBeenCalledWith('justjoinit', 300);
+  });
+
+  it('clicking the stop/start control calls saveEnabled with the flipped value', async () => {
+    const saveEnabled = vi.fn();
+    const settings = makeSettings({
+      sources: [makeSource({ connector_enabled: true })],
+      saveEnabled,
+    });
+
+    render(<ConnectorSettingsCard source={source} settings={settings} />);
+
+    await userEvent.click(screen.getByRole('checkbox', { name: /Running|Stopped/ }));
+
+    expect(saveEnabled).toHaveBeenCalledWith('justjoinit', false);
+  });
+
+  it('each card saves independently: a saving card disables only its own Save buttons', () => {
+    const settingsA = makeSettings({
+      sources: [makeSource({ connector: 'justjoinit' })],
+      savingByConnector: { justjoinit: true },
+    });
+    const settingsB = makeSettings({
+      sources: [makeSource({ connector: 'nofluffjobs' })],
+      savingByConnector: { justjoinit: true },
+    });
+
+    render(
+      <>
+        <ConnectorSettingsCard
+          source={{ id: 'justjoinit', label: 'JustJoin.it' }}
+          settings={settingsA}
+        />
+        <ConnectorSettingsCard
+          source={{ id: 'nofluffjobs', label: 'NoFluffJobs' }}
+          settings={settingsB}
+        />
+      </>,
+    );
+
+    const saveButtons = screen.getAllByRole('button', { name: /Save|Saving/ });
+    expect(saveButtons[0]).toBeDisabled();
+    expect(saveButtons[1]).toBeDisabled();
+    expect(saveButtons[2]).not.toBeDisabled();
+    expect(saveButtons[3]).not.toBeDisabled();
+  });
+});

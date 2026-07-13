@@ -1,10 +1,13 @@
+from dataclasses import dataclass
 from typing import Protocol
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.connectors import justjoinit, nofluffjobs, solid_jobs
+from app.connectors.justjoinit import JustJoinItConnector
+from app.connectors.nofluffjobs import NoFluffJobsConnector
+from app.connectors.solid_jobs import SolidJobsConnector
 from app.db.models import Source
 from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
 from app.ingestion.types import IngestionResult
@@ -28,30 +31,25 @@ class Connector(Protocol):
     ) -> IngestionResult: ...
 
 
-async def _dispatch_solid_jobs(
-    session: AsyncSession, source: Source, force_refresh: bool
-) -> IngestionResult:
-    return await solid_jobs.run_solid_jobs_ingestion(
-        session, source, campaign=get_settings().solid_jobs_campaign, force_refresh=force_refresh
-    )
+@dataclass(frozen=True)
+class ConnectorSpec:
+    name: str
+    label: str
+    dispatch: Connector
 
 
-async def _dispatch_justjoinit(
-    session: AsyncSession, source: Source, force_refresh: bool
-) -> IngestionResult:
-    return await justjoinit.run_justjoinit_ingestion(session, source, force_refresh=force_refresh)
-
-
-async def _dispatch_nofluffjobs(
-    session: AsyncSession, source: Source, force_refresh: bool
-) -> IngestionResult:
-    return await nofluffjobs.run_nofluffjobs_ingestion(session, source, force_refresh=force_refresh)
-
-
-CONNECTOR_REGISTRY: dict[str, Connector] = {
-    SOLID_JOBS: _dispatch_solid_jobs,
-    JUSTJOINIT: _dispatch_justjoinit,
-    NOFLUFFJOBS: _dispatch_nofluffjobs,
+CONNECTOR_REGISTRY: dict[str, ConnectorSpec] = {
+    SOLID_JOBS: ConnectorSpec(
+        name=SOLID_JOBS,
+        label="SOLID.Jobs",
+        dispatch=SolidJobsConnector(campaign=get_settings().solid_jobs_campaign).run,
+    ),
+    JUSTJOINIT: ConnectorSpec(
+        name=JUSTJOINIT, label="JustJoin.it", dispatch=JustJoinItConnector().run
+    ),
+    NOFLUFFJOBS: ConnectorSpec(
+        name=NOFLUFFJOBS, label="NoFluffJobs", dispatch=NoFluffJobsConnector().run
+    ),
 }
 
 
@@ -60,8 +58,8 @@ async def dispatch_ingestion(
 ) -> IngestionResult:
     connector = source.connector
     assert connector is not None, "source.connector must be resolved before dispatch"
-    dispatch_fn = CONNECTOR_REGISTRY[connector]
-    return await dispatch_fn(session, source, force_refresh)
+    spec = CONNECTOR_REGISTRY[connector]
+    return await spec.dispatch(session, source, force_refresh)
 
 
 async def resolve_source_by_connector(session: AsyncSession, connector: str) -> Source:

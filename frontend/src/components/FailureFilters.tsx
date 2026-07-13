@@ -1,5 +1,5 @@
 import type { FailureListFilters, FailureProcess } from '../api/failures';
-import { KNOWN_SOURCES } from '../constants';
+import { useKnownSources } from '../hooks/useKnownSources';
 
 interface FailureFiltersProps {
   process: FailureProcess;
@@ -8,6 +8,8 @@ interface FailureFiltersProps {
 }
 
 function IngestionFilters({ filters, onChange }: Omit<FailureFiltersProps, 'process'>) {
+  const { sources: knownSources } = useKnownSources();
+
   return (
     <label className="flex flex-col gap-1 text-sm">
       <span className="text-[var(--color-text-muted)]">Source</span>
@@ -17,7 +19,7 @@ function IngestionFilters({ filters, onChange }: Omit<FailureFiltersProps, 'proc
         onChange={(event) => onChange({ ...filters, source: event.target.value || undefined })}
       >
         <option value="">All sources</option>
-        {KNOWN_SOURCES.map((source) => (
+        {knownSources.map((source) => (
           <option key={source.id} value={source.id}>
             {source.label}
           </option>

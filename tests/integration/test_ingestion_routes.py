@@ -4,17 +4,15 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from app.connectors import justjoinit, nofluffjobs, solid_jobs
 from app.db.models import IngestionFailure, Source
 from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
 from app.db.session import get_engine, get_sessionmaker
 from app.ingestion import registry
-from app.ingestion.normalize import JUSTJOINIT
+from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
 from app.ingestion.persist import ingest_offer
-from app.ingestion.types import IngestionResult as JustJoinItIngestionResult
-from app.ingestion.types import IngestionResult as NoFluffJobsIngestionResult
-from app.ingestion.types import IngestionResult as SolidJobsIngestionResult
+from app.ingestion.registry import ConnectorSpec
+from app.ingestion.types import IngestionResult
 from app.scoring import batch
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,17 +34,21 @@ def _unique_url(path: str) -> str:
     return f"https://example.com/jobs/{uuid4()}/{path}"
 
 
+def _fake_spec(connector: str, dispatch: registry.Connector) -> ConnectorSpec:
+    return ConnectorSpec(
+        name=connector, label=registry.CONNECTOR_REGISTRY[connector].label, dispatch=dispatch
+    )
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_ingest_triggers_fetch_and_returns_new_updated_count(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def _fake(
-        session: AsyncSession, source: Source, *, force_refresh: bool = False
-    ) -> JustJoinItIngestionResult:
-        return JustJoinItIngestionResult(ok=True, fetched=5, created=3)
+    async def _fake(session: AsyncSession, source: Source, force_refresh: bool) -> IngestionResult:
+        return IngestionResult(ok=True, fetched=5, created=3)
 
-    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, JUSTJOINIT, _fake_spec(JUSTJOINIT, _fake))
 
     response = await scheduled_client.post("/ingest/justjoinit")
 
@@ -67,9 +69,7 @@ async def test_ingest_persists_offers_end_to_end_visible_in_db(
 ) -> None:
     canonical_url = _unique_url("solid-jobs-offer")
 
-    async def _fake(
-        session: AsyncSession, source: Source, *, campaign: str, force_refresh: bool = False
-    ) -> SolidJobsIngestionResult:
+    async def _fake(session: AsyncSession, source: Source, force_refresh: bool) -> IngestionResult:
         await ingest_offer(
             session,
             {
@@ -80,9 +80,9 @@ async def test_ingest_persists_offers_end_to_end_visible_in_db(
             },
             raw_payload={"id": "abc"},
         )
-        return SolidJobsIngestionResult(ok=True, fetched=1, created=1)
+        return IngestionResult(ok=True, fetched=1, created=1)
 
-    monkeypatch.setattr(solid_jobs, "run_solid_jobs_ingestion", _fake)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, SOLID_JOBS, _fake_spec(SOLID_JOBS, _fake))
 
     response = await scheduled_client.post("/ingest/solid_jobs")
 
@@ -110,13 +110,11 @@ async def test_ingest_defaults_to_force_refresh_false_to_keep_incremental_early_
     # force_refresh=True. Default behavior has to match POST /scheduler/run/{source}.
     captured: dict[str, bool] = {}
 
-    async def _fake(
-        session: AsyncSession, source: Source, *, campaign: str, force_refresh: bool = False
-    ) -> SolidJobsIngestionResult:
+    async def _fake(session: AsyncSession, source: Source, force_refresh: bool) -> IngestionResult:
         captured["force_refresh"] = force_refresh
-        return SolidJobsIngestionResult(ok=True, fetched=0, created=0)
+        return IngestionResult(ok=True, fetched=0, created=0)
 
-    monkeypatch.setattr(solid_jobs, "run_solid_jobs_ingestion", _fake)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, SOLID_JOBS, _fake_spec(SOLID_JOBS, _fake))
 
     response = await scheduled_client.post("/ingest/solid_jobs")
 
@@ -133,13 +131,11 @@ async def test_ingest_accepts_explicit_force_refresh_query_param_opt_in(
     # rather than being the button's unconditional default (BUG18 suggested fix #2).
     captured: dict[str, bool] = {}
 
-    async def _fake(
-        session: AsyncSession, source: Source, *, campaign: str, force_refresh: bool = False
-    ) -> SolidJobsIngestionResult:
+    async def _fake(session: AsyncSession, source: Source, force_refresh: bool) -> IngestionResult:
         captured["force_refresh"] = force_refresh
-        return SolidJobsIngestionResult(ok=True, fetched=0, created=0)
+        return IngestionResult(ok=True, fetched=0, created=0)
 
-    monkeypatch.setattr(solid_jobs, "run_solid_jobs_ingestion", _fake)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, SOLID_JOBS, _fake_spec(SOLID_JOBS, _fake))
 
     response = await scheduled_client.post("/ingest/solid_jobs", params={"force_refresh": "true"})
 
@@ -152,12 +148,10 @@ async def test_ingest_accepts_explicit_force_refresh_query_param_opt_in(
 async def test_ingest_sets_source_last_fetched_at_on_success(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def _fake(
-        session: AsyncSession, source: Source, *, force_refresh: bool = False
-    ) -> JustJoinItIngestionResult:
-        return JustJoinItIngestionResult(ok=True, fetched=1, created=1)
+    async def _fake(session: AsyncSession, source: Source, force_refresh: bool) -> IngestionResult:
+        return IngestionResult(ok=True, fetched=1, created=1)
 
-    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, JUSTJOINIT, _fake_spec(JUSTJOINIT, _fake))
 
     response = await scheduled_client.post("/ingest/justjoinit")
     assert response.status_code == 200
@@ -177,12 +171,10 @@ async def test_ingest_does_not_set_source_last_fetched_at_on_failure(
         entry["connector"]: entry["last_fetched_at"] for entry in status_before.json()["sources"]
     }
 
-    async def _fake(
-        session: AsyncSession, source: Source, *, force_refresh: bool = False
-    ) -> JustJoinItIngestionResult:
+    async def _fake(session: AsyncSession, source: Source, force_refresh: bool) -> IngestionResult:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, JUSTJOINIT, _fake_spec(JUSTJOINIT, _fake))
 
     response = await scheduled_client.post("/ingest/justjoinit")
     assert response.status_code == 200
@@ -224,12 +216,10 @@ async def test_ingest_known_connector_without_configured_source_returns_404(
 async def test_ingest_connector_exception_returns_200_ok_false_with_error_message(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def _fake(
-        session: AsyncSession, source: Source, *, force_refresh: bool = False
-    ) -> NoFluffJobsIngestionResult:
+    async def _fake(session: AsyncSession, source: Source, force_refresh: bool) -> IngestionResult:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(nofluffjobs, "run_nofluffjobs_ingestion", _fake)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, NOFLUFFJOBS, _fake_spec(NOFLUFFJOBS, _fake))
 
     response = await scheduled_client.post("/ingest/nofluffjobs")
 
@@ -246,12 +236,10 @@ async def test_ingest_connector_exception_returns_200_ok_false_with_error_messag
 async def test_ingest_records_ingestion_failure_on_first_page_fetch_failure(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def _fake(
-        session: AsyncSession, source: Source, *, force_refresh: bool = False
-    ) -> JustJoinItIngestionResult:
-        return JustJoinItIngestionResult(ok=False, fetched=0, created=0, error_message="boom")
+    async def _fake(session: AsyncSession, source: Source, force_refresh: bool) -> IngestionResult:
+        return IngestionResult(ok=False, fetched=0, created=0, error_message="boom")
 
-    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, JUSTJOINIT, _fake_spec(JUSTJOINIT, _fake))
 
     response = await scheduled_client.post("/ingest/justjoinit")
 
@@ -281,13 +269,11 @@ async def test_ingest_records_ingestion_failure_on_first_page_fetch_failure(
 async def test_health_endpoint_responds_during_ingest_run(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def _fake(
-        session: AsyncSession, source: Source, *, force_refresh: bool = False
-    ) -> JustJoinItIngestionResult:
+    async def _fake(session: AsyncSession, source: Source, force_refresh: bool) -> IngestionResult:
         await asyncio.sleep(1.5)
-        return JustJoinItIngestionResult(ok=True, fetched=1, created=1)
+        return IngestionResult(ok=True, fetched=1, created=1)
 
-    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, JUSTJOINIT, _fake_spec(JUSTJOINIT, _fake))
 
     task = asyncio.create_task(scheduled_client.post("/ingest/justjoinit"))
     await asyncio.sleep(0.2)
@@ -332,9 +318,7 @@ async def test_ingest_does_not_trigger_batch_scoring_for_newly_persisted_offer(
 
     canonical_url = _unique_url("justjoinit-scoring-offer")
 
-    async def _fake(
-        session: AsyncSession, source: Source, *, force_refresh: bool = False
-    ) -> JustJoinItIngestionResult:
+    async def _fake(session: AsyncSession, source: Source, force_refresh: bool) -> IngestionResult:
         await ingest_offer(
             session,
             {
@@ -345,9 +329,9 @@ async def test_ingest_does_not_trigger_batch_scoring_for_newly_persisted_offer(
             },
             raw_payload={"id": "abc"},
         )
-        return JustJoinItIngestionResult(ok=True, fetched=1, created=1)
+        return IngestionResult(ok=True, fetched=1, created=1)
 
-    monkeypatch.setattr(justjoinit, "run_justjoinit_ingestion", _fake)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, connector, _fake_spec(connector, _fake))
 
     engine = get_engine()
     sessionmaker = get_sessionmaker(engine)

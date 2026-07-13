@@ -7,7 +7,7 @@ import { ScoreFilter } from '../components/ScoreFilter';
 import { ScoreNowButton } from '../components/ScoreNowButton';
 import { ScoringStatusBanner } from '../components/ScoringStatusBanner';
 import { SourceFetchCard } from '../components/SourceFetchCard';
-import { KNOWN_SOURCES } from '../constants';
+import { useKnownSources } from '../hooks/useKnownSources';
 import { useOffers } from '../hooks/useOffers';
 import { useSchedulerStatus } from '../hooks/useSchedulerStatus';
 import { useScoringStatus } from '../hooks/useScoringStatus';
@@ -37,6 +37,7 @@ export function OfferListPage() {
     offset: page * PAGE_SIZE,
   });
   const { sources, refetch: refetchSchedulerStatus } = useSchedulerStatus();
+  const { sources: knownSources } = useKnownSources();
   const { status: scoringStatus } = useScoringStatus();
 
   const handleIngested = () => {
@@ -84,7 +85,7 @@ export function OfferListPage() {
   return (
     <div className="mx-auto flex w-full max-w-screen-2xl flex-col gap-4 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
       <div className="flex flex-wrap gap-3">
-        {KNOWN_SOURCES.map((source) => (
+        {knownSources.map((source) => (
           <SourceFetchCard
             key={source.id}
             source={source.id}

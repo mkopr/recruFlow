@@ -1,13 +1,20 @@
 from datetime import UTC, datetime
 
 import pytest
-from app.connectors import nofluffjobs
 from app.db.models import Source
+from app.ingestion import registry
 from app.ingestion.normalize import NOFLUFFJOBS
+from app.ingestion.registry import ConnectorSpec
 from app.ingestion.types import IngestionResult as NoFluffJobsIngestionResult
 from app.scheduler.service import ensure_sources_exist, run_source
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+def _fake_spec(connector: str, dispatch: registry.Connector) -> ConnectorSpec:
+    return ConnectorSpec(
+        name=connector, label=registry.CONNECTOR_REGISTRY[connector].label, dispatch=dispatch
+    )
 
 
 @pytest.mark.integration
@@ -22,11 +29,11 @@ async def test_successful_run_sets_source_last_fetched_at(
     before = datetime.now(UTC)
 
     async def _fake(
-        session: AsyncSession, source: Source, *, force_refresh: bool = False
+        session: AsyncSession, source: Source, force_refresh: bool
     ) -> NoFluffJobsIngestionResult:
         return NoFluffJobsIngestionResult(ok=True, fetched=3, created=2)
 
-    monkeypatch.setattr(nofluffjobs, "run_nofluffjobs_ingestion", _fake)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, NOFLUFFJOBS, _fake_spec(NOFLUFFJOBS, _fake))
 
     await run_source(NOFLUFFJOBS, trigger_type="automatic")
 
@@ -50,10 +57,12 @@ async def test_failed_run_does_not_set_source_last_fetched_at(
         .last_fetched_at
     )
 
-    async def _fake(session: AsyncSession, source: Source, *, force_refresh: bool = False) -> None:
+    async def _fake(
+        session: AsyncSession, source: Source, force_refresh: bool
+    ) -> NoFluffJobsIngestionResult:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(nofluffjobs, "run_nofluffjobs_ingestion", _fake)
+    monkeypatch.setitem(registry.CONNECTOR_REGISTRY, NOFLUFFJOBS, _fake_spec(NOFLUFFJOBS, _fake))
 
     await run_source(NOFLUFFJOBS, trigger_type="automatic")
 

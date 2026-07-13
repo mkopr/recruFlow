@@ -2250,6 +2250,140 @@ number the user types in, no persisted config in between. See the P3US29 section
   excluded from a Source's automatic/manual fetches — no new setting, no schema change, the same
   per-Source `config_json.fetch_range` value now governs both ingestion and scoring selection.
 
+### Connector extensibility + stop/start toggle (P3US37)
+
+- **Purpose**: six more connectors (P3US38-44, Bulldogjob through WeWorkRemotely) were queued
+  immediately after this story, each of which would otherwise repeat the same six-file
+  hand-edit (a new connector module, `normalize.py`, `registry.py`, `scheduler/service.py`,
+  `llm/matcher.py`, five frontend call sites) with nothing catching an omission — the worst
+  failure already seen in this project was a connector missing from `LANGCHAIN_SOURCES`:
+  ingestion succeeds, the connector's offers just never get scored, silently, forever. This
+  story does two things: (1) extracts the three existing connectors' shared scaffolding into a
+  `JobBoardConnector` Template Method base class, and (2) makes `CONNECTOR_REGISTRY` the single
+  place a connector is declared to exist, with everything else (scheduler seeding, matching
+  eligibility, every frontend connector list) deriving from it. It also adds a
+  Connector Stop/Start toggle (`connector_enabled`), independent of P3US34's Auto-Fetch — see
+  `CONTEXT.md` for both glossary entries.
+
+- **`JobBoardConnector` (`app/connectors/base.py`)** — see
+  `docs/adr/0021-jobboardconnector-template-method-boundary.md` for the full rationale. Three
+  tiers, not two:
+  - **Abstract** (`default_url`, `build_params`, `next_cursor`, `map_offer`) — no sensible
+    default exists; every subclass must supply these. `map_offer`'s body is each connector's
+    old free-standing `map_x_offer` function, moved verbatim — no mapping/normalization logic
+    changed.
+  - **Hooks** (sensible default, override only when an API needs a twist): `build_url(config)`
+    defaults to `config.get("endpoint_url", self.default_url())` — SOLID.Jobs overrides it to
+    call the free function `build_offer_url(config)` instead (division-templated, no
+    `endpoint_url` override, unchanged from before this story). `envelope_key` is a plain class
+    attribute (`"jobs"`/`"data"`/`"postings"`); `extract_offers(payload)` defaults to
+    `extract_envelope_list(payload, self.envelope_key)` — NoFluffJobs overrides it fully to pass
+    `allow_bare_list=False`. `build_headers(config)` defaults to `{}` — SOLID.Jobs overrides it
+    to return the static `{"X-Api-Version": "1.0"}` header. `runner_kwargs(config)` defaults to
+    `{}` and is merged **on top of** the generically-derived `page_size`/`max_pages`/
+    `already_seen_stop_threshold` inside `run()` — JustJoin.it returns
+    `{"rate_limit_delay": ...}` (an added key), NoFluffJobs returns
+    `{"max_pages": 1, "already_seen_stop_threshold": 1}` (a hardcoded override config can't
+    undo, preserving its "single fetch, no pagination loop" behavior from ADR 0009).
+  - **Fixed, never overridden**: `fetch_page(config, cursor, page_size)` (the
+    fetch → extract → log-on-failure → next-cursor step) and `run(session, source,
+    force_refresh=False)` (config-read → dispatch-to-`run_paginated_ingestion`). `fetch_page`
+    takes `config` as an explicit parameter — deliberately, rather than reading a `self.config`
+    set once per `run()` call — because `CONNECTOR_REGISTRY` holds one long-lived connector
+    instance per connector (constructed once at import time, see below), and a manual trigger
+    can run concurrently with an in-flight scheduled tick for the same connector; storing
+    `config` as shared mutable instance state would race between the two. `run()` instead
+    builds a fresh closure over its own local `config` on every call — the same safety the old
+    per-module closures already had, just preserved through the refactor.
+  - Each of the three connectors is now a small subclass (`SolidJobsConnector`,
+    `JustJoinItConnector`, `NoFluffJobsConnector`) implementing only the genuinely-varying
+    pieces; the free-standing `fetch_json` wrappers, `extract_offer_list` helpers, and
+    per-module `run_x_ingestion` functions are deleted, not kept alongside the new classes.
+    `SolidJobsConnector.__init__(self, *, campaign: str)` stores `campaign` on the instance
+    (previously threaded through `run_solid_jobs_ingestion`'s own `campaign` kwarg per call).
+
+- **`ConnectorSpec` / `CONNECTOR_REGISTRY` (`app/ingestion/registry.py`)** — see
+  `docs/adr/0022-connector-registry-is-the-single-source-of-truth.md`. `CONNECTOR_REGISTRY:
+  dict[str, ConnectorSpec]` replaces the old `dict[str, Connector]` — `ConnectorSpec(name,
+  label, dispatch)` adds a human-readable `label` (previously only known to the frontend's
+  `KNOWN_SOURCES` constant) alongside the dispatch callable. Each entry's `dispatch` is a bound
+  `.run` method on a constructed connector instance — `SolidJobsConnector(campaign=
+  get_settings().solid_jobs_campaign).run`, constructed once at module import time. This is
+  safe: `get_settings()` is `@lru_cache`d, so binding at import time reads the same value a
+  per-call `get_settings()` lookup would have. `dispatch_ingestion` and
+  `resolve_source_by_connector` read `.dispatch` off the spec instead of calling the dict value
+  directly. Everything else now derives from `CONNECTOR_REGISTRY`:
+  - `ensure_sources_exist` (`app/scheduler/service.py`) iterates `CONNECTOR_REGISTRY` instead of
+    a hand-maintained `DEFAULT_SOURCE_CONFIGS` dict, seeding every key with one shared
+    `_default_config_template()` (schedule, `auto_fetch_enabled`, `connector_enabled` — all
+    defaulting to sensible values) plus the existing `_default_fetch_range()`.
+  - `LANGCHAIN_SOURCES` (`app/llm/matcher.py`) is now `frozenset(CONNECTOR_REGISTRY.keys())`
+    instead of a hand-listed set. This bakes in "every registered connector is LangChain-scored"
+    as structural — which is not a new assumption: P3US23/US24 already retired the
+    originally-planned second scoring engine (`sjctl evaluate`) and made LangChain cover all
+    three sources (see the "SOLID.Jobs Matcher verification" section above). This story just
+    removes the last traces of that abandoned plan: the dead `"sjctl"` option on the
+    `MatchEngine` schema literal, and the stale "`sjctl evaluate` wrapper (SOLID.Jobs)" wording
+    in CLAUDE.md's Phase 3 overview.
+  - `GET /connectors` (new `app/api/routes/connectors.py`) returns `[{id, label}, ...]` built
+    from `CONNECTOR_REGISTRY.values()` — a separate route module from `scheduler.py` since it
+    doesn't touch `Source` rows or APScheduler at all, just the registry.
+
+- **Connector Stop/Start (`connector_enabled`)** — the flag that actually stops a connector,
+  filling the gap P3US34's Auto-Fetch glossary entry explicitly called out ("doesn't disable the
+  connector or block manual runs"). Enforced in exactly one place: `run_with_lifecycle`
+  (`app/ingestion/lifecycle.py`) checks `source.config_json.connector_enabled` immediately after
+  resolving the source — before `before_dispatch` runs, so a rejected manual trigger creates no
+  `SchedulerRun` row — and raises `ConnectorDisabledError` if it's `False`. This is a standalone
+  exception, not a `SchedulerLookupError` subclass (that family means "this connector doesn't
+  exist"; this means "it exists but is stopped"), so both `POST /scheduler/run/{source}`
+  (`app/api/routes/scheduler.py`) and `POST /ingest/{source}` (`app/api/routes/ingestion.py`,
+  which funnels through the same `run_with_lifecycle` via `trigger_ingest`) get their own
+  `except ConnectorDisabledError: raise HTTPException(409, ...)` clause distinct from the
+  existing `except SchedulerLookupError: raise HTTPException(404, ...)`. `connector_enabled` and
+  `auto_fetch_enabled` are combined with AND in exactly one shared function,
+  `connector_should_auto_run(config)` (`app/scheduler/lifecycle.py`), used by `register_jobs`'s
+  startup pause decision and by all four enabled/auto-fetch routes (single and bulk) — the same
+  "always register, conditionally pause" pattern P3US34 established, just gated on both flags
+  instead of one. This also fixed a latent asymmetry: the auto-fetch routes previously
+  paused/resumed based solely on `payload.enabled`, which would have silently resumed a
+  `connector_enabled=false` connector's job the moment auto-fetch was turned back on; they now
+  call `connector_should_auto_run` on the post-update config instead. Toggling
+  `connector_enabled` never touches `Offer` rows — no query anywhere filters offers by their
+  source's `connector_enabled`.
+
+- **Frontend** — `frontend/src/api/connectors.ts` (new) wraps `GET /connectors`;
+  `frontend/src/hooks/useKnownSources.ts` (new) fetches it once per mount, silently swallowing a
+  rejection into an empty list (mirroring `useSchedulerStatus`'s own convention) — this replaces
+  `frontend/src/constants.ts`'s deleted `KNOWN_SOURCES` array everywhere it was used
+  (`OfferFilters.tsx`, `FailureFilters.tsx`, `OfferListPage.tsx`, and the new Settings components
+  below). `frontend/src/hooks/useConnectorSettings.ts` (new) consolidates the former
+  `useFetchCadence`/`useFetchRangeSettings` hooks into one, adding `saveEnabled`/`saveEnabledAll`
+  alongside the existing interval/range/auto-fetch methods, all sharing one
+  `savingByConnector: Record<string, boolean>` map (the existing precedent — range and
+  auto-fetch already shared one map before this story). `frontend/src/lib/
+  connectorSettingsDraft.ts` (new) holds the shared minutes/datetime-local draft-conversion
+  helpers (`secondsToMinutes`, `toDatetimeLocalValue`/`fromDatetimeLocalValue`,
+  `draftFromFetchRange`, `buildRequest`) previously duplicated between
+  `FetchCadenceSection.tsx` and `FetchRangeSection.tsx`. `ConnectorSettingsCard.tsx` (new) renders
+  one connector's cadence, fetch range + auto-fetch, and stop/start controls together in a single
+  card — replacing the old one-row-per-connector-per-section layout, which duplicated the
+  connector's name across two separate sections. `ConnectorSettingsSection.tsx` (new) renders an
+  "apply to all" bar (four independent controls — cadence, range, auto-fetch, stop/start) above a
+  vertical stack of `ConnectorSettingsCard`s, one per `useKnownSources()` entry — a vertical card
+  stack rather than a widening row-based table is what keeps the page legible as more connectors
+  are registered (P3US38-44 add six more). `FetchCadenceSection.tsx`, `FetchRangeSection.tsx`,
+  `useFetchCadence.ts`, and `useFetchRangeSettings.ts` (and their test files) are deleted, not
+  kept alongside the new components.
+
+- **Adding a connector, end to end**: (1) write `app/connectors/<name>.py` subclassing
+  `JobBoardConnector`, implementing the 4 abstract methods and overriding a hook only if the
+  API genuinely needs it; (2) add one `ConnectorSpec` entry to `CONNECTOR_REGISTRY`
+  (`app/ingestion/registry.py`); (3) add a `normalize.py` vocabulary mapping only if the new
+  API introduces raw values not already covered. Nothing else to touch — scheduler seeding
+  (`ensure_sources_exist`), matching eligibility (`LANGCHAIN_SOURCES`), and every frontend list
+  (`useKnownSources`) pick it up automatically.
+
 ### Makefile targets
 
 - `install` — `uv sync --all-groups` + `cd frontend && pnpm install`.

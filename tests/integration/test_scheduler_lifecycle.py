@@ -11,7 +11,7 @@ from app.scheduler.lifecycle import (
     register_jobs,
     register_scoring_job,
 )
-from app.scheduler.service import DEFAULT_SOURCE_CONFIGS
+from app.scheduler.service import _default_config_template
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import delete
@@ -31,9 +31,9 @@ async def test_lifespan_registers_one_job_per_builtin_source_with_configured_int
         assert build_job_id(connector) in jobs
 
     # P3US28: all three built-in connectors now default to a uniform 300s interval.
+    expected_seconds = _default_config_template()["schedule"]["seconds"]
     for connector in (SOLID_JOBS, JUSTJOINIT, NOFLUFFJOBS):
         job = jobs[build_job_id(connector)]
-        expected_seconds = DEFAULT_SOURCE_CONFIGS[connector]["schedule"]["seconds"]
         assert isinstance(job.trigger, IntervalTrigger)
         assert job.trigger.interval.total_seconds() == expected_seconds
 
@@ -114,6 +114,44 @@ async def test_register_jobs_pauses_job_for_source_with_auto_fetch_disabled() ->
     # `next_run_time` is only assigned once the scheduler is actually running (APScheduler
     # leaves it unset entirely on a not-yet-started scheduler) -- start/shutdown it here to
     # match the real app.state.scheduler this behavior is verified against elsewhere.
+    scheduler = AsyncIOScheduler(timezone="UTC")
+    scheduler.start()
+    try:
+        await register_jobs(scheduler, sessionmaker)
+        job = scheduler.get_job(build_job_id(connector))
+        assert job is not None
+        assert job.next_run_time is None
+    finally:
+        scheduler.shutdown(wait=False)
+        async with sessionmaker() as session:
+            await session.execute(delete(Source).where(Source.id == source_id))
+            await session.commit()
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_register_jobs_pauses_job_for_source_with_connector_disabled() -> None:
+    # Mirrors test_register_jobs_pauses_job_for_source_with_auto_fetch_disabled above, but for
+    # the other half of connector_should_auto_run's AND (P3US37): auto_fetch_enabled=True alone
+    # must not be enough to leave the job running if connector_enabled is False.
+    engine = get_engine()
+    sessionmaker = get_sessionmaker(engine)
+    connector = f"stopped-{uuid4()}"
+    async with sessionmaker() as session:
+        source = Source(
+            name=connector,
+            connector=connector,
+            config_json={
+                "schedule": {"type": "interval", "seconds": 300},
+                "auto_fetch_enabled": True,
+                "connector_enabled": False,
+            },
+        )
+        session.add(source)
+        await session.commit()
+        source_id = source.id
+
     scheduler = AsyncIOScheduler(timezone="UTC")
     scheduler.start()
     try:

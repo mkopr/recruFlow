@@ -1,33 +1,66 @@
-import logging
 from typing import Any
 
 import pytest
-from app.connectors import justjoinit
-from app.connectors.justjoinit import _extract_offer_list, map_justjoinit_offer
+from app.connectors.justjoinit import JustJoinItConnector
 from app.ingestion.normalize import JUSTJOINIT
 
 
-def test_extract_offer_list_delegates_to_shared_envelope_extractor_with_data_key(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_default_url_is_the_justjoinit_offers_endpoint() -> None:
+    connector = JustJoinItConnector()
+
+    assert connector.build_url({}) == "https://justjoin.it/api/candidate-api/offers"
+
+
+def test_build_url_honors_endpoint_url_override_from_config() -> None:
+    connector = JustJoinItConnector()
+
+    assert connector.build_url({"endpoint_url": "https://example.test/offers"}) == (
+        "https://example.test/offers"
+    )
+
+
+def test_build_params_uses_cursor_as_from_offset() -> None:
+    connector = JustJoinItConnector()
+
+    assert connector.build_params({}, cursor=20, page_size=10) == {"from": 20, "itemsCount": 10}
+
+
+def test_next_cursor_reads_meta_next_cursor_defensively() -> None:
+    connector = JustJoinItConnector()
+
+    assert connector.next_cursor({"meta": {"next": {"cursor": 5}}}, [], cursor=0, page_size=10) == 5
+    assert connector.next_cursor({}, [], cursor=0, page_size=10) is None
+    assert connector.next_cursor({"meta": "not-a-dict"}, [], cursor=0, page_size=10) is None
+    assert (
+        connector.next_cursor({"meta": {"next": "not-a-dict"}}, [], cursor=0, page_size=10) is None
+    )
+    assert (
+        connector.next_cursor(
+            {"meta": {"next": {"cursor": "not-an-int"}}}, [], cursor=0, page_size=10
+        )
+        is None
+    )
+
+
+def test_justjoinit_runner_kwargs_forwards_rate_limit_delay() -> None:
+    connector = JustJoinItConnector()
+
+    assert connector.runner_kwargs({"rate_limit_delay_seconds": 2.5}) == {"rate_limit_delay": 2.5}
+    assert connector.runner_kwargs({}) == {"rate_limit_delay": 1.0}
+
+
+def test_extract_offers_uses_data_envelope_key() -> None:
     # shared envelope-shape behaviour (bare list, dict-with-key, None, wrong type,
     # non-dict items) is covered once in tests/test_ingestion_normalize.py
-    calls: dict[str, Any] = {}
+    connector = JustJoinItConnector()
 
-    def _fake_extract_envelope_list(payload: Any, key: str, **kwargs: Any) -> Any:
-        calls["args"] = (payload, key, kwargs)
-        return [{"title": "a"}]
-
-    monkeypatch.setattr(justjoinit, "extract_envelope_list", _fake_extract_envelope_list)
-
-    result = _extract_offer_list({"data": [{"title": "a"}]})
-
-    assert result == [{"title": "a"}]
-    assert calls["args"][1] == "data"
-    assert calls["args"][2] == {}
+    assert connector.envelope_key == "data"
+    assert connector.extract_offers({"data": [{"title": "a"}]}) == [{"title": "a"}]
 
 
 def test_map_justjoinit_offer_maps_all_known_fields(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
     # see tests/test_ingestion_validate.py: alembic's fileConfig (triggered by
     # integration tests in the same session) can disable this logger.
     logging.getLogger("app.ingestion.normalize").disabled = False
@@ -66,7 +99,7 @@ def test_map_justjoinit_offer_maps_all_known_fields(caplog: pytest.LogCaptureFix
     }
 
     with caplog.at_level(logging.WARNING, logger="app.ingestion.normalize"):
-        result = map_justjoinit_offer(1, raw)
+        result = JustJoinItConnector().map_offer(1, raw)
 
     assert result == {
         "source_id": 1,
@@ -97,7 +130,7 @@ def test_map_justjoinit_offer_maps_all_known_fields(caplog: pytest.LogCaptureFix
 def test_map_justjoinit_offer_handles_missing_optional_fields() -> None:
     raw = {"title": "Backend Engineer", "companyName": "Acme"}
 
-    result = map_justjoinit_offer(1, raw)
+    result = JustJoinItConnector().map_offer(1, raw)
 
     assert result["external_id"] is None
     assert result["canonical_url"] is None
@@ -119,9 +152,10 @@ def test_map_justjoinit_offer_maps_remote_via_shared_normalizer() -> None:
     hybrid_raw = {"title": "x", "companyName": "y", "workplaceType": "hybrid"}
     office_raw = {"title": "x", "companyName": "y", "workplaceType": "office"}
 
-    assert map_justjoinit_offer(1, remote_raw)["remote"] is True
-    assert map_justjoinit_offer(1, hybrid_raw)["remote"] is False
-    assert map_justjoinit_offer(1, office_raw)["remote"] is False
+    connector = JustJoinItConnector()
+    assert connector.map_offer(1, remote_raw)["remote"] is True
+    assert connector.map_offer(1, hybrid_raw)["remote"] is False
+    assert connector.map_offer(1, office_raw)["remote"] is False
 
 
 def test_map_justjoinit_offer_joins_multiple_locations() -> None:
@@ -131,7 +165,7 @@ def test_map_justjoinit_offer_joins_multiple_locations() -> None:
         "locations": [{"city": "Warszawa"}, {"city": "Kraków"}],
     }
 
-    result = map_justjoinit_offer(1, raw)
+    result = JustJoinItConnector().map_offer(1, raw)
 
     assert result["location"] == "Warszawa, Kraków"
 
@@ -149,7 +183,7 @@ def test_map_justjoinit_offer_uses_first_employment_type_as_primary() -> None:
         ],
     }
 
-    result = map_justjoinit_offer(1, raw)
+    result = JustJoinItConnector().map_offer(1, raw)
 
     assert result["salary_min"] == 100
     assert result["salary_max"] == 200
@@ -159,6 +193,8 @@ def test_map_justjoinit_offer_uses_first_employment_type_as_primary() -> None:
 def test_map_justjoinit_offer_calls_shared_normalize_functions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.connectors import justjoinit
+
     calls: dict[str, tuple[Any, ...]] = {}
 
     def _record(name: str) -> Any:
@@ -183,7 +219,7 @@ def test_map_justjoinit_offer_calls_shared_normalize_functions(
         "experienceLevel": "senior",
         "employmentTypes": [{"from": 18000, "to": 24000, "currency": "PLN"}],
     }
-    map_justjoinit_offer(1, raw)
+    JustJoinItConnector().map_offer(1, raw)
 
     assert calls["normalize_remote"][0] == JUSTJOINIT
     assert calls["normalize_seniority"][0] == JUSTJOINIT

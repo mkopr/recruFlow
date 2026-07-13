@@ -38,6 +38,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/connectors': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Connectors */
+    get: operations['list_connectors_connectors_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/scheduler/run/{source}': {
     parameters: {
       query?: never;
@@ -167,6 +184,40 @@ export interface paths {
     get?: never;
     /** Update Source Auto Fetch */
     put: operations['update_source_auto_fetch_scheduler_sources__source__auto_fetch_put'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/scheduler/sources/enabled': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /** Update All Source Enabled */
+    put: operations['update_all_source_enabled_scheduler_sources_enabled_put'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/scheduler/sources/{source}/enabled': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /** Update Source Enabled */
+    put: operations['update_source_enabled_scheduler_sources__source__enabled_put'];
     post?: never;
     delete?: never;
     options?: never;
@@ -414,6 +465,18 @@ export interface components {
       issuer?: string | null;
       /** Year */
       year?: number | null;
+    };
+    /** ConnectorEnabledUpdateRequest */
+    ConnectorEnabledUpdateRequest: {
+      /** Enabled */
+      enabled: boolean;
+    };
+    /** ConnectorOption */
+    ConnectorOption: {
+      /** Id */
+      id: string;
+      /** Label */
+      label: string;
     };
     /** DeleteOffersResponse */
     DeleteOffersResponse: {
@@ -883,6 +946,8 @@ export interface components {
       };
       /** Auto Fetch Enabled */
       auto_fetch_enabled: boolean;
+      /** Connector Enabled */
+      connector_enabled: boolean;
       /** Last Fetched At */
       last_fetched_at: string | null;
       /** Last Run Id */
@@ -966,6 +1031,26 @@ export interface operations {
           'application/json': {
             [key: string]: string;
           };
+        };
+      };
+    };
+  };
+  list_connectors_connectors_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ConnectorOption'][];
         };
       };
     };
@@ -1202,6 +1287,74 @@ export interface operations {
     requestBody: {
       content: {
         'application/json': components['schemas']['AutoFetchUpdateRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SourceStatus'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  update_all_source_enabled_scheduler_sources_enabled_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ConnectorEnabledUpdateRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SchedulerStatusResponse'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  update_source_enabled_scheduler_sources__source__enabled_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        source: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ConnectorEnabledUpdateRequest'];
       };
     };
     responses: {

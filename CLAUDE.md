@@ -50,7 +50,7 @@ The system is structured around these phases (see `user stories/000 high level g
 - **Phase 0** — Foundations: project scaffold, Docker Compose, DB bootstrap, FastAPI skeleton, CI
 - **Phase 1** — Ingestion: connectors for SOLID.Jobs, JustJoin.it, NoFluffJobs (all direct HTTP APIs); APScheduler; offer list UI
 - **Phase 2** — Profile: candidate profile schema, CV upload + LLM extraction, profile editor UI, sjctl sync
-- **Phase 3** — Matching: unified `MatchScore` schema, LangChain Matcher (JustJoin.it/NoFluffJobs), `sjctl evaluate` wrapper (SOLID.Jobs), batch scoring job
+- **Phase 3** — Matching: unified `MatchScore` schema, LangChain Matcher (all registered connectors), batch scoring job
 - **Phase 4** — Application: CV tailoring chain, cover letter generation, review UI, SMTP send, status tracking
 - **Phase 5** — Swarm: batch draft generation with SSE progress, dry-run gate, send queue worker (rate-limited), Playwright form-fill
 - **Phase 6** — Hardening: source health monitoring, digest notifications, outcome dashboard, PDF/DOCX export
@@ -59,7 +59,7 @@ Key architectural constraints:
 - **ELT pattern**: raw API payload always stored before normalisation
 - **Dedup**: hash on canonical URL; fallback hash on title + company + location
 - **No auto-send**: Applications are never created or sent without explicit user approval
-- **Unified MatchScore**: both LangChain Matcher and `sjctl evaluate` write to the same schema/table; `engine` field distinguishes them
+- **Unified MatchScore**: every connector is scored by the same LangChain Matcher into one schema/table; the `engine` field is kept for schema stability but is only ever `"langchain"` today — the originally-planned second engine (`sjctl evaluate`, SOLID.Jobs-only) was abandoned before P3US23 shipped (see ARCHITECTURE.md's P3US23 section and `docs/adr/0022-connector-registry-is-the-single-source-of-truth.md`)
 - **SSE for swarm progress**: not WebSocket (OD-8)
 - **Send queue**: rate-limited, daily cap enforced as a hard block (OD-5)
 
@@ -70,7 +70,8 @@ Use these terms consistently in code, schemas, and PR descriptions:
 | Term | Definition |
 |---|---|
 | **Offer** | A normalised job posting with exactly one Source. Alongside its ingestion-sourced fields, it carries four user-owned fields — `applied`, `hide`, `notes`, `link_opened_at` — set only via `PATCH /offers/{offer_id}`, never by ingestion or scoring |
-| **Source** | A job board connector (SOLID.Jobs, JustJoin.it, NoFluffJobs) |
+| **Source** | The DB row holding one Connector's schedule, fetch-range, and enabled state — exactly one per registered Connector |
+| **Connector** | A job board integration's code identity: a string key (e.g. `solid_jobs`), its `JobBoardConnector` subclass, and its `ConnectorSpec` entry (name/label/dispatch) in `CONNECTOR_REGISTRY` |
 | **Raw Payload** | Unmodified API/scrape response stored at ingest time |
 | **Profile** | Candidate's structured facts: skills, experience, preferences, constraints |
 | **Match Score** | Structured evaluation of one Offer against the active Profile (score_percent 0-100 + dimensions) |

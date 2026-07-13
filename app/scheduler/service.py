@@ -12,8 +12,7 @@ from app.db.models import IngestionFailure, SchedulerRun, Source
 from app.db.session import get_engine, get_sessionmaker
 from app.dlq.service import record_failure
 from app.ingestion.lifecycle import run_with_lifecycle
-from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
-from app.ingestion.registry import resolve_source_by_connector
+from app.ingestion.registry import CONNECTOR_REGISTRY, resolve_source_by_connector
 from app.ingestion.types import IngestionResult
 from app.scheduler.runs import finish_run_error, finish_run_ok, start_run
 from app.scoring import batch
@@ -21,11 +20,19 @@ from app.scoring.events import publish_score
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SOURCE_CONFIGS: dict[str, dict[str, Any]] = {
-    SOLID_JOBS: {"schedule": {"type": "interval", "seconds": 300}, "auto_fetch_enabled": True},
-    JUSTJOINIT: {"schedule": {"type": "interval", "seconds": 300}, "auto_fetch_enabled": True},
-    NOFLUFFJOBS: {"schedule": {"type": "interval", "seconds": 300}, "auto_fetch_enabled": True},
-}
+
+def _default_config_template() -> dict[str, Any]:
+    """The one config shape every registered Connector is seeded with (P3US37, see
+    `docs/adr/0022-connector-registry-is-the-single-source-of-truth.md`) -- replaces the
+    three near-duplicated `DEFAULT_SOURCE_CONFIGS` entries this used to be. No per-connector
+    overrides exist today; a future connector needing a different default schedule would add
+    one after seeding, the same way `_default_fetch_range` is layered on in `ensure_sources_exist`.
+    """
+    return {
+        "schedule": {"type": "interval", "seconds": 300},
+        "auto_fetch_enabled": True,
+        "connector_enabled": True,
+    }
 
 
 def _default_fetch_range() -> dict[str, Any]:
@@ -41,13 +48,13 @@ def _default_fetch_range() -> dict[str, Any]:
 
 
 async def ensure_sources_exist(session: AsyncSession) -> None:
-    for connector, config in DEFAULT_SOURCE_CONFIGS.items():
+    for connector in CONNECTOR_REGISTRY:
         stmt = (
             pg_insert(Source)
             .values(
                 name=connector,
                 connector=connector,
-                config_json={**config, "fetch_range": _default_fetch_range()},
+                config_json={**_default_config_template(), "fetch_range": _default_fetch_range()},
             )
             .on_conflict_do_nothing(index_elements=[Source.name])
         )
@@ -217,5 +224,20 @@ async def set_all_source_auto_fetch(session: AsyncSession, enabled: bool) -> lis
     sources = (await session.scalars(select(Source).where(Source.connector.is_not(None)))).all()
     for source in sources:
         source.config_json = {**source.config_json, "auto_fetch_enabled": enabled}
+        await session.flush()
+    return list(sources)
+
+
+async def set_source_enabled(session: AsyncSession, connector: str, enabled: bool) -> Source:
+    source = await resolve_source_by_connector(session, connector)
+    source.config_json = {**source.config_json, "connector_enabled": enabled}
+    await session.flush()
+    return source
+
+
+async def set_all_source_enabled(session: AsyncSession, enabled: bool) -> list[Source]:
+    sources = (await session.scalars(select(Source).where(Source.connector.is_not(None)))).all()
+    for source in sources:
+        source.config_json = {**source.config_json, "connector_enabled": enabled}
         await session.flush()
     return list(sources)

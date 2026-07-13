@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 import pytest
 from app.schemas.scheduler import (
     AutoFetchUpdateRequest,
+    ConnectorEnabledUpdateRequest,
     FetchRangeUpdateRequest,
     IntervalUpdateRequest,
 )
@@ -58,3 +59,7 @@ def test_fetch_range_update_request_all_mode_ignores_since_until() -> None:
 
 def test_auto_fetch_update_request_accepts_enabled_bool() -> None:
     assert AutoFetchUpdateRequest(enabled=False).enabled is False
+
+
+def test_connector_enabled_update_request_accepts_enabled_bool() -> None:
+    assert ConnectorEnabledUpdateRequest(enabled=False).enabled is False

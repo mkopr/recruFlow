@@ -29,6 +29,7 @@ class SourceStatus(BaseModel):
     schedule: dict[str, Any]
     fetch_range: dict[str, Any]
     auto_fetch_enabled: bool
+    connector_enabled: bool
     last_fetched_at: datetime | None
     last_run_id: int | None
     last_run_started_at: datetime | None
@@ -71,4 +72,8 @@ class FetchRangeUpdateRequest(BaseModel):
 
 
 class AutoFetchUpdateRequest(BaseModel):
+    enabled: bool
+
+
+class ConnectorEnabledUpdateRequest(BaseModel):
     enabled: bool

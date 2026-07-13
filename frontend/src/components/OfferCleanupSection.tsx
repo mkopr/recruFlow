@@ -5,7 +5,7 @@ import { useOfferCleanup } from '../hooks/useOfferCleanup';
 function toOlderThanParam(dateStr: string): string {
   // dateStr is "YYYY-MM-DD" from <input type="date">, which carries no timezone --
   // anchor it to UTC midnight so it's unambiguous once it reaches the API, matching
-  // FetchRangeSection's convention of always sending a UTC-anchored ISO string.
+  // connectorSettingsDraft.ts's convention of always sending a UTC-anchored ISO string.
   return new Date(`${dateStr}T00:00:00Z`).toISOString();
 }
 

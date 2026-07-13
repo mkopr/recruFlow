@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from app.connectors.justjoinit import run_justjoinit_ingestion
+from app.connectors.justjoinit import JustJoinItConnector
 from app.db.models import Offer as OfferModel
 from app.db.models import Source
 from app.ingestion.types import IngestionResult
@@ -81,7 +81,7 @@ async def test_run_justjoinit_ingestion_persists_and_maps_offers(
         httpx, "get", lambda *a, **kw: _FakeResponse(json_data=_offers_payload([offer]))
     )
 
-    result = await run_justjoinit_ingestion(db_session, source)
+    result = await JustJoinItConnector().run(db_session, source)
     await db_session.commit()
 
     assert result == IngestionResult(ok=True, fetched=1, created=1)
@@ -103,7 +103,7 @@ async def test_run_justjoinit_ingestion_handles_zero_offers(
     source = await _create_source(db_session)
     monkeypatch.setattr(httpx, "get", lambda *a, **kw: _FakeResponse(json_data=_offers_payload([])))
 
-    result = await run_justjoinit_ingestion(db_session, source)
+    result = await JustJoinItConnector().run(db_session, source)
     await db_session.commit()
 
     assert result == IngestionResult(ok=True, fetched=0, created=0)
@@ -121,7 +121,7 @@ async def test_run_justjoinit_ingestion_returns_not_ok_on_transport_failure(
 
     monkeypatch.setattr(httpx, "get", _raise)
 
-    result = await run_justjoinit_ingestion(db_session, source)
+    result = await JustJoinItConnector().run(db_session, source)
     await db_session.commit()
 
     assert result == IngestionResult(
@@ -145,7 +145,7 @@ async def test_run_justjoinit_ingestion_returns_not_ok_on_unexpected_shape(
         httpx, "get", lambda *a, **kw: _FakeResponse(json_data={"unexpected": "shape"})
     )
 
-    result = await run_justjoinit_ingestion(db_session, source)
+    result = await JustJoinItConnector().run(db_session, source)
     await db_session.commit()
 
     assert result.ok is False
@@ -171,7 +171,7 @@ async def test_run_justjoinit_ingestion_skips_invalid_offer_without_crashing(
         lambda *a, **kw: _FakeResponse(json_data=_offers_payload([valid_offer, invalid_offer])),
     )
 
-    result = await run_justjoinit_ingestion(db_session, source)
+    result = await JustJoinItConnector().run(db_session, source)
     await db_session.commit()
 
     assert result.ok is True
@@ -196,9 +196,9 @@ async def test_run_justjoinit_ingestion_dedups_on_reingest(
         httpx, "get", lambda *a, **kw: _FakeResponse(json_data=_offers_payload([offer]))
     )
 
-    first = await run_justjoinit_ingestion(db_session, source)
+    first = await JustJoinItConnector().run(db_session, source)
     await db_session.commit()
-    second = await run_justjoinit_ingestion(db_session, source)
+    second = await JustJoinItConnector().run(db_session, source)
     await db_session.commit()
 
     assert first.created == 1
@@ -248,7 +248,7 @@ async def test_run_justjoinit_ingestion_stops_pagination_after_consecutive_alrea
             json_data=_paged_payload(already_seen_offers, next_cursor=None)
         ),
     )
-    await run_justjoinit_ingestion(db_session, source)
+    await JustJoinItConnector().run(db_session, source)
     await db_session.commit()
 
     new_offers = [_raw_offer(), _raw_offer()]
@@ -265,7 +265,7 @@ async def test_run_justjoinit_ingestion_stops_pagination_after_consecutive_alrea
 
     monkeypatch.setattr(httpx, "get", _fake_get)
 
-    result = await run_justjoinit_ingestion(db_session, source)
+    result = await JustJoinItConnector().run(db_session, source)
     await db_session.commit()
 
     assert calls == [0, 2]
@@ -297,7 +297,7 @@ async def test_run_justjoinit_ingestion_force_refresh_bypasses_early_stop(
             json_data=_paged_payload(already_seen_offers, next_cursor=None)
         ),
     )
-    await run_justjoinit_ingestion(db_session, source)
+    await JustJoinItConnector().run(db_session, source)
     await db_session.commit()
 
     new_offer = _raw_offer()
@@ -316,7 +316,7 @@ async def test_run_justjoinit_ingestion_force_refresh_bypasses_early_stop(
 
     monkeypatch.setattr(httpx, "get", _fake_get)
 
-    result = await run_justjoinit_ingestion(db_session, source, force_refresh=True)
+    result = await JustJoinItConnector().run(db_session, source, force_refresh=True)
     await db_session.commit()
 
     assert calls == [0, 2, 4]
@@ -345,7 +345,7 @@ async def test_run_justjoinit_ingestion_respects_max_pages_ceiling(
 
     monkeypatch.setattr(httpx, "get", _fake_get)
 
-    result = await run_justjoinit_ingestion(db_session, source)
+    result = await JustJoinItConnector().run(db_session, source)
     await db_session.commit()
 
     assert calls == [0, 1, 2]
@@ -377,7 +377,7 @@ async def test_run_justjoinit_ingestion_range_mode_skips_offers_outside_since_un
         lambda *a, **kw: _FakeResponse(json_data=_offers_payload([in_range, out_of_range])),
     )
 
-    result = await run_justjoinit_ingestion(db_session, source)
+    result = await JustJoinItConnector().run(db_session, source)
     await db_session.commit()
 
     assert result.fetched == 2
