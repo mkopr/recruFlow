@@ -1558,6 +1558,46 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   ingestion-focused test's scheduler run from triggering a real batch-scoring pass, back when
   ingestion itself triggered scoring (BUG16). BUG29 removed that trigger entirely (see above), so
   neither guard has anything left to protect against and both were deleted along with it.
+- **Fetch Range-aware selection and offer cleanup (P3US36)**: `_fetch_unscored_offers` and
+  `_count_unscored_offers` now reuse `resolve_fetch_range` (`app/ingestion/runner.py`, US34) so
+  scoring never spends an LLM call on an offer the user has already excluded from ingestion via a
+  narrowed Fetch Range — see CONTEXT.md's "Fetch Range" and "Offer Cleanup" entries, and
+  `docs/adr/0020-scoring-backlog-filter-favors-simplicity-over-scan-cost.md`. The query is split
+  into `_candidate_offers_stmt(profile_id)` (the existing already-scored/open-failure/connector
+  filter, now also selecting `Source.config_json`) and a pure predicate, `_in_fetch_range(offer,
+  config_json)`, applied in Python over the full candidate set rather than in SQL — deliberately
+  accepting a full per-call materialize (over the DB-side `.limit()`/`func.count()` the
+  pre-US36 version used) in exchange for not duplicating `resolve_fetch_range`'s parsing/fail-open
+  logic in a second, SQL-shaped form; see the ADR for the concrete cost/benefit reasoning. A
+  Source with `mode: "all"` or no `fetch_range` at all is unaffected — every offer from it is
+  still a candidate exactly as before. Narrowing a Source's Fetch Range never invalidates an
+  existing `MatchScore` (unlike a Profile edit, BUG30 above) — it only changes future offer
+  selection; an offer that becomes ineligible today becomes eligible again automatically, with no
+  manual intervention, the moment its Source's range widens or flips back to `"all"`.
+- **`DELETE /offers` and `GET /offers/cleanup-preview` (P3US36)**: a manually-triggered, global
+  (cross-source) bulk delete for offers that have aged out, plus a paired read-only preview so the
+  Settings UI can show an accurate pre-delete count before the user confirms. Both routes share
+  `_partition_offers_for_cleanup(session, older_than)` (`app/api/routes/offers.py`): an Offer is a
+  deletion candidate only if `posted_at` is non-null and strictly before `older_than` (a null
+  `posted_at` is never treated as "old" the way scoring's Fetch Range treats it as "now" — see
+  CONTEXT.md's "Offer Cleanup" entry for why the two deliberately differ); candidates that have
+  *any* `Application` row, in any status, under any Profile, are excluded and counted separately as
+  `skipped` rather than deleted. Deleting an Offer cascades its `MatchScore`, `ScoringFailure`, and
+  `CVVersion` rows in the same transaction, explicit ordered `DELETE`s rather than a schema-level
+  `ondelete=CASCADE` (matching this codebase's established convention, e.g.
+  `_delete_sources_with_offers` in the test suite) — `Application`'s own FK to `offers.id` stays a
+  hard, untouched `RESTRICT`, since any offer with an Application row is by construction never a
+  deletion candidate. `GET /offers/cleanup-preview` is registered *before* `GET
+  /offers/{offer_id}` in the router: FastAPI's `{offer_id}` path parameter matches any string at
+  the Starlette routing layer (the `int` type is enforced by FastAPI's own validation *after* the
+  route already matched, not by the route's regex), so `cleanup-preview` would otherwise match
+  `get_offer` first and 422 on int-conversion before ever reaching the intended handler.
+  `older_than` is a required `Query(...)` param on both routes (FastAPI 422s automatically if it's
+  missing) — there is no "delete everything" default. As of this story, `Application` rows have no
+  creation path anywhere in the running app (Phase 4 — CV tailoring/sending — is not yet built),
+  so in real usage today `skipped` is always `0`; the check is built now against the existing
+  schema so it is already correct once Phase 4 lands, and is exercised today only by tests and by
+  inserting an `Application` row directly via SQL for manual verification.
 
 ### Offer list with scores (P3US26)
 
@@ -2200,7 +2240,15 @@ number the user types in, no persisted config in between. See the P3US29 section
   toggleable per the acceptance criteria. `SettingsPage.tsx` renders this between
   `FetchCadenceSection` and `NotificationsSection` — grouped there because cadence and
   range/auto-fetch all govern the same automatic scheduled job, sourced from the same `GET
-  /scheduler/status` call.
+  /scheduler/status` call. (P3US36 later inserts its own `OfferCleanupSection` between this
+  section and `NotificationsSection`, so this is no longer the immediate predecessor of
+  Notifications — see below.)
+- **Scoring reuses Fetch Range (P3US36)**: this story's `fetch_range` concept and
+  `resolve_fetch_range` function were built for ingestion-time filtering only; P3US36 (see the
+  "Batch scoring job" section above) later imports `resolve_fetch_range` unchanged into
+  `app/scoring/batch.py` so batch scoring stops spending LLM calls on offers the user has already
+  excluded from a Source's automatic/manual fetches — no new setting, no schema change, the same
+  per-Source `config_json.fetch_range` value now governs both ingestion and scoring selection.
 
 ### Makefile targets
 

@@ -88,3 +88,13 @@ class OfferListResponse(BaseModel):
 
     items: list[OfferSummary]
     total: int = Field(description="Total offers matching the filters, ignoring limit/offset")
+
+
+class OfferCleanupPreviewResponse(BaseModel):
+    would_delete: int
+    would_skip: int
+
+
+class DeleteOffersResponse(BaseModel):
+    deleted: int
+    skipped: int

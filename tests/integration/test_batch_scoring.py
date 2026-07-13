@@ -3,6 +3,7 @@ import logging
 from collections.abc import AsyncGenerator, Iterator
 from datetime import UTC, datetime, timedelta
 from functools import partial
+from typing import Any
 from uuid import uuid4
 
 import httpx
@@ -18,7 +19,12 @@ from app.db.session import get_sessionmaker
 from app.ingestion.types import IngestionResult
 from app.llm.matcher import _MatcherOutput
 from app.scoring import batch
-from app.scoring.batch import BatchScoringSummary, count_unscored_backlog, run_batch_scoring
+from app.scoring.batch import (
+    BatchScoringSummary,
+    _fetch_unscored_offers,
+    count_unscored_backlog,
+    run_batch_scoring,
+)
 from langchain_core.messages import BaseMessage
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -78,6 +84,15 @@ async def _delete_sources_and_dependents(session: AsyncSession, source_ids: list
     )
     await session.execute(delete(OfferModel).where(OfferModel.source_id.in_(source_ids)))
     await session.execute(delete(Source).where(Source.id.in_(source_ids)))
+    await session.commit()
+
+
+async def _set_fetch_range(
+    session: AsyncSession, source_id: int, fetch_range: dict[str, Any]
+) -> None:
+    source = await session.get(Source, source_id)
+    assert source is not None
+    source.config_json = {**source.config_json, "fetch_range": fetch_range}
     await session.commit()
 
 
@@ -700,5 +715,211 @@ async def test_scoring_status_reflects_last_completed_run(
         assert body["last_scored"] == 1
         assert body["last_failed"] == 0
         assert body["remaining_backlog"] == 0
+    finally:
+        await _delete_sources_and_dependents(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_fetch_unscored_offers_excludes_offers_outside_source_range(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connector = _fake_connector()
+    _isolate_langchain_sources(monkeypatch, connector)
+
+    await _deactivate_all_profiles(db_session)
+    source_id = await _create_source(db_session, connector=connector)
+    try:
+        now = datetime.now(UTC)
+        in_range = await _create_offer(db_session, source_id, posted_at=now - timedelta(days=5))
+        await _create_offer(db_session, source_id, posted_at=now - timedelta(days=30))
+        await _create_offer(db_session, source_id, posted_at=now + timedelta(days=30))
+        profile = await _create_profile(db_session)
+        await _set_fetch_range(
+            db_session,
+            source_id,
+            {
+                "mode": "range",
+                "since": (now - timedelta(days=10)).isoformat(),
+                "until": (now + timedelta(days=10)).isoformat(),
+            },
+        )
+
+        selected = await _fetch_unscored_offers(db_session, profile.id, limit=10)
+
+        assert [offer.id for offer, _ in selected] == [in_range]
+    finally:
+        await _delete_sources_and_dependents(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_fetch_unscored_offers_mode_all_returns_everything(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connector = _fake_connector()
+    _isolate_langchain_sources(monkeypatch, connector)
+
+    await _deactivate_all_profiles(db_session)
+    source_id = await _create_source(db_session, connector=connector)
+    try:
+        now = datetime.now(UTC)
+        await _create_offer(db_session, source_id, posted_at=now - timedelta(days=400))
+        await _create_offer(db_session, source_id, posted_at=now)
+        profile = await _create_profile(db_session)
+        await _set_fetch_range(db_session, source_id, {"mode": "all"})
+
+        selected = await _fetch_unscored_offers(db_session, profile.id, limit=10)
+
+        assert len(selected) == 2
+    finally:
+        await _delete_sources_and_dependents(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_fetch_unscored_offers_null_posted_at_excluded_when_until_in_past(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connector = _fake_connector()
+    _isolate_langchain_sources(monkeypatch, connector)
+
+    await _deactivate_all_profiles(db_session)
+    source_id = await _create_source(db_session, connector=connector)
+    try:
+        await _create_offer(db_session, source_id, posted_at=None)
+        profile = await _create_profile(db_session)
+        now = datetime.now(UTC)
+        await _set_fetch_range(
+            db_session, source_id, {"mode": "range", "until": (now - timedelta(days=1)).isoformat()}
+        )
+
+        selected = await _fetch_unscored_offers(db_session, profile.id, limit=10)
+        assert selected == []
+
+        await _set_fetch_range(db_session, source_id, {"mode": "range", "until": None})
+
+        selected_again = await _fetch_unscored_offers(db_session, profile.id, limit=10)
+        assert len(selected_again) == 1
+    finally:
+        await _delete_sources_and_dependents(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_count_unscored_backlog_matches_range_filtered_fetch(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connector = _fake_connector()
+    _isolate_langchain_sources(monkeypatch, connector)
+
+    await _deactivate_all_profiles(db_session)
+    source_id = await _create_source(db_session, connector=connector)
+    try:
+        now = datetime.now(UTC)
+        await _create_offer(db_session, source_id, posted_at=now - timedelta(days=5))
+        await _create_offer(db_session, source_id, posted_at=now - timedelta(days=30))
+        profile = await _create_profile(db_session)
+        await _set_fetch_range(
+            db_session,
+            source_id,
+            {"mode": "range", "since": (now - timedelta(days=10)).isoformat()},
+        )
+
+        backlog = await count_unscored_backlog(db_session)
+        selected = await _fetch_unscored_offers(db_session, profile.id, limit=1000)
+
+        assert backlog == len(selected)
+        assert backlog == 1
+    finally:
+        await _delete_sources_and_dependents(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_scoring_status_unscored_backlog_matches_batch_run_with_range(
+    client: httpx.AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connector = _fake_connector()
+    _isolate_langchain_sources(monkeypatch, connector)
+
+    await _deactivate_all_profiles(db_session)
+    source_id = await _create_source(db_session, connector=connector)
+    try:
+        now = datetime.now(UTC)
+        await _create_offer(db_session, source_id, posted_at=now)
+        await _create_offer(db_session, source_id, posted_at=now - timedelta(days=30))
+        await _create_profile(db_session)
+        await _set_fetch_range(
+            db_session,
+            source_id,
+            {"mode": "range", "since": (now - timedelta(days=1)).isoformat()},
+        )
+
+        status_response = await client.get("/scoring/status")
+        reported_backlog = status_response.json()["unscored_backlog"]
+
+        summary = await run_batch_scoring(
+            db_session,
+            chain_factory=lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
+        )
+        await db_session.commit()
+
+        assert reported_backlog == 1
+        assert summary.scored == 1
+    finally:
+        await _delete_sources_and_dependents(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_narrowing_fetch_range_does_not_invalidate_existing_match_score(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connector = _fake_connector()
+    _isolate_langchain_sources(monkeypatch, connector)
+
+    await _deactivate_all_profiles(db_session)
+    source_id = await _create_source(db_session, connector=connector)
+    try:
+        now = datetime.now(UTC)
+        offer_id = await _create_offer(db_session, source_id, posted_at=now - timedelta(days=30))
+        profile = await _create_profile(db_session)
+        await db_session.commit()
+
+        await run_batch_scoring(
+            db_session,
+            chain_factory=lambda: _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS)),
+        )
+        await db_session.commit()
+
+        before = (
+            await db_session.execute(
+                select(MatchScoreModel).where(
+                    MatchScoreModel.offer_id == offer_id, MatchScoreModel.profile_id == profile.id
+                )
+            )
+        ).scalar_one()
+        before_snapshot = (
+            before.id,
+            before.score_percent,
+            before.engine,
+            before.created_at,
+        )
+
+        await _set_fetch_range(
+            db_session, source_id, {"mode": "range", "since": (now - timedelta(days=1)).isoformat()}
+        )
+
+        after = (
+            await db_session.execute(
+                select(MatchScoreModel).where(
+                    MatchScoreModel.offer_id == offer_id, MatchScoreModel.profile_id == profile.id
+                )
+            )
+        ).scalar_one()
+        after_snapshot = (after.id, after.score_percent, after.engine, after.created_at)
+
+        assert before_snapshot == after_snapshot
     finally:
         await _delete_sources_and_dependents(db_session, [source_id])

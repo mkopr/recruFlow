@@ -577,6 +577,38 @@ Returns `404` with the same message convention as `GET /offers/{offer_id}` for a
 scoring job — re-ingesting an already-seen offer leaves these four columns exactly as the user last
 set them.
 
+### `GET /offers/cleanup-preview` and `DELETE /offers`
+
+Bulk-delete offers that have aged out, with a paired read-only preview so the Settings UI (see
+"Offer cleanup" below) can show an accurate count before anything is deleted. Both take a required
+`older_than` query param (an ISO date/datetime) — there's no default, so an accidental
+"delete everything" call 422s instead of running.
+
+```bash
+curl "http://localhost:8000/offers/cleanup-preview?older_than=2026-01-01T00:00:00Z"
+```
+
+```json
+{"would_delete": 42, "would_skip": 3}
+```
+
+```bash
+curl -X DELETE "http://localhost:8000/offers?older_than=2026-01-01T00:00:00Z"
+```
+
+```json
+{"deleted": 42, "skipped": 3}
+```
+
+An offer is only ever deleted if its `posted_at` is non-null and strictly before `older_than` — an
+offer with no `posted_at` at all is never deleted, regardless of cutoff (unlike scoring's Fetch
+Range, this endpoint never treats a missing date as "now"; guessing wrong here means an
+irreversible delete, not a skipped scoring run). An offer with any `Application` row, in any
+status, under any Profile, is always skipped rather than deleted — this protection has no time
+limit and isn't scoped to the currently active Profile. Deleting an offer also deletes its
+`MatchScore`, `ScoringFailure`, and `CVVersion` rows in the same transaction, so the request never
+fails with a foreign-key error.
+
 ### `GET /offers/{offer_id}/score`
 
 Returns the most recent `MatchScore` for this offer against whichever `Profile` is currently
@@ -792,13 +824,26 @@ a profile by hand, without calling the API directly.
 
 With `make up` running, open `http://localhost:5173/settings`. There is nothing to configure at
 the domain level for scoring itself — a plain percentage needs no shared calibration table — so
-this page has two sections:
+this page has four sections:
 
 - **Fetch cadence** — one row per connector (sourced from `GET /scheduler/status`), a minutes input
   pre-filled with that connector's current interval, each saved independently via
   `PUT /scheduler/sources/{source}/interval`, plus an "apply to all" control that pushes one value
   to every connector via `PUT /scheduler/sources/interval`. Saving reschedules the live job
   immediately — no restart needed.
+- **Fetch range & auto-fetch** — one row per connector, an auto-fetch checkbox (pauses/resumes that
+  connector's live scheduled job immediately, without removing it) and a "Date range"/"Fetch all"
+  mode selector with since/until inputs when narrowed, each saved independently via
+  `PUT /scheduler/sources/{source}/fetch-range` and `.../auto-fetch`, plus "apply to all" controls
+  for both knobs. The same range now also governs which offers batch scoring will select (see
+  `GET /offers/cleanup-preview` and `DELETE /offers` above) — narrowing a connector's range here
+  shrinks the scoring backlog too, with no separate setting to keep in sync.
+- **Offer cleanup** — a date picker and a "Delete offers older than this date" button (disabled
+  until a date is chosen). Clicking it previews the delete via `GET /offers/cleanup-preview` and
+  shows a confirmation dialog stating exactly how many offers would be deleted and how many would
+  be skipped for being in the pipeline; confirming calls `DELETE /offers` and replaces the dialog
+  with the actual deleted/skipped counts. The offer list no longer shows the removed offers on its
+  next reload.
 - **Notifications** — a "Minimum score for alert (%)" numeric input (default `90`), a preset retro
   alert sound dropdown, a "Test sound" preview button, a volume slider, and a mute toggle. These
   settings persist in `localStorage` only (no backend table) and take effect immediately, with no

@@ -3,6 +3,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,7 @@ from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
 from app.db.models import ScoringFailure, Source
 from app.db.profile_repo import get_active_profile
+from app.ingestion.runner import resolve_fetch_range
 from app.llm import matcher
 from app.llm.matcher import MatcherChain, score_offers_with_langchain
 from app.scoring.events import ScoreEvent
@@ -77,14 +79,12 @@ def _open_scoring_failures(profile_id: int) -> Select[tuple[int]]:
     )
 
 
-async def _fetch_unscored_offers(
-    session: AsyncSession, profile_id: int, *, limit: int
-) -> list[tuple[OfferModel, str]]:
+def _candidate_offers_stmt(profile_id: int) -> Select[tuple[OfferModel, str, dict[str, Any]]]:
     already_scored = select(MatchScoreModel.offer_id).where(
         MatchScoreModel.profile_id == profile_id
     )
-    stmt = (
-        select(OfferModel, Source.connector)
+    return (
+        select(OfferModel, Source.connector, Source.config_json)
         .join(Source, OfferModel.source_id == Source.id)
         .where(Source.connector.in_(matcher.LANGCHAIN_SOURCES))
         .where(OfferModel.id.not_in(already_scored))
@@ -94,10 +94,39 @@ async def _fetch_unscored_offers(
             OfferModel.created_at.desc(),
             OfferModel.id.desc(),
         )
-        .limit(limit)
     )
-    rows = (await session.execute(stmt)).all()
-    return [(offer, connector) for offer, connector in rows]
+
+
+def _in_fetch_range(offer: OfferModel, config_json: dict[str, Any] | None) -> bool:
+    """Whether `offer` falls inside its Source's configured `fetch_range` (US34/US36).
+
+    Undated offers evaluate as "now", same fallback `resolve_fetch_range`'s callers in
+    `app/ingestion/runner.py` use (ADR 0017) -- never as "always eligible", since a
+    genuinely narrow `until` should still exclude an offer with no determinable date.
+    """
+    since, until = resolve_fetch_range((config_json or {}).get("fetch_range"))
+    if since is None and until is None:
+        return True
+    effective_date = offer.posted_at if offer.posted_at is not None else datetime.now(UTC)
+    if since is not None and effective_date < since:
+        return False
+    if until is not None and effective_date > until:
+        return False
+    return True
+
+
+async def _fetch_unscored_offers(
+    session: AsyncSession, profile_id: int, *, limit: int
+) -> list[tuple[OfferModel, str]]:
+    rows = (await session.execute(_candidate_offers_stmt(profile_id))).all()
+    selected: list[tuple[OfferModel, str]] = []
+    for offer, connector, config_json in rows:
+        if not _in_fetch_range(offer, config_json):
+            continue
+        selected.append((offer, connector))
+        if len(selected) >= limit:
+            break
+    return selected
 
 
 async def _count_already_scored(session: AsyncSession, profile_id: int) -> int:
@@ -115,18 +144,8 @@ async def _count_already_scored(session: AsyncSession, profile_id: int) -> int:
 
 
 async def _count_unscored_offers(session: AsyncSession, profile_id: int) -> int:
-    already_scored = select(MatchScoreModel.offer_id).where(
-        MatchScoreModel.profile_id == profile_id
-    )
-    stmt = (
-        select(func.count())
-        .select_from(OfferModel)
-        .join(Source, OfferModel.source_id == Source.id)
-        .where(Source.connector.in_(matcher.LANGCHAIN_SOURCES))
-        .where(OfferModel.id.not_in(already_scored))
-        .where(OfferModel.id.not_in(_open_scoring_failures(profile_id)))
-    )
-    return (await session.execute(stmt)).scalar_one()
+    rows = (await session.execute(_candidate_offers_stmt(profile_id))).all()
+    return sum(1 for offer, connector, config_json in rows if _in_fetch_range(offer, config_json))
 
 
 async def count_unscored_backlog(session: AsyncSession) -> int:

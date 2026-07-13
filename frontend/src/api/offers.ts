@@ -86,3 +86,27 @@ export async function patchOffer(offerId: number, edit: OfferEdit): Promise<Offe
 
   return data;
 }
+
+export async function previewOfferCleanup(
+  olderThan: string,
+): Promise<{ would_delete: number; would_skip: number }> {
+  const { data, error } = await apiClient.GET('/offers/cleanup-preview', {
+    params: { query: { older_than: olderThan } },
+  });
+  if (error) {
+    throw new Error('failed to preview offer cleanup');
+  }
+  return data;
+}
+
+export async function deleteOffers(
+  olderThan: string,
+): Promise<{ deleted: number; skipped: number }> {
+  const { data, error } = await apiClient.DELETE('/offers', {
+    params: { query: { older_than: olderThan } },
+  });
+  if (error) {
+    throw new Error('failed to delete offers');
+  }
+  return data;
+}

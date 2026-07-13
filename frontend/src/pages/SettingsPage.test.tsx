@@ -51,12 +51,26 @@ describe('SettingsPage', () => {
     expect(screen.queryByRole('button', { name: 'Save scoring config' })).not.toBeInTheDocument();
   });
 
-  it('renders the fetch cadence, fetch range, and notifications sections', () => {
+  it('renders the fetch cadence, fetch range, offer cleanup, and notifications sections', () => {
     render(<SettingsPage />);
 
     expect(screen.getByText(/Fetch cadence:/)).toBeInTheDocument();
     expect(screen.getByText(/Fetch range & auto-fetch:/)).toBeInTheDocument();
+    expect(screen.getByText(/Offer cleanup:/)).toBeInTheDocument();
     expect(screen.getByText(/Notifications:/)).toBeInTheDocument();
     expect(screen.getByLabelText('Minimum score for alert (%)')).toBeInTheDocument();
+  });
+
+  it('places the offer cleanup section between fetch range and notifications', () => {
+    const { container } = render(<SettingsPage />);
+
+    const text = container.textContent ?? '';
+    const fetchRangeIndex = text.indexOf('Fetch range & auto-fetch:');
+    const cleanupIndex = text.indexOf('Offer cleanup:');
+    const notificationsIndex = text.indexOf('Notifications:');
+
+    expect(fetchRangeIndex).toBeGreaterThanOrEqual(0);
+    expect(cleanupIndex).toBeGreaterThan(fetchRangeIndex);
+    expect(notificationsIndex).toBeGreaterThan(cleanupIndex);
   });
 });

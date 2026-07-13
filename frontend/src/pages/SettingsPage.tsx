@@ -1,6 +1,7 @@
 import { FetchCadenceSection } from '../components/FetchCadenceSection';
 import { FetchRangeSection } from '../components/FetchRangeSection';
 import { NotificationsSection } from '../components/NotificationsSection';
+import { OfferCleanupSection } from '../components/OfferCleanupSection';
 
 export function SettingsPage() {
   return (
@@ -19,6 +20,14 @@ export function SettingsPage() {
         </p>
       </header>
       <FetchRangeSection />
+
+      <header>
+        <p className="text-sm text-[var(--color-text-muted)]">
+          Offer cleanup: permanently delete offers posted before a chosen date, skipping any offer
+          that's part of your application pipeline.
+        </p>
+      </header>
+      <OfferCleanupSection />
 
       <header>
         <p className="text-sm text-[var(--color-text-muted)]">

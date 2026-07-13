@@ -5,10 +5,18 @@ from uuid import uuid4
 import httpx
 import pytest
 import pytest_asyncio
-from app.db.models import IngestionFailure, MatchScore, Profile, ScoringFailure, Source
+from app.db.models import (
+    Application,
+    CVVersion,
+    IngestionFailure,
+    MatchScore,
+    Profile,
+    ScoringFailure,
+    Source,
+)
 from app.db.models import Offer as OfferModel
 from app.ingestion.persist import ingest_offer
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -36,9 +44,11 @@ async def _delete_sources_with_offers(session: AsyncSession, source_ids: list[in
     # Sources carrying a non-null connector are picked up by connector.is_not(None)
     # assertions elsewhere (e.g. test_scheduler_ensure_sources.py's exact-set check),
     # so any test that gives a Source a real-looking connector must clean up after itself.
-    # MatchScore/ScoringFailure rows referencing these offers, and IngestionFailure rows
-    # referencing these sources, must go first (FK on offer_id/source_id).
+    # MatchScore/ScoringFailure/CVVersion/Application rows referencing these offers, and
+    # IngestionFailure rows referencing these sources, must go first (FK on offer_id/source_id).
     offer_ids = select(OfferModel.id).where(OfferModel.source_id.in_(source_ids))
+    await session.execute(delete(Application).where(Application.offer_id.in_(offer_ids)))
+    await session.execute(delete(CVVersion).where(CVVersion.offer_id.in_(offer_ids)))
     await session.execute(delete(MatchScore).where(MatchScore.offer_id.in_(offer_ids)))
     await session.execute(delete(ScoringFailure).where(ScoringFailure.offer_id.in_(offer_ids)))
     await session.execute(
@@ -60,6 +70,78 @@ async def _create_offer(session: AsyncSession, source_id: int, **overrides: obje
     result = await ingest_offer(session, mapped_fields, raw_payload={})
     assert result is not None
     return result[0].id
+
+
+async def _create_profile(session: AsyncSession) -> int:
+    profile = Profile(name=f"profile-{uuid4()}", is_active=True, data={})
+    session.add(profile)
+    await session.flush()
+    return profile.id
+
+
+async def _create_match_score(session: AsyncSession, offer_id: int, profile_id: int) -> int:
+    score = MatchScore(
+        offer_id=offer_id,
+        profile_id=profile_id,
+        engine="langchain",
+        score_percent=80,
+        dimensions={},
+        rationale="test score",
+    )
+    session.add(score)
+    await session.flush()
+    return score.id
+
+
+async def _create_scoring_failure(session: AsyncSession, offer_id: int, profile_id: int) -> int:
+    failure = ScoringFailure(
+        offer_id=offer_id,
+        profile_id=profile_id,
+        dedup_key=f"scoring-failure-{uuid4()}",
+        failure_type="scoring_failed",
+        status="open",
+        error_message="test failure",
+    )
+    session.add(failure)
+    await session.flush()
+    return failure.id
+
+
+async def _create_cv_version(session: AsyncSession, offer_id: int, profile_id: int) -> int:
+    cv_version = CVVersion(
+        offer_id=offer_id,
+        profile_id=profile_id,
+        cv_markdown="# CV",
+        status="drafted",
+    )
+    session.add(cv_version)
+    await session.flush()
+    return cv_version.id
+
+
+async def _create_application(session: AsyncSession, offer_id: int, profile_id: int) -> int:
+    # "drafted" is recruFlow's own Application status vocabulary (CLAUDE.md's domain
+    # glossary), distinct from the unrelated sjctl-track CLI's saved/applied/... states.
+    application = Application(offer_id=offer_id, profile_id=profile_id, status="drafted")
+    session.add(application)
+    await session.flush()
+    return application.id
+
+
+async def _wipe_all_offers_and_dependents(session: AsyncSession) -> None:
+    # DELETE /offers and GET /offers/cleanup-preview are deliberately global (no source/
+    # connector scope, unlike every other endpoint in this file) -- they operate over every
+    # offer in the table. db_test accumulates leftover offers across historical test runs
+    # that a per-connector filter would normally isolate away from, so exact deleted/skipped
+    # count assertions for these two endpoints require starting from a genuinely empty
+    # table, not just cleaning up this test's own fixture rows. Sources are left untouched
+    # (other tests assert on the live set of Source rows).
+    await session.execute(delete(Application))
+    await session.execute(delete(CVVersion))
+    await session.execute(delete(MatchScore))
+    await session.execute(delete(ScoringFailure))
+    await session.execute(delete(OfferModel))
+    await session.commit()
 
 
 @pytest.mark.integration
@@ -1291,3 +1373,169 @@ async def test_rescoring_offer_inserts_new_row_without_overwriting_existing(
         .all()
     )
     assert len(rows) == 2
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_delete_offers_removes_offers_older_than_cutoff(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await _wipe_all_offers_and_dependents(db_session)
+    source_id = await _create_source(db_session)
+    try:
+        cutoff = datetime(2026, 3, 1, tzinfo=UTC)
+        older = await _create_offer(
+            db_session, source_id, posted_at=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+        newer = await _create_offer(
+            db_session, source_id, posted_at=datetime(2026, 6, 1, tzinfo=UTC)
+        )
+        await db_session.commit()
+
+        response = await client.delete("/offers", params={"older_than": cutoff.isoformat()})
+
+        assert response.status_code == 200
+        assert response.json() == {"deleted": 1, "skipped": 0}
+        assert await db_session.get(OfferModel, older) is None
+        assert await db_session.get(OfferModel, newer) is not None
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_delete_offers_skips_pipeline_offers(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await _wipe_all_offers_and_dependents(db_session)
+    source_id = await _create_source(db_session)
+    try:
+        cutoff = datetime(2026, 3, 1, tzinfo=UTC)
+        old_no_application = await _create_offer(
+            db_session, source_id, posted_at=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+        old_with_application = await _create_offer(
+            db_session, source_id, posted_at=datetime(2026, 1, 2, tzinfo=UTC)
+        )
+        profile_id = await _create_profile(db_session)
+        application_id = await _create_application(db_session, old_with_application, profile_id)
+        await db_session.commit()
+
+        response = await client.delete("/offers", params={"older_than": cutoff.isoformat()})
+
+        assert response.status_code == 200
+        assert response.json() == {"deleted": 1, "skipped": 1}
+        assert await db_session.get(OfferModel, old_no_application) is None
+        assert await db_session.get(OfferModel, old_with_application) is not None
+        assert await db_session.get(Application, application_id) is not None
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_delete_offers_skips_null_posted_at(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await _wipe_all_offers_and_dependents(db_session)
+    source_id = await _create_source(db_session)
+    try:
+        undated = await _create_offer(db_session, source_id, posted_at=None)
+        await db_session.commit()
+
+        far_future_cutoff = datetime(2099, 1, 1, tzinfo=UTC)
+        response = await client.delete(
+            "/offers", params={"older_than": far_future_cutoff.isoformat()}
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"deleted": 0, "skipped": 0}
+        assert await db_session.get(OfferModel, undated) is not None
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_delete_offers_cascades_related_rows(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await _wipe_all_offers_and_dependents(db_session)
+    source_id = await _create_source(db_session)
+    try:
+        cutoff = datetime(2026, 3, 1, tzinfo=UTC)
+        offer_id = await _create_offer(
+            db_session, source_id, posted_at=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+        profile_id = await _create_profile(db_session)
+        score_id = await _create_match_score(db_session, offer_id, profile_id)
+        failure_id = await _create_scoring_failure(db_session, offer_id, profile_id)
+        cv_version_id = await _create_cv_version(db_session, offer_id, profile_id)
+        await db_session.commit()
+
+        response = await client.delete("/offers", params={"older_than": cutoff.isoformat()})
+
+        assert response.status_code == 200
+        assert response.json() == {"deleted": 1, "skipped": 0}
+        assert await db_session.get(OfferModel, offer_id) is None
+        assert await db_session.get(MatchScore, score_id) is None
+        assert await db_session.get(ScoringFailure, failure_id) is None
+        assert await db_session.get(CVVersion, cv_version_id) is None
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_delete_offers_missing_older_than_returns_422(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    source_id = await _create_source(db_session)
+    try:
+        await _create_offer(db_session, source_id, posted_at=datetime(2026, 1, 1, tzinfo=UTC))
+        await db_session.commit()
+
+        before = (
+            await db_session.execute(select(func.count()).select_from(OfferModel))
+        ).scalar_one()
+
+        response = await client.delete("/offers")
+
+        assert response.status_code == 422
+        after = (
+            await db_session.execute(select(func.count()).select_from(OfferModel))
+        ).scalar_one()
+        assert after == before
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_preview_offer_cleanup_reports_counts_without_deleting(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await _wipe_all_offers_and_dependents(db_session)
+    source_id = await _create_source(db_session)
+    try:
+        cutoff = datetime(2026, 3, 1, tzinfo=UTC)
+        old_no_application = await _create_offer(
+            db_session, source_id, posted_at=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+        old_with_application = await _create_offer(
+            db_session, source_id, posted_at=datetime(2026, 1, 2, tzinfo=UTC)
+        )
+        profile_id = await _create_profile(db_session)
+        await _create_application(db_session, old_with_application, profile_id)
+        await db_session.commit()
+
+        response = await client.get(
+            "/offers/cleanup-preview", params={"older_than": cutoff.isoformat()}
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"would_delete": 1, "would_skip": 1}
+        assert await db_session.get(OfferModel, old_no_application) is not None
+        assert await db_session.get(OfferModel, old_with_application) is not None
+    finally:
+        await _delete_sources_with_offers(db_session, [source_id])

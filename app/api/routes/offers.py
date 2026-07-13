@@ -2,15 +2,23 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import ColumnElement, and_, func, or_, select
+from sqlalchemy import ColumnElement, and_, delete, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import SessionDep
+from app.db.models import Application, CVVersion, ScoringFailure, Source
 from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
-from app.db.models import Source
 from app.db.profile_repo import get_active_profile
 from app.schemas.match_score import MatchScoreResponse
-from app.schemas.offer import OfferDetail, OfferEdit, OfferListResponse, OfferSummary
+from app.schemas.offer import (
+    DeleteOffersResponse,
+    OfferCleanupPreviewResponse,
+    OfferDetail,
+    OfferEdit,
+    OfferListResponse,
+    OfferSummary,
+)
 
 router = APIRouter()
 
@@ -58,6 +66,28 @@ def _offer_detail(offer: OfferModel, source: str, score_percent: int | None = No
         raw_payload=offer.raw_payload,
         updated_at=offer.updated_at,
     )
+
+
+async def _partition_offers_for_cleanup(
+    session: AsyncSession, older_than: datetime
+) -> tuple[list[int], int]:
+    """Split offers older than `older_than` into deletable ids and a pipeline-protected count.
+
+    Pipeline protection is permanent and global (P3US36): an offer with an Application row
+    under any Profile, in any status, is never deletable -- see CONTEXT.md's "Offer Cleanup".
+    """
+    candidates_stmt = select(OfferModel.id).where(
+        OfferModel.posted_at.isnot(None), OfferModel.posted_at < older_than
+    )
+    candidate_ids = [row[0] for row in (await session.execute(candidates_stmt)).all()]
+    if not candidate_ids:
+        return [], 0
+    pipeline_stmt = (
+        select(Application.offer_id).where(Application.offer_id.in_(candidate_ids)).distinct()
+    )
+    pipeline_ids = {row[0] for row in (await session.execute(pipeline_stmt)).all()}
+    deletable_ids = [oid for oid in candidate_ids if oid not in pipeline_ids]
+    return deletable_ids, len(pipeline_ids)
 
 
 def _match_score_response(row: MatchScoreModel) -> MatchScoreResponse:
@@ -194,6 +224,42 @@ async def list_offers(
         for offer, connector, name, offer_score_percent in rows
     ]
     return OfferListResponse(items=items, total=total)
+
+
+@router.get("/offers/cleanup-preview")
+async def preview_offer_cleanup(
+    session: SessionDep,
+    older_than: datetime = Query(  # noqa: B008
+        ..., description="ISO date/datetime cutoff; offers with posted_at before this are counted"
+    ),
+) -> OfferCleanupPreviewResponse:
+    deletable_ids, skipped = await _partition_offers_for_cleanup(session, older_than)
+    return OfferCleanupPreviewResponse(would_delete=len(deletable_ids), would_skip=skipped)
+
+
+@router.delete("/offers")
+async def delete_offers(
+    session: SessionDep,
+    older_than: datetime = Query(  # noqa: B008
+        ...,
+        description=(
+            "ISO date/datetime cutoff; offers with posted_at before this and not "
+            "in the pipeline are deleted"
+        ),
+    ),
+) -> DeleteOffersResponse:
+    deletable_ids, skipped = await _partition_offers_for_cleanup(session, older_than)
+    if deletable_ids:
+        await session.execute(
+            delete(MatchScoreModel).where(MatchScoreModel.offer_id.in_(deletable_ids))
+        )
+        await session.execute(
+            delete(ScoringFailure).where(ScoringFailure.offer_id.in_(deletable_ids))
+        )
+        await session.execute(delete(CVVersion).where(CVVersion.offer_id.in_(deletable_ids)))
+        await session.execute(delete(OfferModel).where(OfferModel.id.in_(deletable_ids)))
+    await session.commit()
+    return DeleteOffersResponse(deleted=len(deletable_ids), skipped=skipped)
 
 
 @router.get("/offers/{offer_id}")

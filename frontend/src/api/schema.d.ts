@@ -202,6 +202,24 @@ export interface paths {
     get: operations['list_offers_offers_get'];
     put?: never;
     post?: never;
+    /** Delete Offers */
+    delete: operations['delete_offers_offers_delete'];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/offers/cleanup-preview': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Preview Offer Cleanup */
+    get: operations['preview_offer_cleanup_offers_cleanup_preview_get'];
+    put?: never;
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -397,6 +415,13 @@ export interface components {
       /** Year */
       year?: number | null;
     };
+    /** DeleteOffersResponse */
+    DeleteOffersResponse: {
+      /** Deleted */
+      deleted: number;
+      /** Skipped */
+      skipped: number;
+    };
     /** Education */
     Education: {
       /** Institution */
@@ -536,6 +561,13 @@ export interface components {
        * Format: date-time
        */
       created_at: string;
+    };
+    /** OfferCleanupPreviewResponse */
+    OfferCleanupPreviewResponse: {
+      /** Would Delete */
+      would_delete: number;
+      /** Would Skip */
+      would_skip: number;
     };
     /** OfferDetail */
     OfferDetail: {
@@ -1259,6 +1291,70 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['OfferListResponse'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  delete_offers_offers_delete: {
+    parameters: {
+      query: {
+        /** @description ISO date/datetime cutoff; offers with posted_at before this and not in the pipeline are deleted */
+        older_than: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DeleteOffersResponse'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  preview_offer_cleanup_offers_cleanup_preview_get: {
+    parameters: {
+      query: {
+        /** @description ISO date/datetime cutoff; offers with posted_at before this are counted */
+        older_than: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['OfferCleanupPreviewResponse'];
         };
       };
       /** @description Validation Error */
