@@ -37,8 +37,8 @@ async def activate_profile(session: AsyncSession, profile_id: int) -> None:
 async def invalidate_scores_for_profile(session: AsyncSession, profile_id: int) -> None:
     # BUG30: delete every MatchScore row for this profile so the next batch run treats
     # all its offers as unscored again. Cheap/explicit rather than tracking a staleness
-    # timestamp: a full DELETE lets _fetch_unscored_offers's existing "no MatchScore row
-    # exists" query do the rest, with no change needed to the scoring/batch machinery.
+    # timestamp: a full DELETE lets select_scoring_candidates's existing "no MatchScore
+    # row exists" query do the rest, with no change needed to the scoring/batch machinery.
     await session.execute(delete(MatchScoreModel).where(MatchScoreModel.profile_id == profile_id))
 
 

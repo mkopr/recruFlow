@@ -1,6 +1,6 @@
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import Protocol
 
 import httpx
@@ -293,14 +293,21 @@ async def score_offers_with_langchain(
     profile_row: ProfileModel,
     offers: list[tuple[OfferModel, str]],
     *,
+    connectors: Collection[str] | None = None,
     chain_factory: Callable[[], MatcherChain] = _build_chain,
     on_progress: Callable[[int], None] | None = None,
 ) -> list[MatchScoreModel]:
+    # BUG40: `connectors` defaults to LANGCHAIN_SOURCES for backward compatibility, but a
+    # caller that already scoped its own offer selection to an explicit connector set (e.g.
+    # app/scoring/batch.py's select_scoring_candidates) must pass that same set here --
+    # otherwise this per-offer gate silently falls back to the module-level default and
+    # disagrees with what was actually selected.
+    scope = connectors if connectors is not None else LANGCHAIN_SOURCES
     profile = Profile(**profile_row.data)
     results: list[MatchScoreModel] = []
 
     for processed, (offer_row, connector) in enumerate(offers, start=1):
-        if not is_langchain_source(connector):
+        if connector not in scope:
             if on_progress is not None:
                 on_progress(processed)
             continue

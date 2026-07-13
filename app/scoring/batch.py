@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -79,14 +79,16 @@ def _open_scoring_failures(profile_id: int) -> Select[tuple[int]]:
     )
 
 
-def _candidate_offers_stmt(profile_id: int) -> Select[tuple[OfferModel, str, dict[str, Any]]]:
+def _candidate_offers_stmt(
+    profile_id: int, connectors: Collection[str]
+) -> Select[tuple[OfferModel, str, dict[str, Any]]]:
     already_scored = select(MatchScoreModel.offer_id).where(
         MatchScoreModel.profile_id == profile_id
     )
     return (
         select(OfferModel, Source.connector, Source.config_json)
         .join(Source, OfferModel.source_id == Source.id)
-        .where(Source.connector.in_(matcher.LANGCHAIN_SOURCES))
+        .where(Source.connector.in_(connectors))
         .where(OfferModel.id.not_in(already_scored))
         .where(OfferModel.id.not_in(_open_scoring_failures(profile_id)))
         .order_by(
@@ -115,21 +117,37 @@ def _in_fetch_range(offer: OfferModel, config_json: dict[str, Any] | None) -> bo
     return True
 
 
-async def _fetch_unscored_offers(
-    session: AsyncSession, profile_id: int, *, limit: int
-) -> list[tuple[OfferModel, str]]:
-    rows = (await session.execute(_candidate_offers_stmt(profile_id))).all()
-    selected: list[tuple[OfferModel, str]] = []
-    for offer, connector, config_json in rows:
-        if not _in_fetch_range(offer, config_json):
-            continue
-        selected.append((offer, connector))
-        if len(selected) >= limit:
-            break
-    return selected
+@dataclass(frozen=True)
+class CandidateSelection:
+    """Result of `select_scoring_candidates`: a page of candidates plus the true total."""
+
+    selected: tuple[tuple[OfferModel, str], ...]
+    total: int
 
 
-async def _count_already_scored(session: AsyncSession, profile_id: int) -> int:
+async def select_scoring_candidates(
+    session: AsyncSession, profile_id: int, *, connectors: Collection[str], limit: int
+) -> CandidateSelection:
+    """The single seam for scoring candidate selection: ordering, exclusion,
+    fetch-range, and connector scope, in one query.
+
+    `total` in the result covers every in-range candidate regardless of `limit`,
+    so a caller wanting only the count can pass `limit=0` -- one scan serves both
+    a capped page and an accurate backlog total, instead of two independently
+    re-executed statements.
+    """
+    rows = (await session.execute(_candidate_offers_stmt(profile_id, connectors))).all()
+    in_range = tuple(
+        (offer, connector)
+        for offer, connector, config_json in rows
+        if _in_fetch_range(offer, config_json)
+    )
+    return CandidateSelection(selected=in_range[:limit], total=len(in_range))
+
+
+async def _count_already_scored(
+    session: AsyncSession, profile_id: int, *, connectors: Collection[str]
+) -> int:
     already_scored = select(MatchScoreModel.offer_id).where(
         MatchScoreModel.profile_id == profile_id
     )
@@ -137,18 +155,15 @@ async def _count_already_scored(session: AsyncSession, profile_id: int) -> int:
         select(func.count())
         .select_from(OfferModel)
         .join(Source, OfferModel.source_id == Source.id)
-        .where(Source.connector.in_(matcher.LANGCHAIN_SOURCES))
+        .where(Source.connector.in_(connectors))
         .where(OfferModel.id.in_(already_scored))
     )
     return (await session.execute(stmt)).scalar_one()
 
 
-async def _count_unscored_offers(session: AsyncSession, profile_id: int) -> int:
-    rows = (await session.execute(_candidate_offers_stmt(profile_id))).all()
-    return sum(1 for offer, connector, config_json in rows if _in_fetch_range(offer, config_json))
-
-
-async def count_unscored_backlog(session: AsyncSession) -> int:
+async def count_unscored_backlog(
+    session: AsyncSession, *, connectors: Collection[str] | None = None
+) -> int:
     """Live count of offers not yet scored for the active profile.
 
     Computed on demand rather than cached from the last run, so it reflects the
@@ -158,23 +173,29 @@ async def count_unscored_backlog(session: AsyncSession) -> int:
     profile_row = await get_active_profile(session)
     if profile_row is None:
         return 0
-    return await _count_unscored_offers(session, profile_row.id)
+    scope = connectors if connectors is not None else matcher.LANGCHAIN_SOURCES
+    selection = await select_scoring_candidates(session, profile_row.id, connectors=scope, limit=0)
+    return selection.total
 
 
 async def run_batch_scoring(
     session: AsyncSession,
     *,
     limit: int | None = None,
+    connectors: Collection[str] | None = None,
     chain_factory: Callable[[], MatcherChain] | None = None,
 ) -> BatchScoringSummary:
     async with _scoring_lock:
-        return await _run_batch_scoring_locked(session, limit=limit, chain_factory=chain_factory)
+        return await _run_batch_scoring_locked(
+            session, limit=limit, connectors=connectors, chain_factory=chain_factory
+        )
 
 
 async def _run_batch_scoring_locked(
     session: AsyncSession,
     *,
     limit: int | None,
+    connectors: Collection[str] | None,
     chain_factory: Callable[[], MatcherChain] | None,
 ) -> BatchScoringSummary:
     profile_row = await get_active_profile(session)
@@ -182,10 +203,14 @@ async def _run_batch_scoring_locked(
         logger.info("batch scoring skipped: no active profile")
         return BatchScoringSummary(scored=0, skipped=0, failed=0, remaining=0)
 
+    scope = connectors if connectors is not None else matcher.LANGCHAIN_SOURCES
     batch_limit = limit if limit is not None else get_settings().batch_scoring_limit
-    total_unscored = await _count_unscored_offers(session, profile_row.id)
-    unscored = await _fetch_unscored_offers(session, profile_row.id, limit=batch_limit)
-    skipped = await _count_already_scored(session, profile_row.id)
+    selection = await select_scoring_candidates(
+        session, profile_row.id, connectors=scope, limit=batch_limit
+    )
+    total_unscored = selection.total
+    unscored = list(selection.selected)
+    skipped = await _count_already_scored(session, profile_row.id, connectors=scope)
 
     _progress.running = True
     _progress.processed = 0
@@ -198,6 +223,7 @@ async def _run_batch_scoring_locked(
                 session,
                 profile_row,
                 unscored,
+                connectors=scope,
                 chain_factory=chain_factory,
                 on_progress=_record_progress,
             )
@@ -206,6 +232,7 @@ async def _run_batch_scoring_locked(
                 session,
                 profile_row,
                 unscored,
+                connectors=scope,
                 on_progress=_record_progress,
             )
     finally:
