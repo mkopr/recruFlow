@@ -1,11 +1,13 @@
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Source
+from app.db.models import IngestionFailure, Source
 from app.db.session import get_engine, get_sessionmaker
+from app.dlq.service import record_failure
 from app.ingestion.registry import dispatch_ingestion, resolve_source_by_connector
 from app.ingestion.types import IngestionResult
 
@@ -22,6 +24,34 @@ class ConnectorDisabledError(Exception):
     this means "it exists but is stopped" -- so callers can map the two to different HTTP
     statuses (404 vs 409) without a type check inside a shared except block.
     """
+
+
+async def record_run_fetch_failure(
+    session: AsyncSession,
+    source: Source,
+    result: IngestionResult,
+    *,
+    scheduler_run_id: int | None = None,
+) -> None:
+    """The shared `on_success` failure-recording shape every "run a connector" caller needs
+    when `dispatch_ingestion` returns a failed (not raised) result (BUG37). `scheduler_run_id`
+    is the only axis callers vary on -- the audited `/scheduler/run/{source}` path threads its
+    `SchedulerRun.id` through, the unaudited `/ingest/{source}` path leaves it unset.
+    """
+    if result.ok:
+        return
+    fields: dict[str, Any] = {}
+    if scheduler_run_id is not None:
+        fields["scheduler_run_id"] = scheduler_run_id
+    await record_failure(
+        session,
+        IngestionFailure,
+        dedup_key=f"source:{source.id}",
+        source_id=source.id,
+        failure_type="run_fetch_failed",
+        error_message=result.error_message or "ingestion failed",
+        **fields,
+    )
 
 
 async def run_with_lifecycle(

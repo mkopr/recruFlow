@@ -8,10 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import IngestionFailure, SchedulerRun, Source
+from app.db.models import SchedulerRun, Source
 from app.db.session import get_engine, get_sessionmaker
-from app.dlq.service import record_failure
-from app.ingestion.lifecycle import run_with_lifecycle
+from app.ingestion.lifecycle import record_run_fetch_failure, run_with_lifecycle
 from app.ingestion.registry import CONNECTOR_REGISTRY, resolve_source_by_connector
 from app.ingestion.types import IngestionResult
 from app.scheduler.runs import finish_run_error, finish_run_ok, start_run
@@ -86,16 +85,7 @@ async def _run_source_async(connector: str, *, trigger_type: str) -> SchedulerRu
     async def on_success(session: AsyncSession, source: Source, result: IngestionResult) -> None:
         assert run is not None
         warning = result.fetched == 0
-        if not result.ok:
-            await record_failure(
-                session,
-                IngestionFailure,
-                dedup_key=f"source:{source.id}",
-                source_id=source.id,
-                scheduler_run_id=run.id,
-                failure_type="run_fetch_failed",
-                error_message=result.error_message or "ingestion failed",
-            )
+        await record_run_fetch_failure(session, source, result, scheduler_run_id=run.id)
         await finish_run_ok(
             session, run, fetched=result.fetched, created=result.created, warning=warning
         )
