@@ -61,6 +61,24 @@ export function FetchRangeSection() {
   const setDraft = (connector: string, patch: Partial<RangeDraft>, current: RangeDraft) =>
     setDraftByConnector((prev) => ({ ...prev, [connector]: { ...current, ...patch } }));
 
+  const clearDraft = (connector: string) =>
+    setDraftByConnector((prev) => {
+      if (!(connector in prev)) return prev;
+      const next = { ...prev };
+      delete next[connector];
+      return next;
+    });
+
+  const handleSaveRange = async (connector: string, draft: RangeDraft) => {
+    const success = await settings.saveRange(connector, buildRequest(draft));
+    if (success) clearDraft(connector);
+  };
+
+  const handleSaveRangeAll = async () => {
+    const success = await settings.saveRangeAll(buildRequest(applyAllDraft));
+    if (success) setDraftByConnector({});
+  };
+
   return (
     <div className="card flex flex-col gap-4 p-4">
       {settings.error && <div className="text-sm text-[var(--color-danger)]">{settings.error}</div>}
@@ -110,13 +128,18 @@ export function FetchRangeSection() {
                   value={draft.until}
                   onChange={(e) => setDraft(known.id, { until: e.target.value }, draft)}
                 />
+                {draft.until === '' && (
+                  <span className="text-xs text-[var(--color-text-muted)]">
+                    Real-time (no end date) — keeps fetching the freshest postings, no cutoff
+                  </span>
+                )}
               </>
             )}
             <button
               type="button"
               className="btn"
               disabled={isSaving}
-              onClick={() => settings.saveRange(known.id, buildRequest(draft))}
+              onClick={() => handleSaveRange(known.id, draft)}
             >
               {isSaving ? 'Saving…' : 'Save'}
             </button>
@@ -152,13 +175,14 @@ export function FetchRangeSection() {
                 value={applyAllDraft.until}
                 onChange={(e) => setApplyAllDraft((prev) => ({ ...prev, until: e.target.value }))}
               />
+              {applyAllDraft.until === '' && (
+                <span className="text-xs text-[var(--color-text-muted)]">
+                  Real-time (no end date) — keeps fetching the freshest postings, no cutoff
+                </span>
+              )}
             </>
           )}
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => settings.saveRangeAll(buildRequest(applyAllDraft))}
-          >
+          <button type="button" className="btn btn-primary" onClick={handleSaveRangeAll}>
             Apply to all
           </button>
         </div>

@@ -4,14 +4,14 @@ import { fetchSchedulerStatus, type SourceStatus } from '../api/scheduler';
 
 export interface UseSchedulerStatusResult {
   sources: SourceStatus[];
-  refetch: () => void;
+  refetch: () => Promise<void>;
 }
 
 export function useSchedulerStatus(): UseSchedulerStatusResult {
   const [sources, setSources] = useState<SourceStatus[]>([]);
 
   const refetch = useCallback(() => {
-    fetchSchedulerStatus()
+    return fetchSchedulerStatus()
       .then(setSources)
       .catch(() => {
         // best-effort staleness display; the offers list is the primary content

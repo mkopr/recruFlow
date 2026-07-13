@@ -106,7 +106,7 @@ describe('FetchRangeSection', () => {
   });
 
   it("clicking a row's Save button calls saveRange with the row's current fetch_range", async () => {
-    const saveRange = vi.fn();
+    const saveRange = vi.fn().mockResolvedValue(true);
     useFetchRangeSettingsMock.mockReturnValue(baseResult({ saveRange }));
 
     render(<FetchRangeSection />);
@@ -118,6 +118,92 @@ describe('FetchRangeSection', () => {
       KNOWN_SOURCES[0]!.id,
       expect.objectContaining({ mode: 'range', since: '2026-06-01T00:00:00.000Z' }),
     );
+  });
+
+  it('after a successful since-only save, the row reflects the server-confirmed until (not the pre-save draft)', async () => {
+    const sourcesWithConcreteUntil = KNOWN_SOURCES.map((known) => ({
+      source_id: 1,
+      connector: known.id,
+      name: known.id,
+      schedule: { type: 'interval' as const, seconds: 300 },
+      fetch_range: { mode: 'range', since: '2026-06-01T00:00:00Z', until: '2026-06-30T00:00:00Z' },
+      auto_fetch_enabled: true,
+      last_fetched_at: null,
+      last_run_id: null,
+      last_run_started_at: null,
+      last_run_finished_at: null,
+      last_run_status: null,
+      last_run_trigger_type: null,
+      last_run_fetched: null,
+      last_run_created: null,
+      last_run_warning: false,
+      last_run_error_message: null,
+    }));
+    const sourcesWithConfirmedOpenEnded = sourcesWithConcreteUntil.map((source) => ({
+      ...source,
+      fetch_range: { ...source.fetch_range, until: null },
+    }));
+
+    // saveRange resolves true and, like the real hook, its resolution implies `refetch()`
+    // already landed -- so by the time the row re-renders, `sources` carries the
+    // server-confirmed value rather than the pre-save draft.
+    const saveRange = vi.fn().mockImplementation(async () => {
+      useFetchRangeSettingsMock.mockReturnValue(
+        baseResult({ saveRange, sources: sourcesWithConfirmedOpenEnded }),
+      );
+      return true;
+    });
+    useFetchRangeSettingsMock.mockReturnValue(
+      baseResult({ saveRange, sources: sourcesWithConcreteUntil }),
+    );
+
+    const { container } = render(<FetchRangeSection />);
+
+    // First row's "until" input is the 2nd datetime-local input (since, until pair).
+    const untilInput = container.querySelectorAll('input[type="datetime-local"]')[1]!;
+    expect((untilInput as HTMLInputElement).value).not.toBe('');
+    await userEvent.clear(untilInput);
+    expect(untilInput).toHaveValue('');
+
+    const saveButtons = screen.getAllByRole('button', { name: /Save|Saving/ });
+    await userEvent.click(saveButtons[0]!);
+
+    // The row must show the server-confirmed blank "until" -- not stuck displaying
+    // whatever the local draft had at click time -- and label the resulting mode.
+    const reconciledUntilInput = container.querySelectorAll('input[type="datetime-local"]')[1]!;
+    expect(reconciledUntilInput).toHaveValue('');
+    expect(screen.getAllByText(/Real-time \(no end date\)/).length).toBeGreaterThan(0);
+  });
+
+  it('labels the open-ended/real-time state with helper copy when "until" is blank', () => {
+    useFetchRangeSettingsMock.mockReturnValue(
+      baseResult({
+        sources: KNOWN_SOURCES.map((source) => ({
+          source_id: 1,
+          connector: source.id,
+          name: source.id,
+          schedule: { type: 'interval', seconds: 300 },
+          fetch_range: { mode: 'range', since: '2026-06-01T00:00:00Z', until: null },
+          auto_fetch_enabled: true,
+          last_fetched_at: null,
+          last_run_id: null,
+          last_run_started_at: null,
+          last_run_finished_at: null,
+          last_run_status: null,
+          last_run_trigger_type: null,
+          last_run_fetched: null,
+          last_run_created: null,
+          last_run_warning: false,
+          last_run_error_message: null,
+        })),
+      }),
+    );
+
+    render(<FetchRangeSection />);
+
+    // One label per connector row, plus one for the "apply to all" range block (which
+    // also defaults to a blank "until").
+    expect(screen.getAllByText(/Real-time \(no end date\)/).length).toBe(KNOWN_SOURCES.length + 1);
   });
 
   it('toggling the auto-fetch checkbox calls saveAutoFetch with the connector and new value', async () => {

@@ -111,6 +111,40 @@ describe('useFetchRangeSettings', () => {
     expect(fetchSchedulerStatusMock).toHaveBeenCalledTimes(1);
   });
 
+  it('saveRange resolves true only after the post-save refetch has landed', async () => {
+    const range = { mode: 'range' as const, since: '2026-07-01T00:00:00Z', until: null };
+    fetchSchedulerStatusMock.mockResolvedValue([makeSource()]);
+    updateSourceFetchRangeMock.mockResolvedValue(makeSource({ fetch_range: range }));
+
+    const { result } = renderHook(() => useFetchRangeSettings());
+    await waitFor(() => expect(result.current.sources).toHaveLength(1));
+
+    fetchSchedulerStatusMock.mockClear();
+    fetchSchedulerStatusMock.mockResolvedValue([makeSource({ fetch_range: range })]);
+
+    const success = await result.current.saveRange('justjoinit', range);
+
+    expect(success).toBe(true);
+    expect(fetchSchedulerStatusMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('saveRange resolves false when the update request fails, so callers keep the local draft', async () => {
+    fetchSchedulerStatusMock.mockResolvedValue([makeSource()]);
+    updateSourceFetchRangeMock.mockRejectedValue(new Error('boom'));
+
+    const { result } = renderHook(() => useFetchRangeSettings());
+    await waitFor(() => expect(result.current.sources).toHaveLength(1));
+
+    const success = await result.current.saveRange('justjoinit', {
+      mode: 'range',
+      since: '2026-07-01T00:00:00Z',
+      until: null,
+    });
+
+    expect(success).toBe(false);
+    await waitFor(() => expect(result.current.error).toBe('boom'));
+  });
+
   it('a failed saveAutoFetch surfaces an error without corrupting another connector saving state', async () => {
     fetchSchedulerStatusMock.mockResolvedValue([
       makeSource({ connector: 'justjoinit' }),
