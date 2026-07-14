@@ -2683,6 +2683,20 @@ number the user types in, no persisted config in between. See the P3US29 section
   was needed — the same P3US37 "adding a connector" checklist outcome every connector since
   Bulldogjob has confirmed.
 
+- **`Dockerfile` bakes in the Chromium browser, not just the `playwright` pip package**: `uv
+  sync --frozen --all-groups` installs the Python package, but the actual browser binary
+  Playwright drives is a separate download (`playwright install --with-deps chromium`) that
+  does not come from `uv sync` at all. Discovered live 2026-07-14 — the `api` container's image
+  predated this story and could not even start (`ModuleNotFoundError: No module named
+  'playwright'` at `CONNECTOR_REGISTRY` import time, since `app/main.py` imports every
+  registered connector eagerly), and after rebuilding, a manual `docker exec ... playwright
+  install` into the *running* container's writable layer silently stopped working the next time
+  the container was recreated (`Executable doesn't exist at
+  .../chromium_headless_shell-1228/...`). The runtime stage's `Dockerfile` now runs `playwright
+  install --with-deps chromium` at build time instead, so the browser survives container
+  recreation the same way the `.venv` copied from the builder stage does — this is the only
+  connector with a Dockerfile footprint beyond the shared `uv sync`.
+
 ### The Protocol connector — spike failed, not implemented (P3US39)
 
 - **Status**: P3US39 is a hard two-phase gate — Phase 1 (feasibility spike) before any

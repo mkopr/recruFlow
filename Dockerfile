@@ -22,6 +22,14 @@ RUN apt-get update \
 COPY --from=builder /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 
+# Pracuj.pl (P3US41) is the only connector that needs a real browser -- every plain-HTTP path
+# into it is Cloudflare-gated (see docs/adr/0026). `--with-deps` pulls in the shared libraries
+# Chromium needs (fonts, libnss3, libatk, ...) via apt; baked into the image here rather than
+# installed ad hoc into a running container's writable layer, which does not survive a
+# recreate/rebuild.
+RUN playwright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
