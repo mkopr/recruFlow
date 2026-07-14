@@ -8,10 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.connectors.remotive import DEFAULT_CATEGORIES as REMOTIVE_DEFAULT_CATEGORIES
 from app.db.models import SchedulerRun, Source
 from app.db.session import get_engine, get_sessionmaker
 from app.ingestion.lifecycle import record_run_fetch_failure, run_with_lifecycle
-from app.ingestion.normalize import PRACUJ, REMOTEOK
+from app.ingestion.normalize import PRACUJ, REMOTEOK, REMOTIVE
 from app.ingestion.registry import CONNECTOR_REGISTRY, resolve_source_by_connector
 from app.ingestion.types import IngestionResult
 from app.scheduler.runs import finish_run_error, finish_run_ok, start_run
@@ -52,6 +53,8 @@ def _connector_config_overrides(connector: str) -> dict[str, Any]:
         }
     if connector == REMOTEOK:
         return {"schedule": {"type": "interval", "seconds": 120}}
+    if connector == REMOTIVE:
+        return {"categories": list(REMOTIVE_DEFAULT_CATEGORIES)}
     return {}
 
 

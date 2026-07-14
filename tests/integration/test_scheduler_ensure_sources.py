@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
+from app.connectors.remotive import DEFAULT_CATEGORIES as REMOTIVE_DEFAULT_CATEGORIES
 from app.db.models import Source
 from app.ingestion import registry
 from app.ingestion.normalize import (
@@ -10,6 +11,7 @@ from app.ingestion.normalize import (
     NOFLUFFJOBS,
     PRACUJ,
     REMOTEOK,
+    REMOTIVE,
     ROCKET_JOBS,
     SOLID_JOBS,
 )
@@ -21,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_ensure_sources_exist_creates_seven_builtin_sources(
+async def test_ensure_sources_exist_creates_eight_builtin_sources(
     db_session: AsyncSession,
 ) -> None:
     await ensure_sources_exist(db_session)
@@ -42,6 +44,7 @@ async def test_ensure_sources_exist_creates_seven_builtin_sources(
         ROCKET_JOBS,
         PRACUJ,
         REMOTEOK,
+        REMOTIVE,
     }
     for row in by_connector.values():
         assert row.config_json["schedule"]["type"] == "interval"
@@ -92,6 +95,24 @@ async def test_ensure_sources_exist_seeds_remoteok_with_shorter_interval(
     source = await db_session.scalar(select(Source).where(Source.connector == REMOTEOK))
     assert source is not None
     assert source.config_json["schedule"]["seconds"] == 120
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ensure_sources_exist_seeds_remotive_with_default_categories(
+    db_session: AsyncSession,
+) -> None:
+    # Remotive scopes ingestion to IT-relevant categories by default (P3US43) -- a freshly
+    # seeded source should not silently ingest every Remotive category (sales, marketing, ...).
+    await db_session.execute(delete(Source).where(Source.connector == REMOTIVE))
+    await db_session.commit()
+
+    await ensure_sources_exist(db_session)
+    await db_session.commit()
+
+    source = await db_session.scalar(select(Source).where(Source.connector == REMOTIVE))
+    assert source is not None
+    assert source.config_json["categories"] == list(REMOTIVE_DEFAULT_CATEGORIES)
 
 
 @pytest.mark.integration

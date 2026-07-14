@@ -423,6 +423,40 @@ failure does for every other connector. A later fetch failure (another listing p
 page, or a Cloudflare challenge page reappearing mid-run) stops collection and records a dead
 letter row instead — never a silent `created=0, ok=True` result.
 
+## Remotive connector
+
+`app/connectors/remotive.py` ingests offers from Remotive (remotive.com), a global remote-first
+job board with a genuine, confirmed, public, unauthenticated JSON API at
+`GET https://remotive.com/api/remote-jobs` — no signup/key, no offset/cursor pagination. Its one
+real wrinkle: the `category` query param accepts a single value per call, so `RemotiveConnector`
+issues one request per configured category and merges the results before handing off to the
+shared persist/dedup path (a `fetch_page` override, the same category of deviation Bulldogjob's
+own override already established — not a cursor-pagination shape). It dispatches through the same
+generic `CONNECTOR_REGISTRY`-driven route as every other connector, with no bespoke handler:
+
+```bash
+curl -X POST http://localhost:8000/ingest/remotive
+```
+
+```json
+{"source": "remotive", "ok": true, "fetched": 156, "created": 18, "error_message": null}
+```
+
+| `config_json` key | Default | Notes |
+| --- | --- | --- |
+| `categories` | `["software-development", "devops", "qa", "data"]` | One request per configured category, results merged before dedup. **Confirmed live**: Remotive's public API currently ignores this param server-side (every value returns the same unfiltered feed) — the request is still built per the documented contract, and dedup on canonical URL absorbs the resulting overlap either way |
+
+There is no pagination cursor: `next_cursor` always returns `None`, since this is a single-shot,
+merge-all-configured-categories fetch, not real pagination. A single category's fetch failure
+(transport error or unexpected JSON shape) is skipped without failing the others; a run only fails
+outright if every configured category fails. `salary_min`/`salary_max` are always `None` —
+Remotive's `salary` field is an unstructured free-text string (e.g. `"$70,000 - $90,000"`), not a
+numeric pair, and is never regex/heuristic-parsed, per this project's missing-field conservatism —
+the raw string still survives in `raw_payload`. `seniority` and `contract_type` are always `None`
+too: `category` is a role-family label, not a seniority signal, and `job_type` (e.g.
+`"full_time"`) is a work-time-schedule value, not a legal contract form — see CLAUDE.md's Contract
+Type vs. work-time-schedule distinction.
+
 ## Scheduler
 
 `app/scheduler/` wires [APScheduler](https://apscheduler.readthedocs.io/) into the FastAPI
