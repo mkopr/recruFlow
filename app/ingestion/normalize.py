@@ -8,6 +8,7 @@ JUSTJOINIT = "justjoinit"
 NOFLUFFJOBS = "nofluffjobs"
 BULLDOGJOB = "bulldogjob"
 ROCKET_JOBS = "rocket_jobs"
+PRACUJ = "pracuj"
 
 CANONICAL_SENIORITY_LEVELS: tuple[str, ...] = ("junior", "mid", "senior", "lead", "expert")
 
@@ -40,6 +41,37 @@ _SENIORITY_VOCAB: dict[str, dict[str, str]] = {
         "senior": "senior",
         "lead": "lead",
     },
+    # The full `positionLevels` dictionary Pracuj.pl's own search page embeds in
+    # `__NEXT_DATA__` (confirmed live 2026-07-14, 11 entries) -- every raw label this
+    # connector can ever see, not a guessed subset. "pracownik fizyczny / pracowniczka
+    # fizyczna" (manual/physical labor) is intentionally omitted: it doesn't map onto
+    # engineering seniority, and the connector's own `category_filter` keyword search makes
+    # it unlikely to appear in ingested offers anyway -- an unmapped label just logs a
+    # warning and contributes nothing, per `normalize_seniority`'s existing "don't guess"
+    # contract, rather than being force-fit onto one of the five canonical levels here.
+    PRACUJ: {
+        "praktykant / praktykantka - stażysta / stażystka": "junior",
+        "asystent / asystentka": "junior",
+        "młodszy specjalista / młodsza specjalistka (junior)": "junior",
+        "specjalista / specjalistka (mid / regular)": "mid",
+        "starszy specjalista / starsza specjalistka (senior)": "senior",
+        "ekspert / ekspertka": "expert",
+        "kierownik / kierowniczka - koordynator / koordynatorka": "lead",
+        "menedżer / menedżerka": "lead",
+        "dyrektor / dyrektorka": "lead",
+        "prezes / prezeska": "lead",
+        # English-language equivalents of the three lowest levels above -- observed live
+        # 2026-07-14 during manual end-to-end verification against the real Pracuj.pl site:
+        # some individual job postings are authored in English (`jobOfferLanguage.isoCode`),
+        # and Pracuj.pl renders that posting's own positionLevels labels in English to match,
+        # regardless of the browser session's `pl-PL` locale. Only the three levels actually
+        # observed are mapped -- the remaining eight Polish-only entries above have no
+        # confirmed English counterpart yet, so they are left unmapped rather than guessed.
+        "junior specialist (junior)": "junior",
+        "specialist (mid / regular)": "mid",
+        "senior specialist (senior)": "senior",
+        "manager / supervisor": "lead",
+    },
 }
 
 _REMOTE_STRING_VOCAB: dict[str, dict[str, bool]] = {
@@ -48,6 +80,10 @@ _REMOTE_STRING_VOCAB: dict[str, dict[str, bool]] = {
     # live 2026-07-14 on a real automatic Rocket Jobs ingestion run (not present on every
     # posting, only remote ones, matching schema.org's own spec for this field).
     ROCKET_JOBS: {"telecommute": True},
+    # No PRACUJ entry: `attributes.employment.entirelyRemoteWork` (confirmed live 2026-07-14)
+    # is already a native boolean, not a string label -- `normalize_remote` returns it as-is
+    # via its `isinstance(raw_value, bool)` branch without ever consulting this vocab, so
+    # there is no raw string value to seed here.
 }
 
 

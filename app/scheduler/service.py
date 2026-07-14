@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import SchedulerRun, Source
 from app.db.session import get_engine, get_sessionmaker
 from app.ingestion.lifecycle import record_run_fetch_failure, run_with_lifecycle
+from app.ingestion.normalize import PRACUJ
 from app.ingestion.registry import CONNECTOR_REGISTRY, resolve_source_by_connector
 from app.ingestion.types import IngestionResult
 from app.scheduler.runs import finish_run_error, finish_run_ok, start_run
@@ -34,6 +35,24 @@ def _default_config_template() -> dict[str, Any]:
     }
 
 
+def _connector_config_overrides(connector: str) -> dict[str, Any]:
+    """Per-connector layer on top of `_default_config_template`, same pattern
+    `_default_fetch_range` already establishes for the fetch-range key. Only Pracuj.pl needs
+    one today: browser-driven fetching is far more expensive than every other connector's
+    plain HTTP call (P3US41, see `docs/adr/0026`), so it gets a longer interval than the
+    shared 300s default -- the same "expensive, throttle hard" rationale ADR 0024/0026
+    established for this operator's Cloudflare tuning -- and a non-empty `category_filter` so
+    a freshly seeded source doesn't immediately ingest every industry Pracuj.pl lists, not
+    just IT.
+    """
+    if connector == PRACUJ:
+        return {
+            "schedule": {"type": "interval", "seconds": 3600},
+            "category_filter": "it",
+        }
+    return {}
+
+
 def _default_fetch_range() -> dict[str, Any]:
     """Computed fresh per call (not baked into `DEFAULT_SOURCE_CONFIGS`, a module-level
     constant evaluated once at import time) so "seed time minus 7 days" reflects the
@@ -53,7 +72,11 @@ async def ensure_sources_exist(session: AsyncSession) -> None:
             .values(
                 name=connector,
                 connector=connector,
-                config_json={**_default_config_template(), "fetch_range": _default_fetch_range()},
+                config_json={
+                    **_default_config_template(),
+                    "fetch_range": _default_fetch_range(),
+                    **_connector_config_overrides(connector),
+                },
             )
             .on_conflict_do_nothing(index_elements=[Source.name])
         )

@@ -386,6 +386,43 @@ does for the other four connectors. `baseSalary`, an explicit remote flag, senio
 tags were all confirmed absent on the sample page checked during investigation — these are left
 `None`/`False` rather than guessed, per the project's missing-field conservatism.
 
+## Pracuj.pl connector
+
+`app/connectors/pracuj.py` ingests offers from Pracuj.pl (pracuj.pl), which fronts Cloudflare's
+Managed Challenge on every plain-HTTP path — homepage, its own sitemap, a search listing — so
+this is the only connector in this codebase that fetches through a real Playwright browser
+context instead of plain `httpx` (confirmed feasible live — see
+`docs/adr/0026-pracuj-playwright-cloudflare-feasibility-spike.md`). Its own published sitemap was
+found to be stale (every sub-sitemap's `lastmod` from late 2021), so `PracujConnector` enumerates
+offers via Pracuj.pl's own keyword-filtered search listing instead, then live-fetches each
+offer's own detail page and parses the record out of its embedded `__NEXT_DATA__` React Query
+cache. It dispatches through the same generic `CONNECTOR_REGISTRY`-driven route as every other
+connector, with no bespoke handler:
+
+```bash
+curl -X POST http://localhost:8000/ingest/pracuj
+```
+
+```json
+{"source": "pracuj", "ok": true, "fetched": 10, "created": 8, "error_message": null}
+```
+
+| `config_json` key | Default | Notes |
+| --- | --- | --- |
+| `category_filter` | `"it"` | Keyword applied server-side via Pracuj.pl's own `/praca/{keyword};kw` search — offers outside this filter are never even enumerated, let alone detail-fetched |
+| `page_size` | `10` | Search-listing groups requested per page (`rop` query param) — also the in-memory chunk size handed to the shared pagination loop |
+| `max_pages` | `5` | Listing pages fetched per run — bounds total detail-page fetches per run to `page_size * max_pages` |
+| `rate_limit_delay_seconds` | `4.0` | Delay before every listing/detail fetch — deliberately higher than every other connector's `1.0` default, given the added cost of browser-based fetching |
+| `already_seen_stop_threshold` | `20` | Consecutive already-ingested offers before a run stops early — bounds DB writes, not live browser fetches (see ARCHITECTURE.md's Pracuj.pl section for why) |
+
+There is no pagination cursor: `next_cursor` always returns `None`, since offers are pre-fetched
+in full (enumeration + every detail page) before the shared pagination loop ever runs. A single
+malformed detail record is skipped without failing the rest of the run; a failure fetching the
+first listing page is fatal, returning `IngestionResult(ok=False, ...)` the same way a first-page
+failure does for every other connector. A later fetch failure (another listing page, a detail
+page, or a Cloudflare challenge page reappearing mid-run) stops collection and records a dead
+letter row instead — never a silent `created=0, ok=True` result.
+
 ## Scheduler
 
 `app/scheduler/` wires [APScheduler](https://apscheduler.readthedocs.io/) into the FastAPI
@@ -511,8 +548,8 @@ curl http://localhost:8000/connectors
 ### `POST /scheduler/run/{source}`
 
 Triggers one source's ingestion immediately, outside its automatic schedule. `{source}` is a
-connector identity string (`solid_jobs`, `justjoinit`, `nofluffjobs`, `bulldogjob`, or
-`rocket_jobs`), not `sources.name`.
+connector identity string (`solid_jobs`, `justjoinit`, `nofluffjobs`, `bulldogjob`,
+`rocket_jobs`, or `pracuj`), not `sources.name`.
 
 ```bash
 curl -X POST http://localhost:8000/scheduler/run/justjoinit
@@ -588,7 +625,8 @@ out-of-band fetch and browse what's been ingested, outside the automatic schedul
 ### `POST /ingest/{source}`
 
 Triggers one source's ingestion immediately. `{source}` is a connector identity string
-(`solid_jobs`, `justjoinit`, `nofluffjobs`, `bulldogjob`, or `rocket_jobs`), not `sources.name`. Unlike
+(`solid_jobs`, `justjoinit`, `nofluffjobs`, `bulldogjob`, `rocket_jobs`, or `pracuj`), not
+`sources.name`. Unlike
 `POST /scheduler/run/{source}`, this does not write to the scheduler's `scheduler_runs` audit
 trail — `GET /scheduler/status` will not reflect a run triggered this way.
 

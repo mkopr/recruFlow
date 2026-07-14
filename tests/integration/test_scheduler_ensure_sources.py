@@ -4,7 +4,14 @@ from uuid import uuid4
 import pytest
 from app.db.models import Source
 from app.ingestion import registry
-from app.ingestion.normalize import BULLDOGJOB, JUSTJOINIT, NOFLUFFJOBS, ROCKET_JOBS, SOLID_JOBS
+from app.ingestion.normalize import (
+    BULLDOGJOB,
+    JUSTJOINIT,
+    NOFLUFFJOBS,
+    PRACUJ,
+    ROCKET_JOBS,
+    SOLID_JOBS,
+)
 from app.ingestion.registry import ConnectorSpec
 from app.scheduler.service import ensure_sources_exist
 from sqlalchemy import delete, select
@@ -13,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_ensure_sources_exist_creates_five_builtin_sources(
+async def test_ensure_sources_exist_creates_six_builtin_sources(
     db_session: AsyncSession,
 ) -> None:
     await ensure_sources_exist(db_session)
@@ -26,10 +33,44 @@ async def test_ensure_sources_exist_creates_five_builtin_sources(
     )
     by_connector = {row.connector: row for row in rows if row.connector is not None}
 
-    assert set(by_connector) == {SOLID_JOBS, JUSTJOINIT, NOFLUFFJOBS, BULLDOGJOB, ROCKET_JOBS}
+    assert set(by_connector) == {
+        SOLID_JOBS,
+        JUSTJOINIT,
+        NOFLUFFJOBS,
+        BULLDOGJOB,
+        ROCKET_JOBS,
+        PRACUJ,
+    }
     for row in by_connector.values():
         assert row.config_json["schedule"]["type"] == "interval"
         assert row.config_json["connector_enabled"] is True
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ensure_sources_exist_seeds_pracuj_with_conservative_defaults(
+    db_session: AsyncSession,
+) -> None:
+    # A "pracuj" row may already exist from an earlier `ensure_sources_exist` call in this
+    # persistent db_test instance, and separately-run bulk-update route tests
+    # (test_bulk_interval_updates_every_connector, test_bulk_fetch_range_updates_every_connector)
+    # mutate every existing source's schedule/fetch_range unconditionally --
+    # `on_conflict_do_nothing` means re-running `ensure_sources_exist` would never re-apply this
+    # connector's own defaults on top of that mutation. Deleting first guarantees this test
+    # observes the actual fresh-insert path, same rationale as the throwaway-connector test below.
+    await db_session.execute(delete(Source).where(Source.connector == PRACUJ))
+    await db_session.commit()
+
+    await ensure_sources_exist(db_session)
+    await db_session.commit()
+
+    source = await db_session.scalar(select(Source).where(Source.connector == PRACUJ))
+    assert source is not None
+    # Pracuj.pl gets a longer interval than the shared 300s default (P3US41, browser-driven
+    # fetching is far more expensive) and a non-empty category_filter so a freshly seeded
+    # source doesn't immediately ingest every industry Pracuj.pl lists, not just IT.
+    assert source.config_json["schedule"]["seconds"] == 3600
+    assert source.config_json["category_filter"] == "it"
 
 
 @pytest.mark.integration
