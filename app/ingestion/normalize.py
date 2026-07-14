@@ -9,6 +9,7 @@ NOFLUFFJOBS = "nofluffjobs"
 BULLDOGJOB = "bulldogjob"
 ROCKET_JOBS = "rocket_jobs"
 PRACUJ = "pracuj"
+REMOTEOK = "remoteok"
 
 CANONICAL_SENIORITY_LEVELS: tuple[str, ...] = ("junior", "mid", "senior", "lead", "expert")
 

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import SchedulerRun, Source
 from app.db.session import get_engine, get_sessionmaker
 from app.ingestion.lifecycle import record_run_fetch_failure, run_with_lifecycle
-from app.ingestion.normalize import PRACUJ
+from app.ingestion.normalize import PRACUJ, REMOTEOK
 from app.ingestion.registry import CONNECTOR_REGISTRY, resolve_source_by_connector
 from app.ingestion.types import IngestionResult
 from app.scheduler.runs import finish_run_error, finish_run_ok, start_run
@@ -50,6 +50,8 @@ def _connector_config_overrides(connector: str) -> dict[str, Any]:
             "schedule": {"type": "interval", "seconds": 3600},
             "category_filter": "it",
         }
+    if connector == REMOTEOK:
+        return {"schedule": {"type": "interval", "seconds": 120}}
     return {}
 
 

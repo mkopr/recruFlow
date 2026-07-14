@@ -9,6 +9,7 @@ from app.ingestion.normalize import (
     JUSTJOINIT,
     NOFLUFFJOBS,
     PRACUJ,
+    REMOTEOK,
     ROCKET_JOBS,
     SOLID_JOBS,
 )
@@ -20,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_ensure_sources_exist_creates_six_builtin_sources(
+async def test_ensure_sources_exist_creates_seven_builtin_sources(
     db_session: AsyncSession,
 ) -> None:
     await ensure_sources_exist(db_session)
@@ -40,6 +41,7 @@ async def test_ensure_sources_exist_creates_six_builtin_sources(
         BULLDOGJOB,
         ROCKET_JOBS,
         PRACUJ,
+        REMOTEOK,
     }
     for row in by_connector.values():
         assert row.config_json["schedule"]["type"] == "interval"
@@ -71,6 +73,25 @@ async def test_ensure_sources_exist_seeds_pracuj_with_conservative_defaults(
     # source doesn't immediately ingest every industry Pracuj.pl lists, not just IT.
     assert source.config_json["schedule"]["seconds"] == 3600
     assert source.config_json["category_filter"] == "it"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ensure_sources_exist_seeds_remoteok_with_shorter_interval(
+    db_session: AsyncSession,
+) -> None:
+    # RemoteOK is a single lightweight GET with no pagination cost (P3US42), so it gets a
+    # shorter interval than the shared 300s default -- the opposite direction from Pracuj.pl's
+    # browser-driven-fetching-is-expensive override above.
+    await db_session.execute(delete(Source).where(Source.connector == REMOTEOK))
+    await db_session.commit()
+
+    await ensure_sources_exist(db_session)
+    await db_session.commit()
+
+    source = await db_session.scalar(select(Source).where(Source.connector == REMOTEOK))
+    assert source is not None
+    assert source.config_json["schedule"]["seconds"] == 120
 
 
 @pytest.mark.integration

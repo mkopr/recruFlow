@@ -9,6 +9,7 @@ from app.connectors.bulldogjob import BulldogjobConnector
 from app.connectors.justjoinit import JustJoinItConnector
 from app.connectors.nofluffjobs import NoFluffJobsConnector
 from app.connectors.pracuj import PracujConnector
+from app.connectors.remoteok import RemoteOKConnector
 from app.connectors.rocket_jobs import RocketJobsConnector
 from app.connectors.solid_jobs import SolidJobsConnector
 from app.db.models import Source
@@ -17,6 +18,7 @@ from app.ingestion.normalize import (
     JUSTJOINIT,
     NOFLUFFJOBS,
     PRACUJ,
+    REMOTEOK,
     ROCKET_JOBS,
     SOLID_JOBS,
 )
@@ -67,6 +69,7 @@ CONNECTOR_REGISTRY: dict[str, ConnectorSpec] = {
         name=ROCKET_JOBS, label="Rocket Jobs", dispatch=RocketJobsConnector().run
     ),
     PRACUJ: ConnectorSpec(name=PRACUJ, label="Pracuj.pl", dispatch=PracujConnector().run),
+    REMOTEOK: ConnectorSpec(name=REMOTEOK, label="RemoteOK", dispatch=RemoteOKConnector().run),
 }
 
 
