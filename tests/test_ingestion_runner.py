@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import time
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock
@@ -361,3 +363,49 @@ async def test_run_paginated_ingestion_sorted_by_recency_false_keeps_paging_past
 
     assert result.fetched == 3
     assert result.created == 1
+
+
+@pytest.mark.asyncio
+async def test_run_paginated_ingestion_does_not_block_the_event_loop_during_fetch_page() -> None:
+    # A blocking `time.sleep` inside `fetch_page` -- exactly what Rocket Jobs/Bulldogjob's
+    # per-URL fetch loop plus BUG42-followup's rate-limit throttle does -- must not freeze the
+    # whole server for its duration. Confirmed live 2026-07-14: a single slow connector run made
+    # the API stop responding to *everything*, including `/health`, because `fetch_page` was
+    # called directly on the event loop's own thread rather than offloaded.
+    def fetch_page(cursor: Any, page_size: int) -> Any:
+        if cursor is None:
+            time.sleep(0.3)
+            return [], None
+        raise AssertionError("only one page expected")
+
+    ticks = 0
+
+    async def _ticker() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.02)
+            ticks += 1
+
+    session = AsyncMock()
+    ticker_task = asyncio.create_task(_ticker())
+    try:
+        result = await run_paginated_ingestion(
+            session,
+            source_id=7,
+            source_name="test-source",
+            fetch_page=fetch_page,
+            map_offer=lambda source_id, raw: raw,
+            initial_cursor=None,
+            page_size=10,
+            max_pages=1,
+            already_seen_stop_threshold=20,
+            force_refresh=False,
+            logger=logging.getLogger("test"),
+        )
+    finally:
+        ticker_task.cancel()
+
+    assert result.ok is True
+    # If `fetch_page` were called directly (not offloaded to a thread), this coroutine would
+    # never have gotten a chance to run during the 0.3s blocking sleep.
+    assert ticks >= 5

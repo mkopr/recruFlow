@@ -287,9 +287,10 @@ async def test_collect_offers_applies_category_filter_to_listing_url() -> None:
         requested_urls.append(url)
         return _listing_html([])
 
-    offers, enumeration_ok, mid_run_failure = await _collect_offers(
+    offers, enumeration_ok, mid_run_failure, next_start_page = await _collect_offers(
         fake_fetch_html,
         category_filter="python developer",
+        start_page=1,
         page_size=10,
         max_pages=1,
         rate_limit_delay_seconds=0,
@@ -298,6 +299,7 @@ async def test_collect_offers_applies_category_filter_to_listing_url() -> None:
     assert offers == []
     assert enumeration_ok is True
     assert mid_run_failure is False
+    assert next_start_page == 1
     assert requested_urls == ["https://www.pracuj.pl/praca/python%20developer;kw?pn=1&rop=10"]
 
 
@@ -313,9 +315,10 @@ async def test_collect_offers_fetches_detail_page_per_enumerated_candidate() -> 
             return _detail_html(_MONTHLY_UOP_DETAIL_RECORD)
         raise AssertionError(f"unexpected url: {url}")
 
-    offers, enumeration_ok, mid_run_failure = await _collect_offers(
+    offers, enumeration_ok, mid_run_failure, next_start_page = await _collect_offers(
         fake_fetch_html,
         category_filter="it",
+        start_page=1,
         page_size=10,
         max_pages=1,
         rate_limit_delay_seconds=0,
@@ -324,6 +327,9 @@ async def test_collect_offers_fetches_detail_page_per_enumerated_candidate() -> 
     assert enumeration_ok is True
     assert mid_run_failure is False
     assert offers == [_MONTHLY_UOP_DETAIL_RECORD]
+    # Only 1 group on a page_size=10 page -- a short page proves the listing is exhausted, so
+    # the next run should wrap back to page 1 rather than resume forward.
+    assert next_start_page == 1
 
 
 @pytest.mark.asyncio
@@ -331,9 +337,10 @@ async def test_collect_offers_returns_not_ok_when_first_listing_fetch_fails() ->
     async def fake_fetch_html(url: str) -> str | None:
         return None
 
-    offers, enumeration_ok, mid_run_failure = await _collect_offers(
+    offers, enumeration_ok, mid_run_failure, next_start_page = await _collect_offers(
         fake_fetch_html,
         category_filter="it",
+        start_page=1,
         page_size=10,
         max_pages=1,
         rate_limit_delay_seconds=0,
@@ -342,6 +349,7 @@ async def test_collect_offers_returns_not_ok_when_first_listing_fetch_fails() ->
     assert offers == []
     assert enumeration_ok is False
     assert mid_run_failure is False
+    assert next_start_page == 1
 
 
 @pytest.mark.asyncio
@@ -362,9 +370,10 @@ async def test_collect_offers_flags_mid_run_failure_when_a_detail_fetch_fails(
             return None
         raise AssertionError(f"unexpected url: {url}")
 
-    offers, enumeration_ok, mid_run_failure = await _collect_offers(
+    offers, enumeration_ok, mid_run_failure, next_start_page = await _collect_offers(
         fake_fetch_html,
         category_filter="it",
+        start_page=1,
         page_size=10,
         max_pages=1,
         rate_limit_delay_seconds=0,
@@ -373,6 +382,42 @@ async def test_collect_offers_flags_mid_run_failure_when_a_detail_fetch_fails(
     assert enumeration_ok is True
     assert mid_run_failure is True
     assert offers == [_HOURLY_ONLY_DETAIL_RECORD]
+    # A mid-run failure means page 1 itself was never fully processed -- retry it, don't skip.
+    assert next_start_page == 1
+
+
+@pytest.mark.asyncio
+async def test_collect_offers_resumes_enumeration_from_start_page() -> None:
+    # BUG42 regression: enumeration must resume from a persisted `start_page`, not always
+    # restart at page 1 -- mirrors BUG41's Rocket Jobs/Bulldogjob sitemap cursor.
+    detail_url = _HOURLY_ONLY_DETAIL_RECORD["attributes"]["offerAbsoluteUrl"]
+    requested_urls: list[str] = []
+
+    async def fake_fetch_html(url: str) -> str | None:
+        requested_urls.append(url)
+        if "pn=3" in url:
+            return _listing_html([_group(offer_url=detail_url)])
+        if url == detail_url:
+            return _detail_html(_HOURLY_ONLY_DETAIL_RECORD)
+        raise AssertionError(f"unexpected url: {url}")
+
+    offers, enumeration_ok, mid_run_failure, next_start_page = await _collect_offers(
+        fake_fetch_html,
+        category_filter="it",
+        start_page=3,
+        page_size=1,
+        max_pages=1,
+        rate_limit_delay_seconds=0,
+    )
+
+    assert enumeration_ok is True
+    assert mid_run_failure is False
+    assert offers == [_HOURLY_ONLY_DETAIL_RECORD]
+    assert any("pn=3" in u for u in requested_urls)
+    assert not any("pn=1&" in u for u in requested_urls)
+    # A full (not short) page with max_pages exhausted -- more listings likely remain past this
+    # run's window, so the next run should resume forward, not wrap back to page 1.
+    assert next_start_page == 4
 
 
 def _fake_sleep() -> Any:
@@ -406,6 +451,7 @@ async def test_rate_limit_delay_is_honoured_between_detail_fetches(
     await _collect_offers(
         fake_fetch_html,
         category_filter="it",
+        start_page=1,
         page_size=10,
         max_pages=1,
         rate_limit_delay_seconds=configured_delay,
@@ -424,8 +470,10 @@ async def test_pracuj_run_returns_not_ok_on_enumeration_failure(
     from app.db.models import Source
     from app.ingestion.types import IngestionResult
 
-    async def _fake_collect_offers(fetch_html: Any, **kwargs: Any) -> tuple[list[Any], bool, bool]:
-        return [], False, False
+    async def _fake_collect_offers(
+        fetch_html: Any, **kwargs: Any
+    ) -> tuple[list[Any], bool, bool, int]:
+        return [], False, False, 1
 
     monkeypatch.setattr(pracuj, "_collect_offers", _fake_collect_offers)
     monkeypatch.setattr(pracuj, "async_playwright", _fake_async_playwright)
@@ -447,8 +495,10 @@ async def test_pracuj_run_delegates_to_run_paginated_ingestion_with_collected_of
     from app.db.models import Source
     from app.ingestion.types import IngestionResult
 
-    async def _fake_collect_offers(fetch_html: Any, **kwargs: Any) -> tuple[list[Any], bool, bool]:
-        return [_HOURLY_ONLY_DETAIL_RECORD], True, False
+    async def _fake_collect_offers(
+        fetch_html: Any, **kwargs: Any
+    ) -> tuple[list[Any], bool, bool, int]:
+        return [_HOURLY_ONLY_DETAIL_RECORD], True, False, 3
 
     monkeypatch.setattr(pracuj, "_collect_offers", _fake_collect_offers)
     monkeypatch.setattr(pracuj, "async_playwright", _fake_async_playwright)
@@ -473,6 +523,41 @@ async def test_pracuj_run_delegates_to_run_paginated_ingestion_with_collected_of
     assert captured["max_pages"] == 2
     assert callable(captured["fetch_page"])
     assert captured["fetch_page"](0, 3) == ([_HOURLY_ONLY_DETAIL_RECORD], None)
+    assert source.config_json["listing_page_cursor"] == 3
+
+
+@pytest.mark.asyncio
+async def test_pracuj_run_reads_listing_page_cursor_from_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db.models import Source
+    from app.ingestion.types import IngestionResult
+
+    captured_collect_kwargs: dict[str, Any] = {}
+
+    async def _fake_collect_offers(
+        fetch_html: Any, **kwargs: Any
+    ) -> tuple[list[Any], bool, bool, int]:
+        captured_collect_kwargs.update(kwargs)
+        return [], True, False, 6
+
+    monkeypatch.setattr(pracuj, "_collect_offers", _fake_collect_offers)
+    monkeypatch.setattr(pracuj, "async_playwright", _fake_async_playwright)
+
+    async def _fake_run_paginated_ingestion(
+        session: Any, source_id: int, **kwargs: Any
+    ) -> IngestionResult:
+        return IngestionResult(ok=True, fetched=0, created=0)
+
+    monkeypatch.setattr(pracuj, "run_paginated_ingestion", _fake_run_paginated_ingestion)
+
+    connector = PracujConnector()
+    source = Source(id=1, connector="pracuj", config_json={"listing_page_cursor": 5})
+
+    await connector.run(None, source)  # type: ignore[arg-type]
+
+    assert captured_collect_kwargs["start_page"] == 5
+    assert source.config_json["listing_page_cursor"] == 6
 
 
 @pytest.mark.asyncio
@@ -482,8 +567,10 @@ async def test_pracuj_run_records_failure_on_mid_run_fetch_failure(
     from app.db.models import Source
     from app.ingestion.types import IngestionResult
 
-    async def _fake_collect_offers(fetch_html: Any, **kwargs: Any) -> tuple[list[Any], bool, bool]:
-        return [], True, True
+    async def _fake_collect_offers(
+        fetch_html: Any, **kwargs: Any
+    ) -> tuple[list[Any], bool, bool, int]:
+        return [], True, True, 1
 
     monkeypatch.setattr(pracuj, "_collect_offers", _fake_collect_offers)
     monkeypatch.setattr(pracuj, "async_playwright", _fake_async_playwright)

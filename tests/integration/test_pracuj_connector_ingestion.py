@@ -329,6 +329,66 @@ async def test_run_pracuj_ingestion_applies_category_filter_end_to_end(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_run_pracuj_ingestion_resumes_from_persisted_listing_page_cursor(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # BUG42 regression: enumeration must resume from the previous run's listing page instead
+    # of restarting at page 1 every time -- same class of gap BUG41 fixed for Rocket
+    # Jobs/Bulldogjob's sitemap enumeration. `page_size=1, max_pages=1` forces each run to
+    # cover exactly one listing page, so a second run only succeeds if it actually asks for
+    # page 2 -- the fixture router below only answers page 2's URL, not page 1's.
+    source = await _create_source(
+        db_session,
+        config_json={
+            "category_filter": "it",
+            "rate_limit_delay_seconds": 0,
+            "page_size": 1,
+            "max_pages": 1,
+        },
+    )
+    slug1, slug2 = _unique_slug("page1"), _unique_slug("page2")
+    url1, url2 = _job_url(slug1), _job_url(slug2)
+    record1 = _detail_record(6001, "Page One Engineer", url1)
+    record2 = _detail_record(6002, "Page Two Engineer", url2)
+
+    _install_router(
+        monkeypatch,
+        _make_router(
+            listing_url=_listing_url("it", page=1, rop=1),
+            grouped_offers=[_group(offer_url=url1)],
+            detail_records_by_url={url1: record1},
+        ),
+    )
+    first = await PracujConnector().run(db_session, source)
+    await db_session.commit()
+
+    assert first.created == 1
+    assert source.config_json["listing_page_cursor"] == 2
+
+    _install_router(
+        monkeypatch,
+        _make_router(
+            listing_url=_listing_url("it", page=2, rop=1),
+            grouped_offers=[_group(offer_url=url2)],
+            detail_records_by_url={url2: record2},
+        ),
+    )
+    second = await PracujConnector().run(db_session, source)
+    await db_session.commit()
+
+    assert second.created == 1
+    rows = (
+        (await db_session.execute(select(OfferModel).where(OfferModel.source_id == source.id)))
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 2
+    titles = {row.title for row in rows}
+    assert titles == {"Page One Engineer", "Page Two Engineer"}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_pracuj_connector_failure_recorded_not_swallowed(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:

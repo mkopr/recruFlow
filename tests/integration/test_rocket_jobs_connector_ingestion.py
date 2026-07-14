@@ -1,4 +1,5 @@
 import json
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -38,8 +39,13 @@ class _FakeResponse:
 async def _create_source(
     session: AsyncSession, config_json: dict[str, Any] | None = None, connector: str | None = None
 ) -> Source:
+    # `rate_limit_delay_seconds: 0` keeps this suite fast -- BUG42-followup's per-URL throttle
+    # (added after cursor persistence let a run walk far more detail pages than before) would
+    # otherwise make every multi-URL test in this file sleep for real between fetches.
     source = Source(
-        name=f"rocket-jobs-{uuid4()}", connector=connector, config_json=config_json or {}
+        name=f"rocket-jobs-{uuid4()}",
+        connector=connector,
+        config_json={"rate_limit_delay_seconds": 0, **(config_json or {})},
     )
     session.add(source)
     await session.flush()
@@ -358,6 +364,33 @@ async def test_run_rocket_jobs_ingestion_resumes_from_persisted_cursor_across_ru
         .all()
     )
     assert len(rows) == 10
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_run_rocket_jobs_ingestion_throttles_between_detail_fetches(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # BUG42-followup: BUG41's cursor persistence let a run walk far more detail pages than
+    # before, and doing that with zero delay got Bulldogjob rate-limited (429) live -- confirm
+    # the configured per-URL throttle is actually applied here too.
+    sleep_calls: list[float] = []
+    monkeypatch.setattr(time, "sleep", lambda delay: sleep_calls.append(delay))
+
+    source = await _create_source(db_session, config_json={"rate_limit_delay_seconds": 2.5})
+    slugs = [_unique_slug(f"job{i}") for i in range(3)]
+    urls = [_job_url(slug) for slug in slugs]
+    htmls = {_job_url(slug): _detail_html(slug, f"Job {i}") for i, slug in enumerate(slugs)}
+
+    monkeypatch.setattr(
+        httpx, "get", _make_router(sitemap_xml=_urlset_xml(urls), detail_html_by_url=htmls)
+    )
+
+    result = await RocketJobsConnector().run(db_session, source)
+    await db_session.commit()
+
+    assert result.created == 3
+    assert sleep_calls == [2.5, 2.5, 2.5]
 
 
 @pytest.mark.integration

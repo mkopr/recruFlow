@@ -1,5 +1,6 @@
 import gzip
 import json
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -35,7 +36,13 @@ class _FakeResponse:
 async def _create_source(
     session: AsyncSession, config_json: dict[str, Any] | None = None
 ) -> Source:
-    source = Source(name=f"bulldogjob-{uuid4()}", config_json=config_json or {})
+    # `rate_limit_delay_seconds: 0` keeps this suite fast -- BUG42-followup's per-URL throttle
+    # (added after cursor persistence let a run walk far more detail pages than before) would
+    # otherwise make every multi-URL test in this file sleep for real between fetches.
+    source = Source(
+        name=f"bulldogjob-{uuid4()}",
+        config_json={"rate_limit_delay_seconds": 0, **(config_json or {})},
+    )
     session.add(source)
     await session.flush()
     return source
@@ -443,6 +450,33 @@ async def test_run_bulldogjob_ingestion_since_cutoff_does_not_stop_pagination_ea
     )
     assert len(rows) == 1
     assert rows[0].title == "New Listing"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_run_bulldogjob_ingestion_throttles_between_detail_fetches(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # BUG42-followup: BUG41's cursor persistence let a run walk far more detail pages than
+    # before, and doing that with zero delay got Bulldogjob rate-limited (429) on the real dev
+    # stack -- confirm the configured per-URL throttle is actually applied.
+    sleep_calls: list[float] = []
+    monkeypatch.setattr(time, "sleep", lambda delay: sleep_calls.append(delay))
+
+    source = await _create_source(db_session, config_json={"rate_limit_delay_seconds": 2.5})
+    ids = [_unique_job_id(f"job{i}") for i in range(3)]
+    urls = [_job_url(job_id) for job_id in ids]
+    htmls = {_job_url(job_id): _detail_html(job_id, f"Job {i}") for i, job_id in enumerate(ids)}
+
+    monkeypatch.setattr(
+        httpx, "get", _make_router(jobs_xml=_jobs_sitemap_xml(urls), detail_html_by_url=htmls)
+    )
+
+    result = await BulldogjobConnector().run(db_session, source)
+    await db_session.commit()
+
+    assert result.created == 3
+    assert sleep_calls == [2.5, 2.5, 2.5]
 
 
 @pytest.mark.integration

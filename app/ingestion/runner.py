@@ -88,7 +88,14 @@ async def run_paginated_ingestion(  # noqa: C901
     consecutive_already_seen = 0
     cursor = initial_cursor
     for page_index in range(max_pages):
-        page = fetch_page(cursor, page_size)
+        # `fetch_page` is a synchronous callable (blocking HTTP calls, and for the
+        # sitemap-enumeration connectors -- Rocket Jobs, Bulldogjob -- potentially hundreds of
+        # sequential per-URL fetches plus a rate-limit sleep per call). Calling it directly
+        # would block this coroutine's entire event loop for the duration, starving every other
+        # concurrent request (confirmed live 2026-07-14: the API stopped responding to anything,
+        # including `/health`, while a single Bulldogjob run was mid-flight) -- so it runs on a
+        # worker thread instead, exactly as if it were any other blocking call.
+        page = await asyncio.to_thread(fetch_page, cursor, page_size)
         if page is None:
             if page_index == 0:
                 return IngestionResult(

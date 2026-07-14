@@ -170,10 +170,11 @@ async def _collect_offers(
     fetch_html: FetchHtml,
     *,
     category_filter: str,
+    start_page: int,
     page_size: int,
     max_pages: int,
     rate_limit_delay_seconds: float,
-) -> tuple[list[dict[str, Any]], bool, bool]:
+) -> tuple[list[dict[str, Any]], bool, bool, int]:
     """Enumerate offer URLs from Pracuj.pl's keyword-filtered search listing (`;kw`, applying
     `category_filter` at enumeration time -- Pracuj.pl's own published sitemap
     (`SiteMaps/CurrentOffers/SiteMapIndexJobOffers.xml`, robots.txt-listed) was found live
@@ -182,33 +183,45 @@ async def _collect_offers(
     page for the richer structured record (numeric salary, boolean remote flag) `map_offer`
     needs, applying `rate_limit_delay_seconds` before every fetch.
 
-    Returns `(offers, enumeration_ok, mid_run_failure)`. `enumeration_ok=False` means the
-    first listing-page fetch itself failed -- `run` maps this straight to
-    `IngestionResult(ok=False, ...)`. `mid_run_failure=True` means a later fetch (listing or
-    detail) failed after that -- ADR 0024/0026's Cloudflare-escalation finding is that once a
-    session starts failing, every subsequent request in it likely fails too, so collection
-    stops there rather than burning further rate-limited attempts against a blocked session;
-    whatever was already collected is still returned so it gets persisted.
+    `start_page` resumes enumeration from a previous run's persisted `listing_page_cursor`
+    (BUG42, the same class of gap BUG41 fixed for Rocket Jobs/Bulldogjob's sitemap
+    enumeration): starting at page 1 every run meant every hourly tick re-crawled and
+    deduped-away the same first `page_size * max_pages` listings forever, never reaching the
+    rest of the category's results.
+
+    Returns `(offers, enumeration_ok, mid_run_failure, next_start_page)`. `enumeration_ok=False`
+    means the first listing-page fetch itself failed -- `run` maps this straight to
+    `IngestionResult(ok=False, ...)`, and `next_start_page` is meaningless in that case.
+    `mid_run_failure=True` means a later fetch (listing or detail) failed after that -- ADR
+    0024/0026's Cloudflare-escalation finding is that once a session starts failing, every
+    subsequent request in it likely fails too, so collection stops there rather than burning
+    further rate-limited attempts against a blocked session; whatever was already collected is
+    still returned so it gets persisted, and `next_start_page` points back at the page that
+    failed so the next run retries it rather than skipping past unseen listings.
+    `next_start_page` is `1` (wrap for a fresh pass) when an empty or short page proved the
+    listing is genuinely exhausted, or `start_page`+pages-actually-consumed otherwise (the
+    listing has more pages this run didn't get to yet).
     """
     collected: list[dict[str, Any]] = []
     total_cap = page_size * max_pages
     listing_url_base = PRACUJ_LISTING_URL_TEMPLATE.format(keyword=quote(category_filter, safe=""))
 
-    for listing_page_num in range(1, max_pages + 1):
+    last_page_num = start_page - 1
+    for listing_page_num in range(start_page, start_page + max_pages):
         if len(collected) >= total_cap:
             break
 
-        if listing_page_num > 1:
+        if listing_page_num > start_page:
             await asyncio.sleep(rate_limit_delay_seconds)
         listing_url = f"{listing_url_base}?pn={listing_page_num}&rop={page_size}"
         grouped = await _fetch_listing_page(fetch_html, listing_url)
         if grouped is None:
-            if listing_page_num == 1:
-                return [], False, False
-            return collected, True, True
+            if listing_page_num == start_page:
+                return [], False, False, start_page
+            return collected, True, True, listing_page_num
 
         if not grouped:
-            break  # empty page -- clean end of pagination, not a failure
+            return collected, True, False, 1  # empty page -- clean end, wrap for next pass
 
         candidate_urls = [
             sub_offer["offerAbsoluteUri"]
@@ -226,12 +239,13 @@ async def _collect_offers(
             rate_limit_delay_seconds=rate_limit_delay_seconds,
         )
         if mid_run_failure:
-            return collected, True, True
+            return collected, True, True, listing_page_num
 
+        last_page_num = listing_page_num
         if len(grouped) < page_size:
-            break  # short page -- reached the end of available listings
+            return collected, True, False, 1  # short page -- reached the end, wrap
 
-    return collected, True, False
+    return collected, True, False, last_page_num + 1
 
 
 def _pick_monthly_salary(
@@ -383,6 +397,12 @@ class PracujConnector(JobBoardConnector):
         rate_limit_delay_seconds = float(
             config.get("rate_limit_delay_seconds", DEFAULT_RATE_LIMIT_DELAY_SECONDS)
         )
+        # BUG42: Pracuj.pl's search-listing enumeration has the same stable-but-not-recency-
+        # sorted shape as Rocket Jobs/Bulldogjob's sitemaps (BUG41) -- resume from where the
+        # last run left off instead of re-crawling page 1 every time.
+        start_page = int(config.get("listing_page_cursor", 1) or 1)
+        if start_page < 1:
+            start_page = 1
 
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=True)
@@ -393,9 +413,10 @@ class PracujConnector(JobBoardConnector):
                 async def fetch_html(url: str) -> str | None:
                     return await _fetch_rendered_page(page, url)
 
-                offers, enumeration_ok, mid_run_failure = await _collect_offers(
+                offers, enumeration_ok, mid_run_failure, next_start_page = await _collect_offers(
                     fetch_html,
                     category_filter=category_filter,
+                    start_page=start_page,
                     page_size=page_size,
                     max_pages=max_pages,
                     rate_limit_delay_seconds=rate_limit_delay_seconds,
@@ -425,7 +446,7 @@ class PracujConnector(JobBoardConnector):
             next_cursor = cursor + page_size if cursor + page_size < len(offers) else None
             return chunk, next_cursor
 
-        return await run_paginated_ingestion(
+        result = await run_paginated_ingestion(
             session,
             source.id,
             source_name=self.name,
@@ -439,4 +460,10 @@ class PracujConnector(JobBoardConnector):
             logger=logger,
             since=since,
             until=until,
+            # Pracuj.pl's search-listing order isn't recency-sorted either (see BUG41/ADR
+            # 0017) -- a wholly-stale prefetched batch says nothing about the rest of the
+            # (already fully prefetched) listing.
+            sorted_by_recency=False,
         )
+        source.config_json = {**config, "listing_page_cursor": next_start_page}
+        return result

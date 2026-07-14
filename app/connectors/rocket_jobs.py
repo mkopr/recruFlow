@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -22,6 +23,14 @@ from app.ingestion.runner import resolve_fetch_range, run_paginated_ingestion
 from app.ingestion.types import IngestionResult
 
 ROCKET_JOBS_SITEMAP_URL = "https://rocketjobs.pl/sitemaps/active-jobs.xml"
+
+# BUG42-followup: BUG41's cursor-persistence fix let a run actually walk hundreds of detail
+# pages in a row for the first time (previously every run restarted at cursor 0 and never got
+# far past page 1) -- doing that with zero delay between requests got Bulldogjob's own per-IP
+# rate limiter to return real 429s mid-run, confirmed live 2026-07-14 -- applying the same
+# throttle here pre-emptively since Rocket Jobs shares the identical per-URL fetch shape. This
+# default is a starting throttle, not tuned against a documented limit.
+DEFAULT_RATE_LIMIT_DELAY_SECONDS = 0.5
 
 # JSON-LD script tags can appear multiple times per page (breadcrumbs, org data, ...), unlike
 # Bulldogjob's single `__NEXT_DATA__` block, so every match is inspected for `@type` rather
@@ -232,6 +241,9 @@ class RocketJobsConnector(JobBoardConnector):
         page_size = int(config.get("page_size", 20))
         max_pages = int(config.get("max_pages", 50))
         already_seen_stop_threshold = int(config.get("already_seen_stop_threshold", 20))
+        rate_limit_delay_seconds = float(
+            config.get("rate_limit_delay_seconds", DEFAULT_RATE_LIMIT_DELAY_SECONDS)
+        )
 
         urls = self.fetch_sitemap_urls(config)
         if urls is None:
@@ -257,6 +269,8 @@ class RocketJobsConnector(JobBoardConnector):
 
             offers: list[dict[str, Any]] = []
             for url in chunk_urls:
+                if rate_limit_delay_seconds > 0:
+                    time.sleep(rate_limit_delay_seconds)
                 html = self._fetch_detail_html(url)
                 if html is None:
                     continue
