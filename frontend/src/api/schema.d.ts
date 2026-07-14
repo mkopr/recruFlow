@@ -477,6 +477,12 @@ export interface components {
       id: string;
       /** Label */
       label: string;
+      /** Offer Count */
+      offer_count: number;
+      /** Scored Count */
+      scored_count: number;
+      /** Unscored Count */
+      unscored_count: number;
     };
     /** DeleteOffersResponse */
     DeleteOffersResponse: {
@@ -905,6 +911,8 @@ export interface components {
       remaining_backlog: number;
       /** Unscored Backlog */
       unscored_backlog: number;
+      /** Total Offers */
+      total_offers: number;
       /** Started At */
       started_at: string | null;
       /** Finished At */

@@ -37,12 +37,13 @@ export function OfferListPage() {
     offset: page * PAGE_SIZE,
   });
   const { sources, refetch: refetchSchedulerStatus } = useSchedulerStatus();
-  const { sources: knownSources } = useKnownSources();
+  const { sources: knownSources, refetch: refetchKnownSources } = useKnownSources();
   const { status: scoringStatus } = useScoringStatus();
 
   const handleIngested = () => {
     refetch();
     refetchSchedulerStatus();
+    refetchKnownSources();
   };
 
   // A new filter value invalidates whatever page the user was on, so it always
@@ -75,6 +76,7 @@ export function OfferListPage() {
   useEffect(() => {
     if (scoringStatus?.finished_at) {
       refetch();
+      refetchKnownSources();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scoringStatus?.finished_at]);
@@ -91,6 +93,9 @@ export function OfferListPage() {
             source={source.id}
             label={source.label}
             lastFetchedAt={lastFetchedByConnector.get(source.id)?.last_fetched_at ?? null}
+            offerCount={source.offer_count}
+            scoredCount={source.scored_count}
+            unscoredCount={source.unscored_count}
             onIngested={handleIngested}
           />
         ))}

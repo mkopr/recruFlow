@@ -2383,7 +2383,10 @@ number the user types in, no persisted config in between. See the P3US29 section
   "apply to all" bar (four independent controls — cadence, range, auto-fetch, stop/start) above a
   vertical stack of `ConnectorSettingsCard`s, one per `useKnownSources()` entry — a vertical card
   stack rather than a widening row-based table is what keeps the page legible as more connectors
-  are registered (P3US38-44 add six more). `FetchCadenceSection.tsx`, `FetchRangeSection.tsx`,
+  are registered (P3US38-44 add six more). **Superseded by P3US45**: as the registry grew past six
+  connectors, the vertical stack was replaced by a tab strip showing exactly one
+  `ConnectorSettingsCard` at a time — see "Per-connector offer counts + connector settings
+  sub-pages (P3US45)" below. `FetchCadenceSection.tsx`, `FetchRangeSection.tsx`,
   `useFetchCadence.ts`, and `useFetchRangeSettings.ts` (and their test files) are deleted, not
   kept alongside the new components.
 
@@ -2736,6 +2739,79 @@ number the user types in, no persisted config in between. See the P3US29 section
   if a legitimate non-browser API access path turns up. Until then, The Protocol is not one of
   recruFlow's connectors — `CONNECTOR_REGISTRY` has no entry for it, and `playwright` is not a
   dependency of this repository.
+
+### Per-connector offer counts + connector settings sub-pages (P3US45)
+
+- **Purpose**: the main page's connector cards and Settings' connector configuration both scale
+  poorly once a registry grows past a handful of entries — the main page gives no sense of how
+  many offers each connector has actually produced or how much of the active profile's backlog
+  is scored, and Settings' vertical `ConnectorSettingsCard` stack (P3US37) keeps growing taller
+  with every new connector (six real connectors already; P3US42-44 queue three more). This story
+  adds counts to the former and a tab/sub-page navigation to the latter, without touching either
+  component's actual content.
+
+- **`ConnectorOption` (`app/schemas/connectors.py`) gains three required `int` fields**:
+  `offer_count`, `scored_count`, `unscored_count`. `GET /connectors`
+  (`app/api/routes/connectors.py`) computes all three in one grouped query — `SELECT
+  Source.connector, COUNT(Offer.id), COUNT(CASE WHEN Offer.id IN (scored_offer_ids) THEN
+  Offer.id END) ... GROUP BY Source.connector` — then merges the per-connector counts with
+  `CONNECTOR_REGISTRY` so every registered connector appears with `(0, 0, 0)` even if it has no
+  `Source`/`Offer` rows yet (a brand-new connector's first day, or a monkeypatched test double).
+  `offer_count` is a **raw inventory count**: every `Offer` row for that connector, unfiltered by
+  `hide`, `applied`, or fetch-range — deliberately not the same "how many offers can I currently
+  see" count `GET /offers`'s `total` returns. `scored_count`/`unscored_count` are keyed on whether
+  each offer has a `MatchScore` row for the **active Profile only** — a `MatchScore` against a
+  different (inactive) profile still counts as unscored. Mirrors, but does not share,
+  `app/api/routes/offers.py`'s `_NO_ACTIVE_PROFILE_ID = -1` sentinel convention: when there is no
+  active profile, the "scored" subquery is scoped to an id no `MatchScore.profile_id` can ever
+  hold, so every connector reports `scored_count == 0` without branching the query shape. This is
+  a second, independent per-file sentinel (this codebase's established convention, not a shared
+  cross-module constant).
+
+- **`ScoringStatusResponse` (`app/schemas/scoring.py`) gains `total_offers: int`** — a raw,
+  unfiltered `COUNT(*)` over the whole `Offer` table (`count_total_offers`, `app/scoring/
+  batch.py`, mirroring `count_unscored_backlog`'s existing on-demand-count style), computed
+  alongside the rest of `GET /scoring/status`'s fields. Unlike `unscored_backlog` (already
+  profile/connector/fetch-range-scoped), `total_offers` answers "how many offers exist at all,"
+  independent of any profile — the database-wide denominator the frontend's `scored / total`
+  numbers need.
+
+- **Frontend counts wiring**: `useKnownSources()` (`frontend/src/hooks/useKnownSources.ts`) now
+  returns a `refetch` alongside `sources` — every existing consumer that only destructured
+  `{ sources }` (`OfferFilters`, `FailureFilters`, `ConnectorSettingsSection`) is unaffected;
+  `OfferListPage` is the only caller that also uses `refetch`, calling it from both existing
+  refresh triggers (`handleIngested`, and the `scoringStatus.finished_at` effect that already
+  re-pulls the offer table after a background scoring run) so a connector's counts update live,
+  the same "no manual refresh" guarantee the rest of the main page already gives. Both new counts
+  are rendered as bare `scored / total` numbers, deliberately without any words — `SourceFetchCard`
+  adds a second line, `"{scoredCount} / {offerCount}"`, below its existing label/last-fetched
+  status line; `ScoreNowButton`'s `defaultSubtitle` becomes `"{total_offers - unscored_backlog} /
+  {total_offers}"`, replacing its previous "N offers pending / All offers scored" wording
+  entirely (a deliberate minimal-UI call — this project's other status text stays wordy, but
+  scoring counts read better as bare numbers here).
+
+- **Settings connector sub-pages**: `ConnectorSettingsSection.tsx`'s vertical
+  `ConnectorSettingsCard` stack (P3US37) is replaced by a `role="tablist"`/`role="tab"` strip
+  sourced directly from `useKnownSources()`, rendering exactly one active connector's
+  `ConnectorSettingsCard` below it — the "Apply to all" bar above the tab strip is untouched and
+  stays visible and functional regardless of which tab is selected (it was already
+  connector-agnostic, calling the same `*All` bulk endpoints). The active tab is plain
+  component state, not derived from routing, so adding a new `CONNECTOR_REGISTRY` entry makes it
+  appear as a new tab with zero changes to `ConnectorSettingsSection.tsx` itself — the same
+  zero-frontend-change extensibility P3US37 established for the old card stack. The tab strip's
+  container reuses the same `flex flex-wrap` pattern the "Apply to all" bar already uses, so it
+  wraps onto additional rows rather than overflowing at both the real 6-connector count and a
+  9-10-connector fixture-mocked stretch test, at both mobile and desktop widths (manually
+  confirmed: 6 tabs sit on one row at 1440px width and wrap to three rows at 375px width, with no
+  horizontal overflow on the tab strip itself either way).
+
+- **`frontend/src/lib/connectorSettingsTabPrefs.ts` (new)** persists the selected tab id to
+  `localStorage` under `recruflow.connectorSettingsTab`, mirroring BUG33's
+  `offerListPrefs.ts` precedent (bare `load.../save...` functions, no wrapper hook) but simplified
+  — the module only stores a string id; "is this still a known connector" is checked by the
+  consuming component against the live `useKnownSources()` list, since the prefs module itself has
+  no way to know the registry. A persisted id pointing at a since-removed connector (or nothing
+  persisted yet) falls back to the registry's first entry rather than rendering no tab as active.
 
 ### Makefile targets
 

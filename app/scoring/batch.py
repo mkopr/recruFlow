@@ -161,6 +161,14 @@ async def _count_already_scored(
     return (await session.execute(stmt)).scalar_one()
 
 
+async def count_total_offers(session: AsyncSession) -> int:
+    """Live count of every row in the Offer table, regardless of connector, hide state,
+    or profile.
+    """
+    stmt = select(func.count()).select_from(OfferModel)
+    return (await session.execute(stmt)).scalar_one()
+
+
 async def count_unscored_backlog(
     session: AsyncSession, *, connectors: Collection[str] | None = None
 ) -> int:

@@ -704,6 +704,34 @@ async def test_scoring_status_reports_live_unscored_backlog(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_scoring_status_reports_total_offers(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    # The whole-table count is deliberately unfiltered (by connector, hide, or profile), so
+    # per this project's recorded shared-dev-DB-pollution risk, assert a delta rather than an
+    # absolute count -- other tests/dev data may leave rows behind between runs.
+    baseline_response = await client.get("/scoring/status")
+    assert baseline_response.status_code == 200
+    baseline_total = baseline_response.json()["total_offers"]
+
+    connector = _fake_connector()
+    source_id = await _create_source(db_session, connector=connector)
+    try:
+        await _create_offer(db_session, source_id)
+        await _create_offer(db_session, source_id)
+        await _create_offer(db_session, source_id)
+        await db_session.commit()
+
+        response = await client.get("/scoring/status")
+
+        assert response.status_code == 200
+        assert response.json()["total_offers"] == baseline_total + 3
+    finally:
+        await _delete_sources_and_dependents(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_scoring_status_reflects_last_completed_run(
     client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:

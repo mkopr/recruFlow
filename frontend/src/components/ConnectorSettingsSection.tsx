@@ -1,9 +1,27 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
+import type { ConnectorOption } from '../api/connectors';
 import { useConnectorSettings } from '../hooks/useConnectorSettings';
 import { useKnownSources } from '../hooks/useKnownSources';
 import { buildRequest, type RangeDraft } from '../lib/connectorSettingsDraft';
+import {
+  loadSelectedConnectorTab,
+  saveSelectedConnectorTab,
+} from '../lib/connectorSettingsTabPrefs';
 import { ConnectorSettingsCard } from './ConnectorSettingsCard';
+
+// A persisted tab id may point at a connector that no longer exists (removed
+// from the registry) or nothing may be selected yet -- fall back to the
+// registry's first entry rather than rendering no tab as active.
+function resolveActiveTabId(
+  knownSources: ConnectorOption[],
+  selectedTab: string | null,
+): string | null {
+  if (selectedTab !== null && knownSources.some((source) => source.id === selectedTab)) {
+    return selectedTab;
+  }
+  return knownSources[0]?.id ?? null;
+}
 
 export function ConnectorSettingsSection() {
   const { sources: knownSources } = useKnownSources();
@@ -17,6 +35,17 @@ export function ConnectorSettingsSection() {
   });
   const [applyAllAutoFetch, setApplyAllAutoFetch] = useState(true);
   const [applyAllEnabled, setApplyAllEnabled] = useState(true);
+
+  const [selectedTab, setSelectedTab] = useState<string | null>(loadSelectedConnectorTab);
+
+  useEffect(() => {
+    if (selectedTab !== null) {
+      saveSelectedConnectorTab(selectedTab);
+    }
+  }, [selectedTab]);
+
+  const activeTabId = resolveActiveTabId(knownSources, selectedTab);
+  const activeSource = knownSources.find((source) => source.id === activeTabId) ?? null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -117,11 +146,27 @@ export function ConnectorSettingsSection() {
         </div>
       </div>
 
-      <div className="flex flex-col gap-4">
+      <div
+        role="tablist"
+        className="flex flex-wrap gap-2 border-b border-[var(--color-border)] pb-2"
+      >
         {knownSources.map((source) => (
-          <ConnectorSettingsCard key={source.id} source={source} settings={settings} />
+          <button
+            key={source.id}
+            type="button"
+            role="tab"
+            aria-selected={source.id === activeTabId}
+            className={source.id === activeTabId ? 'btn btn-accent' : 'btn'}
+            onClick={() => setSelectedTab(source.id)}
+          >
+            {source.label}
+          </button>
         ))}
       </div>
+
+      {activeSource !== null && (
+        <ConnectorSettingsCard key={activeSource.id} source={activeSource} settings={settings} />
+      )}
     </div>
   );
 }

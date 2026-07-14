@@ -11,13 +11,14 @@ vi.mock('../api/scoring', () => ({
 
 const triggerBatchScoringMock = vi.mocked(scoringApi.triggerBatchScoring);
 
-function idleStatus(unscoredBacklog: number): scoringApi.ScoringStatus {
+function idleStatus(unscoredBacklog: number, totalOffers: number): scoringApi.ScoringStatus {
   return {
     running: false,
     processed: 0,
     total: 0,
     remaining_backlog: 0,
     unscored_backlog: unscoredBacklog,
+    total_offers: totalOffers,
     started_at: null,
     finished_at: null,
     last_scored: 0,
@@ -31,16 +32,16 @@ beforeEach(() => {
 });
 
 describe('ScoreNowButton', () => {
-  it('shows the pending backlog count when idle with unscored offers', () => {
-    render(<ScoreNowButton status={idleStatus(7)} onScored={vi.fn()} />);
+  it('shows scored/total as bare numbers when idle with unscored offers', () => {
+    render(<ScoreNowButton status={idleStatus(7, 214)} onScored={vi.fn()} />);
 
-    expect(screen.getByText('7 offers pending')).toBeInTheDocument();
+    expect(screen.getByText('207 / 214')).toBeInTheDocument();
   });
 
-  it('shows "All offers scored" when idle with no backlog', () => {
-    render(<ScoreNowButton status={idleStatus(0)} onScored={vi.fn()} />);
+  it('shows scored/total as bare numbers when idle with no backlog', () => {
+    render(<ScoreNowButton status={idleStatus(0, 214)} onScored={vi.fn()} />);
 
-    expect(screen.getByText('All offers scored')).toBeInTheDocument();
+    expect(screen.getByText('214 / 214')).toBeInTheDocument();
   });
 
   it('shows a loading state while scoring is in progress', async () => {
@@ -52,7 +53,7 @@ describe('ScoreNowButton', () => {
     );
     const onScored = vi.fn();
 
-    render(<ScoreNowButton status={idleStatus(3)} onScored={onScored} />);
+    render(<ScoreNowButton status={idleStatus(3, 214)} onScored={onScored} />);
     await userEvent.click(screen.getByRole('button'));
 
     expect(screen.getByText('Scoring…')).toBeInTheDocument();
@@ -66,7 +67,7 @@ describe('ScoreNowButton', () => {
     triggerBatchScoringMock.mockResolvedValue({ scored: 5, skipped: 1, failed: 0, remaining: 3 });
     const onScored = vi.fn();
 
-    render(<ScoreNowButton status={idleStatus(8)} onScored={onScored} />);
+    render(<ScoreNowButton status={idleStatus(8, 214)} onScored={onScored} />);
     await userEvent.click(screen.getByRole('button'));
 
     await waitFor(() => expect(onScored).toHaveBeenCalledTimes(1));
@@ -77,7 +78,7 @@ describe('ScoreNowButton', () => {
     triggerBatchScoringMock.mockRejectedValue(new Error('failed to trigger scoring'));
     const onScored = vi.fn();
 
-    render(<ScoreNowButton status={idleStatus(3)} onScored={onScored} />);
+    render(<ScoreNowButton status={idleStatus(3, 214)} onScored={onScored} />);
     await userEvent.click(screen.getByRole('button'));
 
     await waitFor(() => expect(screen.getByText('failed to trigger scoring')).toBeInTheDocument());
@@ -86,7 +87,7 @@ describe('ScoreNowButton', () => {
 
   it('is disabled and does not trigger scoring while a scoring run is already active', async () => {
     const onScored = vi.fn();
-    const status: scoringApi.ScoringStatus = { ...idleStatus(3), running: true };
+    const status: scoringApi.ScoringStatus = { ...idleStatus(3, 214), running: true };
 
     render(<ScoreNowButton status={status} onScored={onScored} />);
     expect(screen.getByRole('button')).toBeDisabled();
@@ -99,7 +100,7 @@ describe('ScoreNowButton', () => {
     triggerBatchScoringMock.mockReturnValue(new Promise(() => {}));
     const onScored = vi.fn();
 
-    render(<ScoreNowButton status={idleStatus(3)} onScored={onScored} />);
+    render(<ScoreNowButton status={idleStatus(3, 214)} onScored={onScored} />);
     await userEvent.click(screen.getByRole('button'));
     await userEvent.click(screen.getByRole('button'));
 

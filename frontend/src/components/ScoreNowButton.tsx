@@ -26,10 +26,8 @@ function defaultSubtitle(status: ScoringStatus | null): string {
   if (status === null) {
     return 'Score unscored offers now';
   }
-  if (status.unscored_backlog > 0) {
-    return `${status.unscored_backlog} offer${status.unscored_backlog === 1 ? '' : 's'} pending`;
-  }
-  return 'All offers scored';
+  const scored = status.total_offers - status.unscored_backlog;
+  return `${scored} / ${status.total_offers}`;
 }
 
 export function ScoreNowButton({ status, onScored }: ScoreNowButtonProps) {

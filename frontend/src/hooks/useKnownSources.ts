@@ -1,15 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { fetchConnectors, type ConnectorOption } from '../api/connectors';
 
 export interface UseKnownSourcesResult {
   sources: ConnectorOption[];
+  refetch: () => void;
 }
 
 export function useKnownSources(): UseKnownSourcesResult {
   const [sources, setSources] = useState<ConnectorOption[]>([]);
 
-  useEffect(() => {
+  const refetch = useCallback(() => {
     fetchConnectors()
       .then(setSources)
       .catch(() => {
@@ -17,5 +18,9 @@ export function useKnownSources(): UseKnownSourcesResult {
       });
   }, []);
 
-  return { sources };
+  useEffect(() => {
+    refetch();
+  }, [refetch]);
+
+  return { sources, refetch };
 }

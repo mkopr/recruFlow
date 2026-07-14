@@ -50,7 +50,13 @@ function makeSettings(
   };
 }
 
-const source: ConnectorOption = { id: 'justjoinit', label: 'JustJoin.it' };
+const source: ConnectorOption = {
+  id: 'justjoinit',
+  label: 'JustJoin.it',
+  offer_count: 0,
+  scored_count: 0,
+  unscored_count: 0,
+};
 
 describe('ConnectorSettingsCard', () => {
   it('renders the label, cadence input, auto-fetch checkbox, and stop/start control from status', () => {
@@ -111,11 +117,23 @@ describe('ConnectorSettingsCard', () => {
     render(
       <>
         <ConnectorSettingsCard
-          source={{ id: 'justjoinit', label: 'JustJoin.it' }}
+          source={{
+            id: 'justjoinit',
+            label: 'JustJoin.it',
+            offer_count: 0,
+            scored_count: 0,
+            unscored_count: 0,
+          }}
           settings={settingsA}
         />
         <ConnectorSettingsCard
-          source={{ id: 'nofluffjobs', label: 'NoFluffJobs' }}
+          source={{
+            id: 'nofluffjobs',
+            label: 'NoFluffJobs',
+            offer_count: 0,
+            scored_count: 0,
+            unscored_count: 0,
+          }}
           settings={settingsB}
         />
       </>,

@@ -22,6 +22,9 @@ describe('SourceFetchCard', () => {
         source="justjoinit"
         label="JustJoin.it"
         lastFetchedAt={null}
+        offerCount={10}
+        scoredCount={6}
+        unscoredCount={4}
         onIngested={vi.fn()}
       />,
     );
@@ -35,6 +38,9 @@ describe('SourceFetchCard', () => {
         source="justjoinit"
         label="JustJoin.it"
         lastFetchedAt="2026-07-06T12:00:00Z"
+        offerCount={10}
+        scoredCount={6}
+        unscoredCount={4}
         onIngested={vi.fn()}
       />,
     );
@@ -56,6 +62,9 @@ describe('SourceFetchCard', () => {
         source="justjoinit"
         label="JustJoin.it"
         lastFetchedAt={null}
+        offerCount={10}
+        scoredCount={6}
+        unscoredCount={4}
         onIngested={onIngested}
       />,
     );
@@ -82,6 +91,9 @@ describe('SourceFetchCard', () => {
         source="justjoinit"
         label="JustJoin.it"
         lastFetchedAt={null}
+        offerCount={10}
+        scoredCount={6}
+        unscoredCount={4}
         onIngested={onIngested}
       />,
     );
@@ -100,6 +112,9 @@ describe('SourceFetchCard', () => {
         source="justjoinit"
         label="JustJoin.it"
         lastFetchedAt={null}
+        offerCount={10}
+        scoredCount={6}
+        unscoredCount={4}
         onIngested={onIngested}
       />,
     );
@@ -126,6 +141,9 @@ describe('SourceFetchCard', () => {
         source="justjoinit"
         label="JustJoin.it"
         lastFetchedAt={null}
+        offerCount={10}
+        scoredCount={6}
+        unscoredCount={4}
         onIngested={onIngested}
       />,
     );
@@ -146,6 +164,9 @@ describe('SourceFetchCard', () => {
         source="justjoinit"
         label="JustJoin.it"
         lastFetchedAt={null}
+        offerCount={10}
+        scoredCount={6}
+        unscoredCount={4}
         onIngested={onIngested}
       />,
     );
@@ -153,5 +174,38 @@ describe('SourceFetchCard', () => {
     await userEvent.click(screen.getByRole('button'));
 
     expect(triggerIngestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders scored/total as bare numbers', () => {
+    render(
+      <SourceFetchCard
+        source="justjoinit"
+        label="JustJoin.it"
+        lastFetchedAt={null}
+        offerCount={214}
+        scoredCount={198}
+        unscoredCount={16}
+        onIngested={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('198 / 214')).toBeInTheDocument();
+    expect(screen.getByText('Never fetched')).toBeInTheDocument();
+  });
+
+  it('renders scored/total correctly when the count is exactly one', () => {
+    render(
+      <SourceFetchCard
+        source="justjoinit"
+        label="JustJoin.it"
+        lastFetchedAt={null}
+        offerCount={1}
+        scoredCount={1}
+        unscoredCount={0}
+        onIngested={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('1 / 1')).toBeInTheDocument();
   });
 });

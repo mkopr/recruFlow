@@ -12,10 +12,17 @@ vi.mock('../hooks/useKnownSources', () => ({
 
 vi.mocked(useKnownSourcesModule.useKnownSources).mockReturnValue({
   sources: [
-    { id: 'solid_jobs', label: 'SOLID.Jobs' },
-    { id: 'justjoinit', label: 'JustJoin.it' },
-    { id: 'nofluffjobs', label: 'NoFluffJobs' },
+    { id: 'solid_jobs', label: 'SOLID.Jobs', offer_count: 0, scored_count: 0, unscored_count: 0 },
+    { id: 'justjoinit', label: 'JustJoin.it', offer_count: 0, scored_count: 0, unscored_count: 0 },
+    {
+      id: 'nofluffjobs',
+      label: 'NoFluffJobs',
+      offer_count: 0,
+      scored_count: 0,
+      unscored_count: 0,
+    },
   ],
+  refetch: vi.fn(),
 });
 
 function renderFilters(filters: OfferListFilters, onChange: (next: OfferListFilters) => void) {

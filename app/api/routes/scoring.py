@@ -7,7 +7,12 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.api.deps import SessionDep
 from app.schemas.scoring import BatchScoringResponse, ScoringStatusResponse
-from app.scoring.batch import count_unscored_backlog, get_scoring_progress, run_batch_scoring
+from app.scoring.batch import (
+    count_total_offers,
+    count_unscored_backlog,
+    get_scoring_progress,
+    run_batch_scoring,
+)
 from app.scoring.events import publish_score, subscribe, unsubscribe
 
 router = APIRouter()
@@ -31,12 +36,14 @@ async def trigger_batch_scoring(session: SessionDep) -> BatchScoringResponse:
 async def scoring_status(session: SessionDep) -> ScoringStatusResponse:
     progress = get_scoring_progress()
     unscored_backlog = await count_unscored_backlog(session)
+    total_offers = await count_total_offers(session)
     return ScoringStatusResponse(
         running=progress.running,
         processed=progress.processed,
         total=progress.total,
         remaining_backlog=progress.remaining_backlog,
         unscored_backlog=unscored_backlog,
+        total_offers=total_offers,
         started_at=progress.started_at,
         finished_at=progress.finished_at,
         last_scored=progress.last_scored,

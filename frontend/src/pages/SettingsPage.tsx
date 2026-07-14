@@ -7,8 +7,8 @@ export function SettingsPage() {
     <div className="mx-auto flex w-full max-w-screen-lg flex-col gap-6 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
       <header>
         <p className="text-sm text-[var(--color-text-muted)]">
-          Connectors: each job board's fetch cadence, date range, auto-fetch, and stop/start state,
-          one card per connector.
+          Connectors: select a job board below to configure its fetch cadence, date range,
+          auto-fetch, and stop/start state — one connector's settings shown at a time.
         </p>
       </header>
       <ConnectorSettingsSection />

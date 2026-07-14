@@ -18,7 +18,7 @@ const useConnectorSettingsMock = vi.mocked(useConnectorSettingsModule.useConnect
 
 beforeEach(() => {
   useKnownSourcesMock.mockReset();
-  useKnownSourcesMock.mockReturnValue({ sources: [] });
+  useKnownSourcesMock.mockReturnValue({ sources: [], refetch: vi.fn() });
 
   useConnectorSettingsMock.mockReset();
   useConnectorSettingsMock.mockReturnValue({

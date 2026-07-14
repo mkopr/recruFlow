@@ -17,8 +17,14 @@ beforeEach(() => {
 describe('useKnownSources', () => {
   it('calls fetchConnectors once on mount and exposes the resolved array', async () => {
     fetchConnectorsMock.mockResolvedValue([
-      { id: 'justjoinit', label: 'JustJoin.it' },
-      { id: 'solid_jobs', label: 'SOLID.Jobs' },
+      {
+        id: 'justjoinit',
+        label: 'JustJoin.it',
+        offer_count: 5,
+        scored_count: 2,
+        unscored_count: 3,
+      },
+      { id: 'solid_jobs', label: 'SOLID.Jobs', offer_count: 1, scored_count: 1, unscored_count: 0 },
     ]);
 
     const { result } = renderHook(() => useKnownSources());
@@ -34,5 +40,38 @@ describe('useKnownSources', () => {
 
     await waitFor(() => expect(fetchConnectorsMock).toHaveBeenCalledTimes(1));
     expect(result.current.sources).toEqual([]);
+  });
+
+  it('refetch() re-fetches and replaces sources', async () => {
+    fetchConnectorsMock.mockResolvedValueOnce([
+      {
+        id: 'justjoinit',
+        label: 'JustJoin.it',
+        offer_count: 5,
+        scored_count: 2,
+        unscored_count: 3,
+      },
+    ]);
+
+    const { result } = renderHook(() => useKnownSources());
+    await waitFor(() => expect(result.current.sources).toHaveLength(1));
+
+    fetchConnectorsMock.mockResolvedValueOnce([
+      { id: 'solid_jobs', label: 'SOLID.Jobs', offer_count: 9, scored_count: 4, unscored_count: 5 },
+    ]);
+    result.current.refetch();
+
+    await waitFor(() =>
+      expect(result.current.sources).toEqual([
+        {
+          id: 'solid_jobs',
+          label: 'SOLID.Jobs',
+          offer_count: 9,
+          scored_count: 4,
+          unscored_count: 5,
+        },
+      ]),
+    );
+    expect(fetchConnectorsMock).toHaveBeenCalledTimes(2);
   });
 });

@@ -11,6 +11,7 @@ function makeStatus(overrides: Partial<ScoringStatus> = {}): ScoringStatus {
     total: 0,
     remaining_backlog: 0,
     unscored_backlog: 0,
+    total_offers: 0,
     started_at: null,
     finished_at: null,
     last_scored: 0,

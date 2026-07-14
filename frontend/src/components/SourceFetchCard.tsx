@@ -6,6 +6,9 @@ interface SourceFetchCardProps {
   source: string;
   label: string;
   lastFetchedAt: string | null;
+  offerCount: number;
+  scoredCount: number;
+  unscoredCount: number;
   onIngested: () => void;
 }
 
@@ -17,6 +20,8 @@ export function SourceFetchCard({
   source,
   label,
   lastFetchedAt,
+  offerCount,
+  scoredCount,
   onIngested,
 }: SourceFetchCardProps) {
   const [loading, setLoading] = useState(false);
@@ -60,6 +65,9 @@ export function SourceFetchCard({
         }
       >
         {status}
+      </span>
+      <span className="text-xs text-[var(--color-text-muted)]">
+        {scoredCount} / {offerCount}
       </span>
     </button>
   );

@@ -16,6 +16,7 @@ class ScoringStatusResponse(BaseModel):
     total: int
     remaining_backlog: int
     unscored_backlog: int
+    total_offers: int
     started_at: datetime | None
     finished_at: datetime | None
     last_scored: int
