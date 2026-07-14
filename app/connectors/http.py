@@ -1,3 +1,4 @@
+import gzip
 import json
 import logging
 from typing import Any
@@ -38,4 +39,29 @@ def fetch_json(
         logger.error(
             "%s returned malformed JSON: url=%r body=%r", source_name, url, response.text[:500]
         )
+        return None
+
+
+def fetch_gzip_xml(
+    url: str,
+    *,
+    source_name: str,
+    logger: logging.Logger,
+    timeout: float = 10.0,
+) -> str | None:
+    try:
+        response = httpx.get(
+            url,
+            timeout=timeout,
+            headers={"User-Agent": "recruFlow/0.1"},
+        )
+        response.raise_for_status()
+    except httpx.HTTPError:
+        logger.error("failed to fetch %s sitemap: url=%r", source_name, url, exc_info=True)
+        return None
+
+    try:
+        return gzip.decompress(response.content).decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        logger.error("%s returned malformed gzip sitemap: url=%r", source_name, url)
         return None

@@ -6,6 +6,7 @@ logger = logging.getLogger(__name__)
 SOLID_JOBS = "solid_jobs"
 JUSTJOINIT = "justjoinit"
 NOFLUFFJOBS = "nofluffjobs"
+BULLDOGJOB = "bulldogjob"
 
 CANONICAL_SENIORITY_LEVELS: tuple[str, ...] = ("junior", "mid", "senior", "lead", "expert")
 
@@ -31,6 +32,12 @@ _SENIORITY_VOCAB: dict[str, dict[str, str]] = {
         "senior": "senior",
         "expert": "expert",
         "c-level": "lead",
+    },
+    BULLDOGJOB: {
+        "junior": "junior",
+        "medium": "mid",
+        "senior": "senior",
+        "lead": "lead",
     },
 }
 

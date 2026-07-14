@@ -2,6 +2,7 @@ import logging
 
 import pytest
 from app.ingestion.normalize import (
+    BULLDOGJOB,
     JUSTJOINIT,
     NOFLUFFJOBS,
     SOLID_JOBS,
@@ -83,6 +84,14 @@ def test_normalize_seniority_maps_justjoinit_manager_and_c_level_to_canonical_le
 
 def test_normalize_seniority_joins_multiple_canonical_values_for_list_input() -> None:
     assert normalize_seniority(NOFLUFFJOBS, ["Mid", "Senior"]) == "mid, senior"
+
+
+def test_seniority_vocab_maps_bulldogjob_experience_levels() -> None:
+    # values confirmed live 2026-07-13 across sampled Bulldogjob listings/detail pages
+    assert normalize_seniority(BULLDOGJOB, "junior") == "junior"
+    assert normalize_seniority(BULLDOGJOB, "medium") == "mid"
+    assert normalize_seniority(BULLDOGJOB, "senior") == "senior"
+    assert normalize_seniority(BULLDOGJOB, "lead") == "lead"
 
 
 def test_normalize_seniority_returns_none_for_missing_field() -> None:

@@ -317,6 +317,38 @@ If the fetch fails (network error, non-2xx status, malformed JSON, or an unrecog
 shape), the connector logs the failure and returns `IngestionResult(ok=False, fetched=0,
 created=0)` rather than raising — it never crashes the calling ingestion process.
 
+## Bulldogjob connector
+
+`app/connectors/bulldogjob.py` ingests offers from Bulldogjob (bulldogjob.com), which publishes no
+API at all (confirmed live — see
+`docs/adr/0023-bulldogjob-sitemap-and-embedded-next-data-investigation.md`). Instead of one JSON
+endpoint, `BulldogjobConnector` enumerates every live job URL from the site's own sitemap
+(`sitemap.en.xml.gz` → `en/jobs.xml.gz`), then live-fetches each URL and parses the job record out
+of its embedded `<script id="__NEXT_DATA__">` JSON blob — structured JSON extraction, not DOM
+scraping. It dispatches through the same generic `CONNECTOR_REGISTRY`-driven route as the other
+three connectors, with no bespoke handler:
+
+```bash
+curl -X POST http://localhost:8000/ingest/bulldogjob
+```
+
+```json
+{"source": "bulldogjob", "ok": true, "fetched": 20, "created": 17, "error_message": null}
+```
+
+| `config_json` key | Default | Notes |
+| --- | --- | --- |
+| `endpoint_url` | Bulldogjob's sitemap index URL | Override for testing only |
+| `page_size` | `20` | Sitemap URLs live-fetched per chunk (not an API page size — each one is its own HTTP request) |
+| `max_pages` | `50` | Chunks per run — bounds total live traffic per run to `page_size * max_pages` |
+| `already_seen_stop_threshold` | `20` | Consecutive already-ingested offers (within sitemap order) before a run stops early |
+
+There is no pagination cursor: `next_cursor` always returns `None`, since what changes between
+runs is the sitemap contents, not an API cursor. A single broken or unexpected-shape detail page
+is skipped without failing the rest of its chunk; a failure fetching the sitemap itself is fatal
+to the whole run, returning `IngestionResult(ok=False, ...)` the same way a first-page failure
+does for the other three connectors.
+
 ## Scheduler
 
 `app/scheduler/` wires [APScheduler](https://apscheduler.readthedocs.io/) into the FastAPI
@@ -433,14 +465,16 @@ curl http://localhost:8000/connectors
 [
   {"id": "solid_jobs", "label": "SOLID.Jobs"},
   {"id": "justjoinit", "label": "JustJoin.it"},
-  {"id": "nofluffjobs", "label": "NoFluffJobs"}
+  {"id": "nofluffjobs", "label": "NoFluffJobs"},
+  {"id": "bulldogjob", "label": "Bulldogjob"}
 ]
 ```
 
 ### `POST /scheduler/run/{source}`
 
 Triggers one source's ingestion immediately, outside its automatic schedule. `{source}` is a
-connector identity string (`solid_jobs`, `justjoinit`, or `nofluffjobs`), not `sources.name`.
+connector identity string (`solid_jobs`, `justjoinit`, `nofluffjobs`, or `bulldogjob`), not
+`sources.name`.
 
 ```bash
 curl -X POST http://localhost:8000/scheduler/run/justjoinit
@@ -516,7 +550,7 @@ out-of-band fetch and browse what's been ingested, outside the automatic schedul
 ### `POST /ingest/{source}`
 
 Triggers one source's ingestion immediately. `{source}` is a connector identity string
-(`solid_jobs`, `justjoinit`, or `nofluffjobs`), not `sources.name`. Unlike
+(`solid_jobs`, `justjoinit`, `nofluffjobs`, or `bulldogjob`), not `sources.name`. Unlike
 `POST /scheduler/run/{source}`, this does not write to the scheduler's `scheduler_runs` audit
 trail — `GET /scheduler/status` will not reflect a run triggered this way.
 

@@ -5,11 +5,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.connectors.bulldogjob import BulldogjobConnector
 from app.connectors.justjoinit import JustJoinItConnector
 from app.connectors.nofluffjobs import NoFluffJobsConnector
 from app.connectors.solid_jobs import SolidJobsConnector
 from app.db.models import Source
-from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
+from app.ingestion.normalize import BULLDOGJOB, JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
 from app.ingestion.types import IngestionResult
 
 
@@ -49,6 +50,9 @@ CONNECTOR_REGISTRY: dict[str, ConnectorSpec] = {
     ),
     NOFLUFFJOBS: ConnectorSpec(
         name=NOFLUFFJOBS, label="NoFluffJobs", dispatch=NoFluffJobsConnector().run
+    ),
+    BULLDOGJOB: ConnectorSpec(
+        name=BULLDOGJOB, label="Bulldogjob", dispatch=BulldogjobConnector().run
     ),
 }
 

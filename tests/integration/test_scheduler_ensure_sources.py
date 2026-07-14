@@ -4,7 +4,7 @@ from uuid import uuid4
 import pytest
 from app.db.models import Source
 from app.ingestion import registry
-from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
+from app.ingestion.normalize import BULLDOGJOB, JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
 from app.ingestion.registry import ConnectorSpec
 from app.scheduler.service import ensure_sources_exist
 from sqlalchemy import delete, select
@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_ensure_sources_exist_creates_three_builtin_sources(
+async def test_ensure_sources_exist_creates_four_builtin_sources(
     db_session: AsyncSession,
 ) -> None:
     await ensure_sources_exist(db_session)
@@ -26,7 +26,7 @@ async def test_ensure_sources_exist_creates_three_builtin_sources(
     )
     by_connector = {row.connector: row for row in rows if row.connector is not None}
 
-    assert set(by_connector) == {SOLID_JOBS, JUSTJOINIT, NOFLUFFJOBS}
+    assert set(by_connector) == {SOLID_JOBS, JUSTJOINIT, NOFLUFFJOBS, BULLDOGJOB}
     for row in by_connector.values():
         assert row.config_json["schedule"]["type"] == "interval"
         assert row.config_json["connector_enabled"] is True
