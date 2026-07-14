@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.connectors.base import JobBoardConnector
 from app.connectors.http import fetch_gzip_xml
-from app.connectors.sitemap import _parse_sitemap_locs
+from app.connectors.sitemap import _parse_sitemap_locs, next_sitemap_cursor, resolve_sitemap_cursor
 from app.db.models import Source
 from app.ingestion.normalize import (
     BULLDOGJOB,
@@ -195,11 +195,20 @@ class BulldogjobConnector(JobBoardConnector):
                 ok=False, fetched=0, created=0, error_message=f"failed to fetch {self.name} offers"
             )
 
+        # BUG41: sitemap order is stable but not recency-sorted, so restarting at cursor 0
+        # every run just re-walks the same already-ingested prefix forever. `sitemap_cursor`
+        # persists where the previous run left off; `last_cursor` tracks this run's true end
+        # (including "reached the end", i.e. `None`) so it can be written back below.
+        initial_cursor = resolve_sitemap_cursor(config, len(urls))
+        last_cursor: int | None = initial_cursor
+
         def fetch_page(
             cursor: int, page_size: int
         ) -> tuple[list[dict[str, Any]], int | None] | None:
+            nonlocal last_cursor
             chunk_urls = urls[cursor : cursor + page_size]
             if not chunk_urls:
+                last_cursor = None
                 return [], None
 
             offers: list[dict[str, Any]] = []
@@ -213,15 +222,16 @@ class BulldogjobConnector(JobBoardConnector):
                 offers.append(parsed)
 
             next_cursor = cursor + page_size if cursor + page_size < len(urls) else None
+            last_cursor = next_cursor
             return offers, next_cursor
 
-        return await run_paginated_ingestion(
+        result = await run_paginated_ingestion(
             session,
             source.id,
             source_name=self.name,
             fetch_page=fetch_page,
             map_offer=self.map_offer,
-            initial_cursor=0,
+            initial_cursor=initial_cursor,
             page_size=page_size,
             max_pages=max_pages,
             already_seen_stop_threshold=already_seen_stop_threshold,
@@ -229,4 +239,10 @@ class BulldogjobConnector(JobBoardConnector):
             logger=logger,
             since=since,
             until=until,
+            # Bulldogjob's sitemap isn't sorted newest-first (see the class docstring and
+            # ADR 0017) -- a sitemap-order page being wholly older than `since` says nothing
+            # about the rest of the catalog, so that early-stop must not apply here (BUG41).
+            sorted_by_recency=False,
         )
+        source.config_json = {**config, "sitemap_cursor": next_sitemap_cursor(last_cursor)}
+        return result

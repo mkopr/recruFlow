@@ -310,6 +310,58 @@ async def test_run_rocket_jobs_ingestion_uses_page_size_from_config(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_run_rocket_jobs_ingestion_resumes_from_persisted_cursor_across_runs(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # BUG41 regression: `max_pages=1` forces a single run to only cover the sitemap's first
+    # `page_size` URLs, mirroring the real Rocket Jobs config (13k-URL sitemap needing many
+    # scheduled runs to fully walk). Before the fix, every run restarted at cursor 0 and never
+    # made it past this same first slice.
+    source = await _create_source(db_session, config_json={"page_size": 5, "max_pages": 1})
+    slugs = [_unique_slug(f"job{i}") for i in range(10)]
+    urls = [_job_url(slug) for slug in slugs]
+    htmls = {_job_url(slug): _detail_html(slug, f"Job {i}") for i, slug in enumerate(slugs)}
+
+    call_log_1: list[str] = []
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        _make_router(
+            sitemap_xml=_urlset_xml(urls), detail_html_by_url=htmls, detail_call_log=call_log_1
+        ),
+    )
+    first = await RocketJobsConnector().run(db_session, source)
+    await db_session.commit()
+
+    assert first.created == 5
+    assert call_log_1 == urls[:5]
+    assert source.config_json["sitemap_cursor"] == 5
+
+    call_log_2: list[str] = []
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        _make_router(
+            sitemap_xml=_urlset_xml(urls), detail_html_by_url=htmls, detail_call_log=call_log_2
+        ),
+    )
+    second = await RocketJobsConnector().run(db_session, source)
+    await db_session.commit()
+
+    assert second.created == 5
+    assert call_log_2 == urls[5:]
+    assert source.config_json["sitemap_cursor"] == 0
+
+    rows = (
+        (await db_session.execute(select(OfferModel).where(OfferModel.source_id == source.id)))
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 10
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_run_rocket_jobs_ingestion_scoring_eligibility(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:

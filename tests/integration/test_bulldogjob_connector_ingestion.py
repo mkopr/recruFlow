@@ -351,6 +351,102 @@ async def test_run_bulldogjob_ingestion_range_mode_skips_offers_outside_since_un
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_run_bulldogjob_ingestion_resumes_from_persisted_cursor_across_runs(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # BUG41 regression: `max_pages=1` forces a single run to only cover the sitemap's first
+    # `page_size` URLs, mirroring the real Bulldogjob config (~1000-URL sitemap needing many
+    # scheduled runs to fully walk). Before the fix, every run restarted at cursor 0 and never
+    # made it past this same first slice.
+    source = await _create_source(db_session, config_json={"page_size": 5, "max_pages": 1})
+    ids = [_unique_job_id(f"job{i}") for i in range(10)]
+    urls = [_job_url(job_id) for job_id in ids]
+    htmls = {_job_url(job_id): _detail_html(job_id, f"Job {i}") for i, job_id in enumerate(ids)}
+
+    call_log_1: list[str] = []
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        _make_router(
+            jobs_xml=_jobs_sitemap_xml(urls), detail_html_by_url=htmls, detail_call_log=call_log_1
+        ),
+    )
+    first = await BulldogjobConnector().run(db_session, source)
+    await db_session.commit()
+
+    assert first.created == 5
+    assert call_log_1 == urls[:5]
+    assert source.config_json["sitemap_cursor"] == 5
+
+    call_log_2: list[str] = []
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        _make_router(
+            jobs_xml=_jobs_sitemap_xml(urls), detail_html_by_url=htmls, detail_call_log=call_log_2
+        ),
+    )
+    second = await BulldogjobConnector().run(db_session, source)
+    await db_session.commit()
+
+    assert second.created == 5
+    assert call_log_2 == urls[5:]
+    assert source.config_json["sitemap_cursor"] == 0
+
+    rows = (
+        (await db_session.execute(select(OfferModel).where(OfferModel.source_id == source.id)))
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 10
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_run_bulldogjob_ingestion_since_cutoff_does_not_stop_pagination_early(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # BUG41's exact Bulldogjob failure mode: sitemap order isn't recency-sorted, so an old
+    # listing landing on page 1 (page_size=1 forces separate pages) must not be mistaken for
+    # "the rest of the catalog is old too" and truncate pagination before page 2 is fetched.
+    source = await _create_source(
+        db_session,
+        config_json={
+            "page_size": 1,
+            "max_pages": 5,
+            "fetch_range": {"mode": "range", "since": "2026-06-01T00:00:00Z"},
+        },
+    )
+    old_id, new_id = _unique_job_id("old"), _unique_job_id("new")
+    old_url, new_url = _job_url(old_id), _job_url(new_id)
+    old_html = _detail_html(old_id, "Old Listing", publishedAt="2026-01-01T00:00:00Z")
+    new_html = _detail_html(new_id, "New Listing", publishedAt="2026-06-15T00:00:00Z")
+
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        _make_router(
+            jobs_xml=_jobs_sitemap_xml([old_url, new_url]),
+            detail_html_by_url={old_url: old_html, new_url: new_html},
+        ),
+    )
+
+    result = await BulldogjobConnector().run(db_session, source)
+    await db_session.commit()
+
+    assert result.fetched == 2
+    assert result.created == 1
+    rows = (
+        (await db_session.execute(select(OfferModel).where(OfferModel.source_id == source.id)))
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].title == "New Listing"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_run_bulldogjob_ingestion_uses_page_size_from_config(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:

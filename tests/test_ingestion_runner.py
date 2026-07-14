@@ -311,3 +311,53 @@ async def test_run_paginated_ingestion_stops_early_when_whole_page_is_older_than
 
     assert result.fetched == 2
     assert result.created == 0
+
+
+@pytest.mark.asyncio
+async def test_run_paginated_ingestion_sorted_by_recency_false_keeps_paging_past_old_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_ingest_offer(
+        session: object, mapped_fields: dict[str, Any], raw_payload: dict[str, Any]
+    ) -> tuple[object, bool]:
+        return object(), True
+
+    monkeypatch.setattr(runner_module, "ingest_offer", _fake_ingest_offer)
+
+    # Same shape as the "stops early" test above, but this feed (like Rocket Jobs/Bulldogjob's
+    # sitemap enumeration, BUG41) isn't sorted newest-first -- page 1 being wholly older than
+    # `since` must not be trusted as proof the rest of the feed is too.
+    page1_offers = [
+        {"title": "old-1", "posted_at": "2026-01-01T00:00:00Z"},
+        {"title": "old-2", "posted_at": "2026-01-02T00:00:00Z"},
+    ]
+    page2_offers = [{"title": "new-1", "posted_at": "2026-06-15T00:00:00Z"}]
+
+    def fetch_page(cursor: Any, page_size: int) -> Any:
+        if cursor is None:
+            return page1_offers, "cursor1"
+        if cursor == "cursor1":
+            return page2_offers, None
+        raise AssertionError("unexpected cursor")
+
+    session = AsyncMock()
+
+    result = await run_paginated_ingestion(
+        session,
+        source_id=7,
+        source_name="test-source",
+        fetch_page=fetch_page,
+        map_offer=lambda source_id, raw: raw,
+        initial_cursor=None,
+        page_size=10,
+        max_pages=5,
+        already_seen_stop_threshold=20,
+        force_refresh=False,
+        logger=logging.getLogger("test"),
+        since=datetime(2026, 6, 1, tzinfo=UTC),
+        until=None,
+        sorted_by_recency=False,
+    )
+
+    assert result.fetched == 3
+    assert result.created == 1

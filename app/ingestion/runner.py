@@ -58,6 +58,7 @@ async def run_paginated_ingestion(  # noqa: C901
     rate_limit_delay: float = 0.0,
     since: datetime | None = None,
     until: datetime | None = None,
+    sorted_by_recency: bool = True,
 ) -> IngestionResult:
     """Run the fetch -> persist -> early-stop pagination loop shared by all connectors.
 
@@ -73,6 +74,14 @@ async def run_paginated_ingestion(  # noqa: C901
     `consecutive_already_seen` in either direction -- so a narrow range never looks like
     "we've caught up" and truncates pagination for an unrelated reason. Applies identically
     regardless of `force_refresh` (see `docs/adr/0018`).
+
+    `sorted_by_recency` (default `True`, per ADR 0017's "pagination trusts newest-first
+    order" assumption) gates the "whole page older than since cutoff" early-stop: a page
+    being entirely older than `since` only proves the rest of the feed is too when the feed
+    is actually sorted newest-first. Sitemap-enumeration connectors (Rocket Jobs, Bulldogjob
+    -- BUG41) enumerate a stable, non-recency-sorted URL list and must pass `False` so a
+    sitemap-order page that happens to be all-older-than-`since` doesn't wrongly truncate the
+    rest of the (unsorted) catalog; per-offer range filtering above is unaffected either way.
     """
     total_fetched = 0
     total_created = 0
@@ -107,7 +116,7 @@ async def run_paginated_ingestion(  # noqa: C901
         # moment any offer's effective date is not before `since`, including an offer whose
         # date couldn't be determined (see the "now" fallback below) -- so an early stop only
         # ever fires on a page that is unambiguously, entirely older than the cutoff.
-        page_all_older_than_since = since is not None and len(offers) > 0
+        page_all_older_than_since = sorted_by_recency and since is not None and len(offers) > 0
 
         for raw in offers:
             mapped = map_offer(source_id, raw)
