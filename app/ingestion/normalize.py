@@ -7,6 +7,7 @@ SOLID_JOBS = "solid_jobs"
 JUSTJOINIT = "justjoinit"
 NOFLUFFJOBS = "nofluffjobs"
 BULLDOGJOB = "bulldogjob"
+ROCKET_JOBS = "rocket_jobs"
 
 CANONICAL_SENIORITY_LEVELS: tuple[str, ...] = ("junior", "mid", "senior", "lead", "expert")
 
@@ -43,6 +44,10 @@ _SENIORITY_VOCAB: dict[str, dict[str, str]] = {
 
 _REMOTE_STRING_VOCAB: dict[str, dict[str, bool]] = {
     JUSTJOINIT: {"remote": True, "hybrid": False, "office": False},
+    # schema.org JobPosting's standard `jobLocationType` value for a remote posting -- observed
+    # live 2026-07-14 on a real automatic Rocket Jobs ingestion run (not present on every
+    # posting, only remote ones, matching schema.org's own spec for this field).
+    ROCKET_JOBS: {"telecommute": True},
 }
 
 

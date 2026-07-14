@@ -65,3 +65,25 @@ def fetch_gzip_xml(
     except (OSError, UnicodeDecodeError):
         logger.error("%s returned malformed gzip sitemap: url=%r", source_name, url)
         return None
+
+
+def fetch_text(
+    url: str,
+    *,
+    source_name: str,
+    logger: logging.Logger,
+    timeout: float = 10.0,
+) -> str | None:
+    try:
+        response = httpx.get(
+            url,
+            timeout=timeout,
+            headers={"User-Agent": "recruFlow/0.1"},
+            follow_redirects=True,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError:
+        logger.error("failed to fetch %s sitemap: url=%r", source_name, url, exc_info=True)
+        return None
+
+    return response.text

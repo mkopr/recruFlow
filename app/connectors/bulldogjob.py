@@ -1,7 +1,6 @@
 import json
 import logging
 import re
-import xml.etree.ElementTree as ET
 from typing import Any
 
 import httpx
@@ -9,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.connectors.base import JobBoardConnector
 from app.connectors.http import fetch_gzip_xml
+from app.connectors.sitemap import _parse_sitemap_locs
 from app.db.models import Source
 from app.ingestion.normalize import (
     BULLDOGJOB,
@@ -23,7 +23,6 @@ from app.ingestion.types import IngestionResult
 BULLDOGJOB_SITEMAP_INDEX_URL = "https://bulldogjob.com/sitemap.en.xml.gz"
 
 _NEXT_DATA_PATTERN = re.compile(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL)
-_SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 # The `jobs.xml.gz` sub-sitemap mixes real job detail URLs (`/companies/jobs/<id>-<slug>`)
 # with filter/tag listing pages (`/companies/jobs/s/skills,Java`, `/companies/jobs/s/role,qa`,
 # ...) that share the same `<script id="__NEXT_DATA__">` shape but carry no `job` record --
@@ -31,14 +30,6 @@ _SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 _JOB_URL_PATTERN = re.compile(r"^https://bulldogjob\.com/companies/jobs/\d+-")
 
 logger = logging.getLogger(__name__)
-
-
-def _parse_sitemap_locs(xml_text: str, tag: str) -> list[str]:
-    try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError:
-        return []
-    return [loc.text.strip() for loc in root.findall(f"sm:{tag}/sm:loc", _SITEMAP_NS) if loc.text]
 
 
 def extract_next_data(html: str, *, url: str | None = None) -> dict[str, Any] | None:

@@ -8,9 +8,10 @@ from app.config import get_settings
 from app.connectors.bulldogjob import BulldogjobConnector
 from app.connectors.justjoinit import JustJoinItConnector
 from app.connectors.nofluffjobs import NoFluffJobsConnector
+from app.connectors.rocket_jobs import RocketJobsConnector
 from app.connectors.solid_jobs import SolidJobsConnector
 from app.db.models import Source
-from app.ingestion.normalize import BULLDOGJOB, JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
+from app.ingestion.normalize import BULLDOGJOB, JUSTJOINIT, NOFLUFFJOBS, ROCKET_JOBS, SOLID_JOBS
 from app.ingestion.types import IngestionResult
 
 
@@ -53,6 +54,9 @@ CONNECTOR_REGISTRY: dict[str, ConnectorSpec] = {
     ),
     BULLDOGJOB: ConnectorSpec(
         name=BULLDOGJOB, label="Bulldogjob", dispatch=BulldogjobConnector().run
+    ),
+    ROCKET_JOBS: ConnectorSpec(
+        name=ROCKET_JOBS, label="Rocket Jobs", dispatch=RocketJobsConnector().run
     ),
 }
 

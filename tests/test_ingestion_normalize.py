@@ -5,6 +5,7 @@ from app.ingestion.normalize import (
     BULLDOGJOB,
     JUSTJOINIT,
     NOFLUFFJOBS,
+    ROCKET_JOBS,
     SOLID_JOBS,
     extract_envelope_list,
     normalize_remote,
@@ -41,6 +42,12 @@ def test_normalize_remote_maps_justjoinit_string_enum() -> None:
     assert normalize_remote(JUSTJOINIT, "remote") is True
     assert normalize_remote(JUSTJOINIT, "hybrid") is False
     assert normalize_remote(JUSTJOINIT, "office") is False
+
+
+def test_normalize_remote_maps_rocket_jobs_telecommute() -> None:
+    # schema.org JobPosting's standard jobLocationType value for a remote posting -- confirmed
+    # live on a real Rocket Jobs detail page 2026-07-14.
+    assert normalize_remote(ROCKET_JOBS, "TELECOMMUTE") is True
 
 
 def test_normalize_remote_defaults_false_and_logs_for_unmapped_string_label(

@@ -349,6 +349,43 @@ is skipped without failing the rest of its chunk; a failure fetching the sitemap
 to the whole run, returning `IngestionResult(ok=False, ...)` the same way a first-page failure
 does for the other three connectors.
 
+## Rocket Jobs connector
+
+`app/connectors/rocket_jobs.py` ingests offers from Rocket Jobs (rocketjobs.pl), which shares its
+underlying platform with JustJoin.it but is ingested independently. Its real backend,
+`api.rocketjobs.pl`, is deliberately never called — its own `robots.txt` disallows crawling it
+(confirmed live — see
+`docs/adr/0025-rocket-jobs-sitemap-and-json-ld-investigation.md`). Instead, `RocketJobsConnector`
+mirrors `BulldogjobConnector`'s two-phase shape: it enumerates every live job URL from the site's
+own robots.txt-sanctioned sitemap (`sitemaps/active-jobs.xml`, which redirects through a
+`public.justjoin.com`-hosted path to `part0.xml`), then live-fetches each URL and parses the job
+record out of an embedded `<script type="application/ld+json">` schema.org `JobPosting` block —
+structured JSON extraction, not DOM scraping. It dispatches through the same generic
+`CONNECTOR_REGISTRY`-driven route as the other four connectors, with no bespoke handler:
+
+```bash
+curl -X POST http://localhost:8000/ingest/rocket_jobs
+```
+
+```json
+{"source": "rocket_jobs", "ok": true, "fetched": 20, "created": 17, "error_message": null}
+```
+
+| `config_json` key | Default | Notes |
+| --- | --- | --- |
+| `endpoint_url` | Rocket Jobs's sitemap URL | Override for testing only |
+| `page_size` | `20` | Sitemap URLs live-fetched per chunk (not an API page size — each one is its own HTTP request) |
+| `max_pages` | `50` | Chunks per run — bounds total live traffic per run to `page_size * max_pages` |
+| `already_seen_stop_threshold` | `20` | Consecutive already-ingested offers (within sitemap order) before a run stops early |
+
+There is no pagination cursor: `next_cursor` always returns `None`, since what changes between
+runs is the sitemap contents, not an API cursor. A single broken or unexpected-shape detail page
+is skipped without failing the rest of its chunk; a failure fetching the sitemap itself is fatal
+to the whole run, returning `IngestionResult(ok=False, ...)` the same way a first-page failure
+does for the other four connectors. `baseSalary`, an explicit remote flag, seniority, and tech
+tags were all confirmed absent on the sample page checked during investigation — these are left
+`None`/`False` rather than guessed, per the project's missing-field conservatism.
+
 ## Scheduler
 
 `app/scheduler/` wires [APScheduler](https://apscheduler.readthedocs.io/) into the FastAPI
@@ -466,15 +503,16 @@ curl http://localhost:8000/connectors
   {"id": "solid_jobs", "label": "SOLID.Jobs"},
   {"id": "justjoinit", "label": "JustJoin.it"},
   {"id": "nofluffjobs", "label": "NoFluffJobs"},
-  {"id": "bulldogjob", "label": "Bulldogjob"}
+  {"id": "bulldogjob", "label": "Bulldogjob"},
+  {"id": "rocket_jobs", "label": "Rocket Jobs"}
 ]
 ```
 
 ### `POST /scheduler/run/{source}`
 
 Triggers one source's ingestion immediately, outside its automatic schedule. `{source}` is a
-connector identity string (`solid_jobs`, `justjoinit`, `nofluffjobs`, or `bulldogjob`), not
-`sources.name`.
+connector identity string (`solid_jobs`, `justjoinit`, `nofluffjobs`, `bulldogjob`, or
+`rocket_jobs`), not `sources.name`.
 
 ```bash
 curl -X POST http://localhost:8000/scheduler/run/justjoinit
@@ -550,7 +588,7 @@ out-of-band fetch and browse what's been ingested, outside the automatic schedul
 ### `POST /ingest/{source}`
 
 Triggers one source's ingestion immediately. `{source}` is a connector identity string
-(`solid_jobs`, `justjoinit`, `nofluffjobs`, or `bulldogjob`), not `sources.name`. Unlike
+(`solid_jobs`, `justjoinit`, `nofluffjobs`, `bulldogjob`, or `rocket_jobs`), not `sources.name`. Unlike
 `POST /scheduler/run/{source}`, this does not write to the scheduler's `scheduler_runs` audit
 trail — `GET /scheduler/status` will not reflect a run triggered this way.
 
