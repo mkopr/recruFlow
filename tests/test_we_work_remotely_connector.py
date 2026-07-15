@@ -195,6 +195,25 @@ def test_join_location_returns_none_when_all_parts_empty() -> None:
     assert _join_location({"region": None, "country": None, "state": None}) is None
 
 
+def test_join_location_preserves_strings_longer_than_255_chars() -> None:
+    """BUG44: WWR postings open to a long list of regions produced a joined location over
+    255 chars, which used to fail Offer schema validation and drop the whole posting -- the
+    join itself must not truncate; the fix widened Offer.location instead (see
+    test_offer_schema.py)."""
+    raw = {
+        "region": "Anywhere in the World",
+        "country": ", ".join(f"Country {i}" for i in range(30)),
+        "state": "Delaware",
+    }
+
+    result = _join_location(raw)
+
+    assert result is not None
+    assert len(result) > 255
+    assert result.startswith("Anywhere in the World, Country 0")
+    assert result.endswith("Delaware")
+
+
 def test_parse_posted_at_parses_rfc822_date() -> None:
     result = _parse_posted_at("Tue, 14 Jul 2026 15:29:26 +0000")
 

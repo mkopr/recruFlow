@@ -39,7 +39,7 @@ class Offer(Base):
     dedup_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     company: Mapped[str] = mapped_column(String(255), nullable=False)
-    location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    location: Mapped[str | None] = mapped_column(Text, nullable=True)
     remote: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     seniority: Mapped[str | None] = mapped_column(String(50), nullable=True)
     salary_min: Mapped[int | None] = mapped_column(Integer, nullable=True)

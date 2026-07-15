@@ -12,7 +12,7 @@ class Offer(BaseModel):
     canonical_url: str | None = Field(default=None, max_length=2048)
     title: str = Field(min_length=1, max_length=500)
     company: str = Field(min_length=1, max_length=255)
-    location: str | None = Field(default=None, max_length=255)
+    location: str | None = None
     remote: bool = False
     seniority: str | None = Field(default=None, max_length=50)
     salary_min: int | None = Field(default=None, ge=0)

@@ -99,3 +99,14 @@ def test_offer_accepts_salary_min_equal_to_max() -> None:
 def test_offer_rejects_title_exceeding_max_length() -> None:
     with pytest.raises(ValidationError):
         Offer(source_id=1, title="x" * 501, company="Acme")
+
+
+def test_offer_accepts_location_exceeding_255_chars() -> None:
+    """BUG44: joined multi-region locations (e.g. We Work Remotely) can exceed 255 chars;
+    location must not be capped or the whole offer gets dropped rather than just truncated."""
+    long_location = ", ".join(f"Country {i}" for i in range(40))
+    assert len(long_location) > 255
+
+    offer = Offer(source_id=1, title="Backend Engineer", company="Acme", location=long_location)
+
+    assert offer.location == long_location
