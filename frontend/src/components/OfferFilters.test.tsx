@@ -12,14 +12,29 @@ vi.mock('../hooks/useKnownSources', () => ({
 
 vi.mocked(useKnownSourcesModule.useKnownSources).mockReturnValue({
   sources: [
-    { id: 'solid_jobs', label: 'SOLID.Jobs', offer_count: 0, scored_count: 0, unscored_count: 0 },
-    { id: 'justjoinit', label: 'JustJoin.it', offer_count: 0, scored_count: 0, unscored_count: 0 },
+    {
+      id: 'solid_jobs',
+      label: 'SOLID.Jobs',
+      offer_count: 0,
+      scored_count: 0,
+      unscored_count: 0,
+      supports_fetch_scope: false,
+    },
+    {
+      id: 'justjoinit',
+      label: 'JustJoin.it',
+      offer_count: 0,
+      scored_count: 0,
+      unscored_count: 0,
+      supports_fetch_scope: false,
+    },
     {
       id: 'nofluffjobs',
       label: 'NoFluffJobs',
       offer_count: 0,
       scored_count: 0,
       unscored_count: 0,
+      supports_fetch_scope: false,
     },
   ],
   refetch: vi.fn(),

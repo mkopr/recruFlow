@@ -1,4 +1,5 @@
 import gzip
+import json
 from typing import Any
 
 import httpx
@@ -149,6 +150,92 @@ def test_fetch_sitemap_urls_returns_none_on_malformed_gzip(
         is None
     )
     assert BulldogjobConnector().fetch_sitemap_urls({}) is None
+
+
+def test_supports_fetch_scope_is_true() -> None:
+    assert BulldogjobConnector().supports_fetch_scope() is True
+
+
+def _filtered_listing_html(jobs: list[dict[str, Any]]) -> str:
+    payload = json.dumps({"props": {"pageProps": {"totalCount": len(jobs), "jobs": jobs}}})
+    return (
+        '<html><body><script id="__NEXT_DATA__" type="application/json">'
+        f"{payload}</script></body></html>"
+    )
+
+
+def test_fetch_filtered_sitemap_urls_returns_detail_urls_from_listing_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    html = _filtered_listing_html(
+        [
+            {"id": "111-senior-python-dev"},
+            {"id": "222-backend-engineer"},
+        ]
+    )
+
+    def _fake_get(url: str, **kwargs: Any) -> _FakeResponse:
+        assert url == "https://bulldogjob.com/companies/jobs/s/skills,Python"
+        return _FakeResponse(text=html)
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+
+    result = BulldogjobConnector().fetch_filtered_sitemap_urls({}, "Python")
+
+    assert result == [
+        "https://bulldogjob.com/companies/jobs/111-senior-python-dev",
+        "https://bulldogjob.com/companies/jobs/222-backend-engineer",
+    ]
+
+
+def test_fetch_filtered_sitemap_urls_percent_encodes_term(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, str] = {}
+
+    def _fake_get(url: str, **kwargs: Any) -> _FakeResponse:
+        captured["url"] = url
+        return _FakeResponse(text=_filtered_listing_html([]))
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+
+    BulldogjobConnector().fetch_filtered_sitemap_urls({}, "C++")
+
+    assert captured["url"] == "https://bulldogjob.com/companies/jobs/s/skills,C%2B%2B"
+
+
+def test_fetch_filtered_sitemap_urls_returns_empty_list_for_zero_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        httpx, "get", lambda *a, **kw: _FakeResponse(text=_filtered_listing_html([]))
+    )
+
+    result = BulldogjobConnector().fetch_filtered_sitemap_urls({}, "ZzzNonexistentSkill")
+
+    assert result == []
+
+
+def test_fetch_filtered_sitemap_urls_returns_none_on_fetch_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise(*a: Any, **kw: Any) -> None:
+        raise httpx.ConnectError("connection failed")
+
+    monkeypatch.setattr(httpx, "get", _raise)
+
+    assert BulldogjobConnector().fetch_filtered_sitemap_urls({}, "Python") is None
+
+
+def test_fetch_filtered_sitemap_urls_returns_none_on_malformed_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    html = (
+        '<html><body><script id="__NEXT_DATA__" type="application/json">'
+        '{"props": {"pageProps": {"totalCount": 0}}}'
+        "</script></body></html>"
+    )
+    monkeypatch.setattr(httpx, "get", lambda *a, **kw: _FakeResponse(text=html))
+
+    assert BulldogjobConnector().fetch_filtered_sitemap_urls({}, "Python") is None
 
 
 def test_extract_next_data_returns_parsed_json_for_wellformed_fixture() -> None:
@@ -369,4 +456,85 @@ async def test_bulldogjob_run_returns_not_ok_when_sitemap_fetch_fails(
 
     assert result == IngestionResult(
         ok=False, fetched=0, created=0, error_message="failed to fetch Bulldogjob offers"
+    )
+
+
+@pytest.mark.asyncio
+async def test_bulldogjob_run_filtered_mode_fetches_once_per_term_and_sums_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db.models import Source
+    from app.ingestion.fetch_scope import FetchScopeResolution
+    from app.ingestion.types import IngestionResult
+
+    async def _fake_resolve_fetch_scope_terms(session: Any, config: Any) -> FetchScopeResolution:
+        return FetchScopeResolution(mode="filtered", terms=["Python", "Go"], blocked_reason=None)
+
+    monkeypatch.setattr(
+        sitemap_detail, "resolve_fetch_scope_terms", _fake_resolve_fetch_scope_terms
+    )
+
+    fetch_calls: list[str] = []
+
+    def _fake_fetch_filtered_sitemap_urls(
+        self: BulldogjobConnector, config: dict[str, Any], term: str
+    ) -> list[str]:
+        fetch_calls.append(term)
+        return [f"https://x/{term}"]
+
+    monkeypatch.setattr(
+        BulldogjobConnector, "fetch_filtered_sitemap_urls", _fake_fetch_filtered_sitemap_urls
+    )
+
+    async def _fake_run_paginated_ingestion(
+        session: Any, source_id: int, **kwargs: Any
+    ) -> IngestionResult:
+        return IngestionResult(ok=True, fetched=1, created=1)
+
+    monkeypatch.setattr(sitemap_detail, "run_paginated_ingestion", _fake_run_paginated_ingestion)
+
+    connector = BulldogjobConnector()
+    source = Source(id=1, connector="bulldogjob", config_json={"fetch_scope": {"mode": "filtered"}})
+
+    result = await connector.run(None, source)  # type: ignore[arg-type]
+
+    assert fetch_calls == ["Python", "Go"]
+    assert result == IngestionResult(ok=True, fetched=2, created=2)
+    # filtered runs must not persist sitemap_cursor -- see docs/adr/0027 / ingestion.md
+    assert "sitemap_cursor" not in source.config_json
+
+
+@pytest.mark.asyncio
+async def test_bulldogjob_run_filtered_mode_blocked_returns_error_without_fetching(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db.models import Source
+    from app.ingestion.fetch_scope import FetchScopeResolution
+    from app.ingestion.types import IngestionResult
+
+    async def _fake_resolve_fetch_scope_terms(session: Any, config: Any) -> FetchScopeResolution:
+        return FetchScopeResolution(
+            mode="filtered", terms=[], blocked_reason="fetch scope is 'filtered' but blocked"
+        )
+
+    monkeypatch.setattr(
+        sitemap_detail, "resolve_fetch_scope_terms", _fake_resolve_fetch_scope_terms
+    )
+
+    def _fail(*a: Any, **kw: Any) -> None:
+        raise AssertionError("must not fetch when fetch scope is blocked")
+
+    monkeypatch.setattr(BulldogjobConnector, "fetch_filtered_sitemap_urls", _fail)
+    monkeypatch.setattr(BulldogjobConnector, "fetch_sitemap_urls", _fail)
+
+    connector = BulldogjobConnector()
+    source = Source(id=1, connector="bulldogjob", config_json={"fetch_scope": {"mode": "filtered"}})
+
+    result = await connector.run(None, source)  # type: ignore[arg-type]
+
+    assert result == IngestionResult(
+        ok=False,
+        fetched=0,
+        created=0,
+        error_message="fetch scope is 'filtered' but blocked",
     )

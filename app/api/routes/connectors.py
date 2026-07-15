@@ -52,6 +52,7 @@ async def list_connectors(session: SessionDep) -> list[ConnectorOption]:
                 offer_count=offer_count,
                 scored_count=scored_count,
                 unscored_count=offer_count - scored_count,
+                supports_fetch_scope=spec.supports_fetch_scope,
             )
         )
     return options

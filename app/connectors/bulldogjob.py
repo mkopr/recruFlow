@@ -2,6 +2,7 @@ import json
 import logging
 import re
 from typing import Any
+from urllib.parse import quote
 
 from app.connectors.http import fetch_gzip_xml
 from app.connectors.sitemap import parse_sitemap_locs
@@ -15,6 +16,10 @@ from app.ingestion.normalize import (
 )
 
 BULLDOGJOB_SITEMAP_INDEX_URL = "https://bulldogjob.com/sitemap.en.xml.gz"
+# Confirmed live 2026-07-15 (see `docs/adr/0027`): a real Next.js page, server-side
+# skill-matching (case-insensitive), but pagination is client-side only -- a plain-request
+# fetch always gets exactly this page's up-to-50 job summaries, regardless of `totalCount`.
+BULLDOGJOB_FILTERED_LISTING_URL_TEMPLATE = "https://bulldogjob.com/companies/jobs/s/skills,{term}"
 
 _NEXT_DATA_PATTERN = re.compile(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL)
 # The `jobs.xml.gz` sub-sitemap mixes real job detail URLs (`/companies/jobs/<id>-<slug>`)
@@ -84,6 +89,9 @@ class BulldogjobConnector(SitemapDetailPageConnector):
 
     name = "Bulldogjob"
 
+    def supports_fetch_scope(self) -> bool:
+        return True
+
     def sitemap_url(self) -> str:
         return BULLDOGJOB_SITEMAP_INDEX_URL
 
@@ -151,3 +159,25 @@ class BulldogjobConnector(SitemapDetailPageConnector):
 
     def extract_detail_json(self, html: str, *, url: str | None) -> dict[str, Any] | None:
         return extract_next_data(html, url=url)
+
+    def fetch_filtered_sitemap_urls(self, config: dict[str, Any], term: str) -> list[str] | None:
+        listing_url = BULLDOGJOB_FILTERED_LISTING_URL_TEMPLATE.format(term=quote(term, safe=""))
+        html = self._fetch_detail_html(listing_url)
+        if html is None:
+            return None
+
+        next_data = extract_next_data(html, url=listing_url)
+        if next_data is None:
+            return None
+
+        page_props = next_data.get("props", {}).get("pageProps", {})
+        jobs = page_props.get("jobs") if isinstance(page_props, dict) else None
+        if not isinstance(jobs, list):
+            logger.error("Bulldogjob filtered listing had unexpected shape: url=%r", listing_url)
+            return None
+
+        return [
+            f"https://bulldogjob.com/companies/jobs/{job['id']}"
+            for job in jobs
+            if isinstance(job, dict) and job.get("id")
+        ]

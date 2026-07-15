@@ -157,6 +157,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/scheduler/sources/{source}/fetch-scope': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /** Update Source Fetch Scope */
+    put: operations['update_source_fetch_scope_scheduler_sources__source__fetch_scope_put'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/scheduler/sources/auto-fetch': {
     parameters: {
       query?: never;
@@ -483,6 +500,8 @@ export interface components {
       scored_count: number;
       /** Unscored Count */
       unscored_count: number;
+      /** Supports Fetch Scope */
+      supports_fetch_scope: boolean;
     };
     /** DeleteOffersResponse */
     DeleteOffersResponse: {
@@ -515,6 +534,14 @@ export interface components {
       since?: string | null;
       /** Until */
       until?: string | null;
+    };
+    /** FetchScopeUpdateRequest */
+    FetchScopeUpdateRequest: {
+      /**
+       * Mode
+       * @enum {string}
+       */
+      mode: 'all' | 'filtered';
     };
     /** HTTPValidationError */
     HTTPValidationError: {
@@ -952,6 +979,10 @@ export interface components {
       fetch_range: {
         [key: string]: unknown;
       };
+      /** Fetch Scope */
+      fetch_scope: {
+        [key: string]: unknown;
+      };
       /** Auto Fetch Enabled */
       auto_fetch_enabled: boolean;
       /** Connector Enabled */
@@ -1227,6 +1258,41 @@ export interface operations {
     requestBody: {
       content: {
         'application/json': components['schemas']['FetchRangeUpdateRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SourceStatus'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  update_source_fetch_scope_scheduler_sources__source__fetch_scope_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        source: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['FetchScopeUpdateRequest'];
       };
     };
     responses: {

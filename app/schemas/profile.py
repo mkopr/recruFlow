@@ -11,6 +11,10 @@ class Skill(BaseModel):
     hard: bool = False
 
 
+def hard_skill_names(profile: "Profile") -> list[str]:
+    return [skill.name for skill in profile.skills if skill.hard]
+
+
 class PastRole(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 

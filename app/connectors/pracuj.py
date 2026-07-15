@@ -15,6 +15,7 @@ from app.connectors.base import JobBoardConnector
 from app.db.models import IngestionFailure, Source
 from app.dlq.service import record_failure
 from app.dlq.types import FailureType
+from app.ingestion.fetch_scope import resolve_fetch_scope_terms
 from app.ingestion.normalize import (
     PRACUJ,
     normalize_remote,
@@ -142,28 +143,32 @@ async def _fetch_offer_details(
     collected: list[dict[str, Any]],
     total_cap: int,
     rate_limit_delay_seconds: float,
-) -> bool:
+) -> None:
     """Detail-fetches each URL in `candidate_urls`, appending successfully parsed records to
-    `collected` in place. Returns `True` on a mid-run failure (a detail fetch returned `None`)
-    -- see `_collect_offers`'s docstring for why that stops collection rather than skipping
-    just that one offer. A single malformed (but successfully fetched) detail record is
-    skipped, not fatal -- mirrors Bulldogjob/Rocket Jobs's per-URL `if html is None: continue`.
+    `collected` in place. A failed fetch (`fetch_html` returned `None`, already logged by
+    `_fetch_rendered_page`) or a malformed-but-fetched record is skipped, not fatal -- mirrors
+    Bulldogjob/Rocket Jobs's per-URL `if html is None: continue` (`sitemap_detail.py`). BUG43:
+    this used to abort the whole page on the first failed detail fetch, back when this
+    connector shared one browser context across an entire run and Cloudflare's challenge meant
+    a failure there really did mean every later request in the run was doomed too. Now that
+    `run` opens a fresh context per fetch, a single failure is just as likely to be an ordinary
+    transient hiccup (confirmed live: 25/25 fresh-context detail fetches succeeded in a row) as
+    a real block, so skipping it and continuing gets far more of an already-fetched listing
+    page's offers collected per run instead of throwing all of them away.
     """
     for detail_url in candidate_urls:
         if len(collected) >= total_cap:
-            return False
+            return
 
         await asyncio.sleep(rate_limit_delay_seconds)
         detail_html = await fetch_html(detail_url)
         if detail_html is None:
-            return True
+            continue
 
         detail_data = extract_next_data(detail_html, url=detail_url)
         offer_record = _dehydrated_query_data(detail_data, "jobOffer") if detail_data else None
         if isinstance(offer_record, dict):
             collected.append(offer_record)
-
-    return False
 
 
 async def _collect_offers(
@@ -192,12 +197,12 @@ async def _collect_offers(
     Returns `(offers, enumeration_ok, mid_run_failure, next_start_page)`. `enumeration_ok=False`
     means the first listing-page fetch itself failed -- `run` maps this straight to
     `IngestionResult(ok=False, ...)`, and `next_start_page` is meaningless in that case.
-    `mid_run_failure=True` means a later fetch (listing or detail) failed after that -- ADR
-    0024/0026's Cloudflare-escalation finding is that once a session starts failing, every
-    subsequent request in it likely fails too, so collection stops there rather than burning
-    further rate-limited attempts against a blocked session; whatever was already collected is
-    still returned so it gets persisted, and `next_start_page` points back at the page that
-    failed so the next run retries it rather than skipping past unseen listings.
+    `mid_run_failure=True` means a *later listing-page* fetch failed after that (page 2+ of this
+    run) -- unlike an individual detail fetch (see `_fetch_offer_details`'s docstring, BUG43),
+    losing the listing page itself means there's no way to know what the rest of that page's
+    offer URLs even were, so collection stops there rather than guessing; whatever was already
+    collected is still returned so it gets persisted, and `next_start_page` points back at the
+    page that failed so the next run retries it rather than skipping past unseen listings.
     `next_start_page` is `1` (wrap for a fresh pass) when an empty or short page proved the
     listing is genuinely exhausted, or `start_page`+pages-actually-consumed otherwise (the
     listing has more pages this run didn't get to yet).
@@ -231,15 +236,13 @@ async def _collect_offers(
             if isinstance(sub_offer, dict) and sub_offer.get("offerAbsoluteUri")
         ]
 
-        mid_run_failure = await _fetch_offer_details(
+        await _fetch_offer_details(
             fetch_html,
             candidate_urls,
             collected=collected,
             total_cap=total_cap,
             rate_limit_delay_seconds=rate_limit_delay_seconds,
         )
-        if mid_run_failure:
-            return collected, True, True, listing_page_num
 
         last_page_num = listing_page_num
         if len(grouped) < page_size:
@@ -320,6 +323,9 @@ class PracujConnector(JobBoardConnector):
         self, payload: Any, offers: list[dict[str, Any]], *, cursor: Any, page_size: int
     ) -> Any | None:
         return None
+
+    def supports_fetch_scope(self) -> bool:
+        return True
 
     def map_offer(self, source_id: int, raw: dict[str, Any]) -> dict[str, Any]:
         raw_attrs = raw.get("attributes")
@@ -407,6 +413,15 @@ class PracujConnector(JobBoardConnector):
         if start_page < 1:
             start_page = 1
 
+        # US47 Fetch Scope: a cheap short-circuit before launching Chromium for a run that's
+        # going to be blocked anyway.
+        scope_resolution = await resolve_fetch_scope_terms(session, config)
+        if scope_resolution.blocked_reason is not None:
+            return IngestionResult(
+                ok=False, fetched=0, created=0, error_message=scope_resolution.blocked_reason
+            )
+        filtered_terms = scope_resolution.terms  # empty means mode == "all", unchanged behavior
+
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=True)
             try:
@@ -428,14 +443,48 @@ class PracujConnector(JobBoardConnector):
                     finally:
                         await context.close()
 
-                offers, enumeration_ok, mid_run_failure, next_start_page = await _collect_offers(
-                    fetch_html,
-                    category_filter=category_filter,
-                    start_page=start_page,
-                    page_size=page_size,
-                    max_pages=max_pages,
-                    rate_limit_delay_seconds=rate_limit_delay_seconds,
-                )
+                if filtered_terms:
+                    # Filtered runs don't participate in BUG42's listing_page_cursor
+                    # resumption -- always start_page=1 per term, a deliberate scope
+                    # reduction documented alongside Bulldogjob's own filtered-mode gap
+                    # (docs/adr/0027).
+                    offers: list[dict[str, Any]] = []
+                    enumeration_ok = False
+                    mid_run_failure = False
+                    for term in filtered_terms:
+                        (
+                            term_offers,
+                            term_enumeration_ok,
+                            term_mid_run_failure,
+                            _term_next_start_page,
+                        ) = await _collect_offers(
+                            fetch_html,
+                            category_filter=term,
+                            start_page=1,
+                            page_size=page_size,
+                            max_pages=max_pages,
+                            rate_limit_delay_seconds=rate_limit_delay_seconds,
+                        )
+                        # Cross-term duplicate detail records are harmless -- ingest_offer's
+                        # canonical-URL dedup collapses them at persist time.
+                        offers.extend(term_offers)
+                        enumeration_ok = enumeration_ok or term_enumeration_ok
+                        mid_run_failure = mid_run_failure or term_mid_run_failure
+                    next_start_page = None
+                else:
+                    (
+                        offers,
+                        enumeration_ok,
+                        mid_run_failure,
+                        next_start_page,
+                    ) = await _collect_offers(
+                        fetch_html,
+                        category_filter=category_filter,
+                        start_page=start_page,
+                        page_size=page_size,
+                        max_pages=max_pages,
+                        rate_limit_delay_seconds=rate_limit_delay_seconds,
+                    )
             finally:
                 await browser.close()
 
@@ -480,5 +529,6 @@ class PracujConnector(JobBoardConnector):
             # (already fully prefetched) listing.
             sorted_by_recency=False,
         )
-        source.config_json = {**config, "listing_page_cursor": next_start_page}
+        if not filtered_terms:
+            source.config_json = {**config, "listing_page_cursor": next_start_page}
         return result

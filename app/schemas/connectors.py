@@ -7,3 +7,4 @@ class ConnectorOption(BaseModel):
     offer_count: int
     scored_count: int
     unscored_count: int
+    supports_fetch_scope: bool

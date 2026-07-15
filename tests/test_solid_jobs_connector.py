@@ -150,6 +150,18 @@ def test_map_solid_jobs_offer_handles_missing_optional_fields() -> None:
     assert result["remote"] is False
 
 
+def test_supports_fetch_scope_is_true() -> None:
+    assert SolidJobsConnector(campaign="recruflow").supports_fetch_scope() is True
+
+
+def test_apply_fetch_scope_term_injects_single_element_terms_list() -> None:
+    connector = SolidJobsConnector(campaign="recruflow")
+
+    result = connector.apply_fetch_scope_term({"division": "IT"}, "Python")
+
+    assert result == {"division": "IT", "terms": ["Python"]}
+
+
 def test_map_solid_jobs_offer_calls_shared_normalize_functions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

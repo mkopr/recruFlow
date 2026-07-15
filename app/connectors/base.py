@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.connectors.http import fetch_json
 from app.db.models import Source
+from app.ingestion.fetch_scope import FETCH_SCOPE_FILTERED, resolve_fetch_scope_terms
 from app.ingestion.normalize import extract_envelope_list
 from app.ingestion.runner import resolve_fetch_range, run_paginated_ingestion
 from app.ingestion.types import IngestionResult
@@ -56,6 +57,12 @@ class JobBoardConnector(ABC):
     def runner_kwargs(self, config: dict[str, Any]) -> dict[str, Any]:
         return {}
 
+    def supports_fetch_scope(self) -> bool:
+        return False
+
+    def apply_fetch_scope_term(self, config: dict[str, Any], term: str) -> dict[str, Any]:
+        raise NotImplementedError
+
     def fetch_page(
         self, config: dict[str, Any], cursor: Any, page_size: int
     ) -> tuple[list[dict[str, Any]], Any | None] | None:
@@ -89,6 +96,47 @@ class JobBoardConnector(ABC):
             "already_seen_stop_threshold": int(config.get("already_seen_stop_threshold", 20)),
             **self.runner_kwargs(config),
         }
+
+        if self.supports_fetch_scope():
+            resolution = await resolve_fetch_scope_terms(session, config)
+            if resolution.blocked_reason is not None:
+                return IngestionResult(
+                    ok=False, fetched=0, created=0, error_message=resolution.blocked_reason
+                )
+            if resolution.mode == FETCH_SCOPE_FILTERED:
+                total_fetched = 0
+                total_created = 0
+                for term in resolution.terms:
+                    term_config = self.apply_fetch_scope_term(config, term)
+
+                    def term_fetch_page(
+                        cursor: Any, page_size: int, _cfg: dict[str, Any] = term_config
+                    ) -> tuple[list[dict[str, Any]], Any | None] | None:
+                        return self.fetch_page(_cfg, cursor, page_size)
+
+                    result = await run_paginated_ingestion(
+                        session,
+                        source.id,
+                        source_name=self.name,
+                        fetch_page=term_fetch_page,
+                        map_offer=self.map_offer,
+                        initial_cursor=0,
+                        force_refresh=force_refresh,
+                        logger=logger,
+                        since=since,
+                        until=until,
+                        **runner_kwargs,
+                    )
+                    total_fetched += result.fetched
+                    total_created += result.created
+                    if not result.ok:
+                        return IngestionResult(
+                            ok=False,
+                            fetched=total_fetched,
+                            created=total_created,
+                            error_message=result.error_message,
+                        )
+                return IngestionResult(ok=True, fetched=total_fetched, created=total_created)
 
         def fetch_page(
             cursor: Any, page_size: int

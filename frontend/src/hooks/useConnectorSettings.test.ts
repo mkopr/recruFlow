@@ -10,6 +10,7 @@ vi.mock('../api/scheduler', () => ({
   updateAllSourceIntervals: vi.fn(),
   updateSourceFetchRange: vi.fn(),
   updateAllSourceFetchRanges: vi.fn(),
+  updateSourceFetchScope: vi.fn(),
   updateSourceAutoFetch: vi.fn(),
   updateAllSourceAutoFetch: vi.fn(),
   updateSourceEnabled: vi.fn(),
@@ -21,6 +22,7 @@ const updateSourceIntervalMock = vi.mocked(schedulerApi.updateSourceInterval);
 const updateAllSourceIntervalsMock = vi.mocked(schedulerApi.updateAllSourceIntervals);
 const updateSourceFetchRangeMock = vi.mocked(schedulerApi.updateSourceFetchRange);
 const updateAllSourceFetchRangesMock = vi.mocked(schedulerApi.updateAllSourceFetchRanges);
+const updateSourceFetchScopeMock = vi.mocked(schedulerApi.updateSourceFetchScope);
 const updateSourceAutoFetchMock = vi.mocked(schedulerApi.updateSourceAutoFetch);
 const updateAllSourceAutoFetchMock = vi.mocked(schedulerApi.updateAllSourceAutoFetch);
 const updateSourceEnabledMock = vi.mocked(schedulerApi.updateSourceEnabled);
@@ -33,6 +35,7 @@ function makeSource(overrides: Partial<schedulerApi.SourceStatus> = {}): schedul
     name: 'justjoinit',
     schedule: { type: 'interval', seconds: 300 },
     fetch_range: { mode: 'all', since: null, until: null },
+    fetch_scope: { mode: 'all' },
     auto_fetch_enabled: true,
     connector_enabled: true,
     last_fetched_at: null,
@@ -55,6 +58,7 @@ beforeEach(() => {
   updateAllSourceIntervalsMock.mockReset();
   updateSourceFetchRangeMock.mockReset();
   updateAllSourceFetchRangesMock.mockReset();
+  updateSourceFetchScopeMock.mockReset();
   updateSourceAutoFetchMock.mockReset();
   updateAllSourceAutoFetchMock.mockReset();
   updateSourceEnabledMock.mockReset();
@@ -122,6 +126,36 @@ describe('useConnectorSettings', () => {
     const failure = await result.current.saveRangeAll(range);
     expect(failure).toBe(false);
     await waitFor(() => expect(result.current.error).toBe('boom'));
+  });
+
+  it('saveFetchScope calls updateSourceFetchScope and refetches on success', async () => {
+    fetchSchedulerStatusMock.mockResolvedValue([makeSource()]);
+    updateSourceFetchScopeMock.mockResolvedValue(makeSource({ fetch_scope: { mode: 'filtered' } }));
+
+    const { result } = renderHook(() => useConnectorSettings());
+    await waitFor(() => expect(result.current.sources).toHaveLength(1));
+
+    fetchSchedulerStatusMock.mockClear();
+    const success = await result.current.saveFetchScope('justjoinit', 'filtered');
+
+    expect(success).toBe(true);
+    expect(updateSourceFetchScopeMock).toHaveBeenCalledWith('justjoinit', { mode: 'filtered' });
+    expect(fetchSchedulerStatusMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('saveFetchScope surfaces an error and does not refetch on a 400', async () => {
+    fetchSchedulerStatusMock.mockResolvedValue([makeSource()]);
+    updateSourceFetchScopeMock.mockRejectedValue(new Error('failed to update fetch scope'));
+
+    const { result } = renderHook(() => useConnectorSettings());
+    await waitFor(() => expect(result.current.sources).toHaveLength(1));
+
+    fetchSchedulerStatusMock.mockClear();
+    const success = await result.current.saveFetchScope('justjoinit', 'filtered');
+
+    expect(success).toBe(false);
+    expect(fetchSchedulerStatusMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(result.current.error).toBe('failed to update fetch scope'));
   });
 
   it('saveAutoFetch sets savingByConnector during the call and clears it after, refetching on success', async () => {

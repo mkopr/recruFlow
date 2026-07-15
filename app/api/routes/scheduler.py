@@ -9,6 +9,7 @@ from app.ingestion.registry import SchedulerLookupError
 from app.scheduler.lifecycle import apply_auto_run_toggle, build_job_id
 from app.scheduler.runs import build_source_status, get_latest_run_by_source
 from app.scheduler.service import (
+    FetchScopeNotSupportedError,
     run_source,
     set_all_source_auto_fetch,
     set_all_source_enabled,
@@ -17,12 +18,14 @@ from app.scheduler.service import (
     set_source_auto_fetch,
     set_source_enabled,
     set_source_fetch_range,
+    set_source_fetch_scope,
     set_source_interval,
 )
 from app.schemas.scheduler import (
     AutoFetchUpdateRequest,
     ConnectorEnabledUpdateRequest,
     FetchRangeUpdateRequest,
+    FetchScopeUpdateRequest,
     IntervalUpdateRequest,
     ManualRunResponse,
     SchedulerStatusResponse,
@@ -113,6 +116,23 @@ async def update_source_fetch_range(
     fetch_range = payload.model_dump(mode="json")
     try:
         source_row = await set_source_fetch_range(session, source, fetch_range)
+    except SchedulerLookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await session.commit()
+
+    last_run = await get_latest_run_by_source(session, source_row.id)
+    return build_source_status(source_row, last_run)
+
+
+@router.put("/scheduler/sources/{source}/fetch-scope")
+async def update_source_fetch_scope(
+    source: str, payload: FetchScopeUpdateRequest, session: SessionDep
+) -> SourceStatus:
+    fetch_scope = payload.model_dump(mode="json")
+    try:
+        source_row = await set_source_fetch_scope(session, source, fetch_scope)
+    except FetchScopeNotSupportedError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except SchedulerLookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     await session.commit()

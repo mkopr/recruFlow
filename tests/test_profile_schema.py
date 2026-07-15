@@ -1,5 +1,5 @@
 import pytest
-from app.schemas.profile import Profile
+from app.schemas.profile import Profile, hard_skill_names
 from pydantic import ValidationError
 
 
@@ -134,6 +134,22 @@ def test_profile_accepts_salary_target_equal_to_salary_min() -> None:
     profile = Profile(salary_min=15000, salary_target=15000)
 
     assert profile.salary_min == profile.salary_target == 15000
+
+
+def test_hard_skill_names_returns_only_starred_skills() -> None:
+    profile = Profile(
+        skills=[
+            {"name": "Python", "hard": True},
+            {"name": "SQL", "hard": False},
+            {"name": "Go", "hard": True},
+        ]
+    )
+
+    assert hard_skill_names(profile) == ["Python", "Go"]
+
+
+def test_hard_skill_names_returns_empty_list_for_no_skills() -> None:
+    assert hard_skill_names(Profile()) == []
 
 
 def test_profile_accepts_unusually_large_and_unusual_skill_set() -> None:

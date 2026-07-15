@@ -82,6 +82,21 @@ async def test_get_connectors_matches_registry(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_get_connectors_reports_supports_fetch_scope_correctly(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.get("/connectors")
+
+    assert response.status_code == 200
+    body = response.json()
+    supported = {entry["id"] for entry in body if entry["supports_fetch_scope"]}
+    unsupported = {entry["id"] for entry in body if not entry["supports_fetch_scope"]}
+    assert supported == {"solid_jobs", "bulldogjob", "pracuj"}
+    assert unsupported == set(registry.CONNECTOR_REGISTRY.keys()) - supported
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_connectors_offer_count_matches_actual_row_count(
     client: httpx.AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:

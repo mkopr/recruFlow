@@ -78,6 +78,15 @@ class SolidJobsConnector(JobBoardConnector):
     ) -> Any | None:
         return cursor + 1 if len(offers) >= page_size else None
 
+    def supports_fetch_scope(self) -> bool:
+        return True
+
+    def apply_fetch_scope_term(self, config: dict[str, Any], term: str) -> dict[str, Any]:
+        # Routes a single hard-skill term into `build_offer_params`'s existing
+        # `search.searchTerm` path (US47) -- confirmed live to be a real, working param that
+        # was simply never populated from anywhere upstream before this story.
+        return {**config, "terms": [term]}
+
     def map_offer(self, source_id: int, raw: dict[str, Any]) -> dict[str, Any]:
         raw_salary = raw.get("salary")
         salary: dict[str, Any] = raw_salary if isinstance(raw_salary, dict) else {}

@@ -4,11 +4,25 @@ from uuid import uuid4
 import httpx
 import pytest
 from app.connectors.solid_jobs import SolidJobsConnector
+from app.db.models import IngestionFailure, Source
 from app.db.models import Offer as OfferModel
-from app.db.models import Source
+from app.db.models import Profile as ProfileModel
+from app.db.session import get_engine, get_sessionmaker
+from app.ingestion.normalize import SOLID_JOBS
 from app.ingestion.types import IngestionResult
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+async def _deactivate_all_profiles(session: AsyncSession) -> None:
+    await session.execute(update(ProfileModel).values(is_active=False))
+    await session.commit()
+
+
+async def _create_active_profile(session: AsyncSession, *, skills: list[dict[str, Any]]) -> None:
+    profile = ProfileModel(name=f"profile-{uuid4()}", is_active=True, data={"skills": skills})
+    session.add(profile)
+    await session.flush()
 
 
 class _FakeResponse:
@@ -492,3 +506,149 @@ async def test_run_solid_jobs_ingestion_range_filter_does_not_trip_already_seen_
     assert calls == [0, 1]
     assert result.fetched == 3
     assert result.created == 1
+
+
+# US47 -- Fetch Scope filtered-mode integration for SOLID.Jobs.
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_filtered_fetch_scope_issues_one_request_per_hard_skill_and_dedups_offers(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _deactivate_all_profiles(db_session)
+    await _create_active_profile(
+        db_session, skills=[{"name": "Python", "hard": True}, {"name": "Go", "hard": True}]
+    )
+    await db_session.commit()
+
+    shared_offer = _raw_offer()
+    python_only_offer = _raw_offer()
+    go_only_offer = _raw_offer()
+    source = await _create_source(db_session, config_json={"fetch_scope": {"mode": "filtered"}})
+
+    requested_terms: list[str] = []
+
+    def _fake_get(url: str, *, params: dict[str, Any], **kw: Any) -> _FakeResponse:
+        term = params["search.searchTerm"]
+        requested_terms.append(term)
+        if term == "Python":
+            return _FakeResponse(json_data=_page_payload([python_only_offer, shared_offer]))
+        if term == "Go":
+            return _FakeResponse(json_data=_page_payload([go_only_offer, shared_offer]))
+        raise AssertionError(f"unexpected search term: {term!r}")
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+
+    result = await SolidJobsConnector(campaign="recruflow").run(db_session, source)
+    await db_session.commit()
+
+    assert sorted(requested_terms) == ["Go", "Python"]
+    assert result.ok is True
+    assert result.fetched == 4
+    assert result.created == 3
+    rows = (
+        (await db_session.execute(select(OfferModel).where(OfferModel.source_id == source.id)))
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 3
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_filtered_fetch_scope_blocked_when_active_profile_has_no_hard_skills(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _deactivate_all_profiles(db_session)
+    await _create_active_profile(db_session, skills=[{"name": "Python", "hard": False}])
+    await db_session.commit()
+
+    source = await _create_source(db_session, config_json={"fetch_scope": {"mode": "filtered"}})
+
+    def _fail(*a: Any, **kw: Any) -> None:
+        raise AssertionError("must not fetch when fetch scope is blocked")
+
+    monkeypatch.setattr(httpx, "get", _fail)
+
+    result = await SolidJobsConnector(campaign="recruflow").run(db_session, source)
+    await db_session.commit()
+
+    assert result.ok is False
+    assert result.error_message is not None
+    assert "no starred" in result.error_message or "hard skills" in result.error_message
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_filtered_fetch_scope_blocked_when_no_active_profile(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _deactivate_all_profiles(db_session)
+
+    source = await _create_source(db_session, config_json={"fetch_scope": {"mode": "filtered"}})
+
+    def _fail(*a: Any, **kw: Any) -> None:
+        raise AssertionError("must not fetch when fetch scope is blocked")
+
+    monkeypatch.setattr(httpx, "get", _fail)
+
+    result = await SolidJobsConnector(campaign="recruflow").run(db_session, source)
+    await db_session.commit()
+
+    assert result.ok is False
+    assert result.error_message is not None
+    assert "no active profile" in result.error_message
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_filtered_fetch_scope_blocked_run_is_recorded_and_retryable_via_dlq(
+    scheduled_client: httpx.AsyncClient,
+) -> None:
+    # End-to-end through the real HTTP surface: PUT fetch-scope filtered -> POST /ingest ->
+    # GET /failures/ingestion -> POST retry, reusing BUG37's existing "IngestionResult(ok=False)
+    # becomes a RUN_FETCH_FAILED row" pathway with zero new DLQ code (US47).
+    engine = get_engine()
+    sessionmaker = get_sessionmaker(engine)
+    try:
+        async with sessionmaker() as session:
+            await session.execute(update(ProfileModel).values(is_active=False))
+            await session.commit()
+
+        put_response = await scheduled_client.put(
+            "/scheduler/sources/solid_jobs/fetch-scope", json={"mode": "filtered"}
+        )
+        assert put_response.status_code == 200
+
+        ingest_response = await scheduled_client.post("/ingest/solid_jobs")
+        assert ingest_response.status_code == 200
+        assert ingest_response.json()["ok"] is False
+
+        async with sessionmaker() as session:
+            source = await session.scalar(select(Source).where(Source.connector == SOLID_JOBS))
+            assert source is not None
+            failure = await session.scalar(
+                select(IngestionFailure).where(IngestionFailure.source_id == source.id)
+            )
+            assert failure is not None
+            assert failure.failure_type == "run_fetch_failed"
+            failure_id = failure.id
+
+        failures_response = await scheduled_client.get(
+            "/failures/ingestion", params={"source": SOLID_JOBS}
+        )
+        assert failures_response.status_code == 200
+        listed_ids = {item["id"] for item in failures_response.json()["items"]}
+        assert failure_id in listed_ids
+
+        retry_response = await scheduled_client.post(f"/failures/ingestion/{failure_id}/retry")
+        assert retry_response.status_code == 200
+    finally:
+        # Reset the real, singleton solid_jobs Source row back to defaults so later tests in
+        # this suite that hit /ingest/solid_jobs or /scheduler/... aren't silently blocked by
+        # this test's fetch-scope change (mirrors BUG28's "tests must not leak shared state").
+        reset_response = await scheduled_client.put(
+            "/scheduler/sources/solid_jobs/fetch-scope", json={"mode": "all"}
+        )
+        assert reset_response.status_code == 200

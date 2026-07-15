@@ -14,6 +14,7 @@ function makeSource(overrides: Partial<SourceStatus> = {}): SourceStatus {
     name: 'justjoinit',
     schedule: { type: 'interval', seconds: 300 },
     fetch_range: { mode: 'all', since: null, until: null },
+    fetch_scope: { mode: 'all' },
     auto_fetch_enabled: true,
     connector_enabled: true,
     last_fetched_at: null,
@@ -41,6 +42,7 @@ function makeSettings(
     saveIntervalAll: vi.fn(),
     saveRange: vi.fn(),
     saveRangeAll: vi.fn(),
+    saveFetchScope: vi.fn(),
     saveAutoFetch: vi.fn(),
     saveAutoFetchAll: vi.fn(),
     saveEnabled: vi.fn(),
@@ -56,6 +58,7 @@ const source: ConnectorOption = {
   offer_count: 0,
   scored_count: 0,
   unscored_count: 0,
+  supports_fetch_scope: false,
 };
 
 describe('ConnectorSettingsCard', () => {
@@ -123,6 +126,7 @@ describe('ConnectorSettingsCard', () => {
             offer_count: 0,
             scored_count: 0,
             unscored_count: 0,
+            supports_fetch_scope: false,
           }}
           settings={settingsA}
         />
@@ -133,6 +137,7 @@ describe('ConnectorSettingsCard', () => {
             offer_count: 0,
             scored_count: 0,
             unscored_count: 0,
+            supports_fetch_scope: false,
           }}
           settings={settingsB}
         />
@@ -144,5 +149,44 @@ describe('ConnectorSettingsCard', () => {
     expect(saveButtons[1]).toBeDisabled();
     expect(saveButtons[2]).not.toBeDisabled();
     expect(saveButtons[3]).not.toBeDisabled();
+  });
+
+  it('renders the Fetch scope control only when supports_fetch_scope is true', () => {
+    const settings = makeSettings();
+
+    render(
+      <ConnectorSettingsCard
+        source={{ ...source, supports_fetch_scope: true }}
+        settings={settings}
+      />,
+    );
+
+    expect(screen.getByText('Fetch scope')).toBeInTheDocument();
+  });
+
+  it('does not render the Fetch scope control when supports_fetch_scope is false', () => {
+    const settings = makeSettings();
+
+    render(<ConnectorSettingsCard source={source} settings={settings} />);
+
+    expect(screen.queryByText('Fetch scope')).not.toBeInTheDocument();
+  });
+
+  it('clicking Save on the fetch scope row calls saveFetchScope with the selected mode', async () => {
+    const saveFetchScope = vi.fn();
+    const settings = makeSettings({ saveFetchScope });
+
+    render(
+      <ConnectorSettingsCard
+        source={{ ...source, supports_fetch_scope: true }}
+        settings={settings}
+      />,
+    );
+
+    await userEvent.selectOptions(screen.getByDisplayValue('All offers'), 'filtered');
+    const saveButtons = screen.getAllByRole('button', { name: /Save/ });
+    await userEvent.click(saveButtons[saveButtons.length - 1]!);
+
+    expect(saveFetchScope).toHaveBeenCalledWith('justjoinit', 'filtered');
   });
 });

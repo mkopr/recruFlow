@@ -1,6 +1,7 @@
 import logging
 import time
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -9,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.connectors.base import JobBoardConnector
 from app.connectors.sitemap import next_sitemap_cursor, resolve_sitemap_cursor
 from app.db.models import Source
+from app.ingestion.fetch_scope import FETCH_SCOPE_FILTERED, resolve_fetch_scope_terms
 from app.ingestion.runner import resolve_fetch_range, run_paginated_ingestion
 from app.ingestion.types import IngestionResult
 
@@ -44,6 +46,9 @@ class SitemapDetailPageConnector(JobBoardConnector, ABC):
     def follow_redirects_on_detail_fetch(self) -> bool:
         return False
 
+    def fetch_filtered_sitemap_urls(self, config: dict[str, Any], term: str) -> list[str] | None:
+        raise NotImplementedError
+
     def default_url(self) -> str:
         return self.sitemap_url()
 
@@ -72,11 +77,18 @@ class SitemapDetailPageConnector(JobBoardConnector, ABC):
             return None
         return response.text
 
-    async def run(
-        self, session: AsyncSession, source: Source, force_refresh: bool = False
+    async def _run_over_urls(
+        self,
+        session: AsyncSession,
+        source: Source,
+        config: dict[str, Any],
+        urls: list[str],
+        *,
+        force_refresh: bool,
+        since: datetime | None,
+        until: datetime | None,
+        persist_cursor: bool = True,
     ) -> IngestionResult:
-        config = source.config_json or {}
-        since, until = resolve_fetch_range(config.get("fetch_range"))
         # Each "page" is `page_size` live per-URL HTTP fetches, not one batched API call, so
         # these fallback bounds cap total live traffic per run at `page_size * max_pages`
         # (20 * 50 = 1000).
@@ -86,12 +98,6 @@ class SitemapDetailPageConnector(JobBoardConnector, ABC):
         rate_limit_delay_seconds = float(
             config.get("rate_limit_delay_seconds", DEFAULT_RATE_LIMIT_DELAY_SECONDS)
         )
-
-        urls = self.fetch_sitemap_urls(config)
-        if urls is None:
-            return IngestionResult(
-                ok=False, fetched=0, created=0, error_message=f"failed to fetch {self.name} offers"
-            )
 
         # BUG41: sitemap order is stable but not recency-sorted, so restarting at cursor 0
         # every run just re-walks the same already-ingested prefix forever. `sitemap_cursor`
@@ -144,5 +150,65 @@ class SitemapDetailPageConnector(JobBoardConnector, ABC):
             # that early-stop must not apply here (BUG41).
             sorted_by_recency=False,
         )
-        source.config_json = {**config, "sitemap_cursor": next_sitemap_cursor(last_cursor)}
+        if persist_cursor:
+            source.config_json = {**config, "sitemap_cursor": next_sitemap_cursor(last_cursor)}
         return result
+
+    async def run(
+        self, session: AsyncSession, source: Source, force_refresh: bool = False
+    ) -> IngestionResult:
+        config = source.config_json or {}
+        since, until = resolve_fetch_range(config.get("fetch_range"))
+
+        if self.supports_fetch_scope():
+            resolution = await resolve_fetch_scope_terms(session, config)
+            if resolution.blocked_reason is not None:
+                return IngestionResult(
+                    ok=False, fetched=0, created=0, error_message=resolution.blocked_reason
+                )
+            if resolution.mode == FETCH_SCOPE_FILTERED:
+                total_fetched = 0
+                total_created = 0
+                for term in resolution.terms:
+                    urls = self.fetch_filtered_sitemap_urls(config, term)
+                    if urls is None:
+                        return IngestionResult(
+                            ok=False,
+                            fetched=total_fetched,
+                            created=total_created,
+                            error_message=(
+                                f"failed to fetch {self.name} offers filtered by {term!r}"
+                            ),
+                        )
+                    result = await self._run_over_urls(
+                        session,
+                        source,
+                        config,
+                        urls,
+                        force_refresh=force_refresh,
+                        since=since,
+                        until=until,
+                        # Filtered runs enumerate a fresh, per-term, typically-small filtered
+                        # listing each time rather than the full stable catalog, so BUG41's
+                        # "resume where the last run left off" concern doesn't apply here.
+                        persist_cursor=False,
+                    )
+                    total_fetched += result.fetched
+                    total_created += result.created
+                    if not result.ok:
+                        return IngestionResult(
+                            ok=False,
+                            fetched=total_fetched,
+                            created=total_created,
+                            error_message=result.error_message,
+                        )
+                return IngestionResult(ok=True, fetched=total_fetched, created=total_created)
+
+        urls = self.fetch_sitemap_urls(config)
+        if urls is None:
+            return IngestionResult(
+                ok=False, fetched=0, created=0, error_message=f"failed to fetch {self.name} offers"
+            )
+        return await self._run_over_urls(
+            session, source, config, urls, force_refresh=force_refresh, since=since, until=until
+        )

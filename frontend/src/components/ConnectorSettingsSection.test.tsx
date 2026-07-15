@@ -19,14 +19,29 @@ const useKnownSourcesMock = vi.mocked(useKnownSourcesModule.useKnownSources);
 const useConnectorSettingsMock = vi.mocked(useConnectorSettingsModule.useConnectorSettings);
 
 const THREE_SOURCES: ConnectorOption[] = [
-  { id: 'solid_jobs', label: 'SOLID.Jobs', offer_count: 0, scored_count: 0, unscored_count: 0 },
-  { id: 'justjoinit', label: 'JustJoin.it', offer_count: 0, scored_count: 0, unscored_count: 0 },
+  {
+    id: 'solid_jobs',
+    label: 'SOLID.Jobs',
+    offer_count: 0,
+    scored_count: 0,
+    unscored_count: 0,
+    supports_fetch_scope: false,
+  },
+  {
+    id: 'justjoinit',
+    label: 'JustJoin.it',
+    offer_count: 0,
+    scored_count: 0,
+    unscored_count: 0,
+    supports_fetch_scope: false,
+  },
   {
     id: 'nofluffjobs',
     label: 'NoFluffJobs',
     offer_count: 0,
     scored_count: 0,
     unscored_count: 0,
+    supports_fetch_scope: false,
   },
 ];
 
@@ -41,6 +56,7 @@ function baseSettings(
     saveIntervalAll: vi.fn(),
     saveRange: vi.fn(),
     saveRangeAll: vi.fn(),
+    saveFetchScope: vi.fn(),
     saveAutoFetch: vi.fn(),
     saveAutoFetchAll: vi.fn(),
     saveEnabled: vi.fn(),
@@ -155,6 +171,7 @@ describe('ConnectorSettingsSection', () => {
         offer_count: 0,
         scored_count: 0,
         unscored_count: 0,
+        supports_fetch_scope: false,
       })),
     ];
     useKnownSourcesMock.mockReturnValue({ sources: tenSources, refetch: vi.fn() });
@@ -212,6 +229,7 @@ describe('ConnectorSettingsSection', () => {
           offer_count: 0,
           scored_count: 0,
           unscored_count: 0,
+          supports_fetch_scope: false,
         },
       ],
       refetch: vi.fn(),

@@ -29,6 +29,7 @@ beforeEach(() => {
     saveIntervalAll: vi.fn(),
     saveRange: vi.fn(),
     saveRangeAll: vi.fn(),
+    saveFetchScope: vi.fn(),
     saveAutoFetch: vi.fn(),
     saveAutoFetchAll: vi.fn(),
     saveEnabled: vi.fn(),

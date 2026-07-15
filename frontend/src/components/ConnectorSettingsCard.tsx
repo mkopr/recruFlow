@@ -46,6 +46,47 @@ function RangeInputs({ draft, setDraft }: RangeInputsProps) {
   );
 }
 
+function resolveFetchScopeMode(
+  fetchScope: Record<string, unknown> | undefined,
+): 'all' | 'filtered' {
+  return fetchScope?.mode === 'filtered' ? 'filtered' : 'all';
+}
+
+interface FetchScopeRowProps {
+  source: ConnectorOption;
+  isSaving: boolean;
+  saveFetchScope: UseConnectorSettingsResult['saveFetchScope'];
+  initialMode: 'all' | 'filtered';
+}
+
+function FetchScopeRow({ source, isSaving, saveFetchScope, initialMode }: FetchScopeRowProps) {
+  const [fetchScopeMode, setFetchScopeMode] = useState<'all' | 'filtered'>(initialMode);
+
+  if (!source.supports_fetch_scope) return null;
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-t border-[var(--color-border)] pt-3">
+      <span className="w-24 text-sm font-medium">Fetch scope</span>
+      <select
+        className="input w-48"
+        value={fetchScopeMode}
+        onChange={(e) => setFetchScopeMode(e.target.value as 'all' | 'filtered')}
+      >
+        <option value="all">All offers</option>
+        <option value="filtered">Filtered by hard skills</option>
+      </select>
+      <button
+        type="button"
+        className="btn"
+        disabled={isSaving}
+        onClick={() => saveFetchScope(source.id, fetchScopeMode)}
+      >
+        {isSaving ? 'Saving…' : 'Save'}
+      </button>
+    </div>
+  );
+}
+
 export function ConnectorSettingsCard({ source, settings }: ConnectorSettingsCardProps) {
   const status = settings.sources.find((s) => s.connector === source.id);
   const isSaving = settings.savingByConnector[source.id] ?? false;
@@ -121,6 +162,13 @@ export function ConnectorSettingsCard({ source, settings }: ConnectorSettingsCar
           {isSaving ? 'Saving…' : 'Save'}
         </button>
       </div>
+
+      <FetchScopeRow
+        source={source}
+        isSaving={isSaving}
+        saveFetchScope={settings.saveFetchScope}
+        initialMode={resolveFetchScopeMode(status?.fetch_scope)}
+      />
     </div>
   );
 }

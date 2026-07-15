@@ -54,6 +54,9 @@ class ConnectorSpec:
     label: str
     dispatch: Connector
     seed_config_overrides: dict[str, Any] = field(default_factory=dict)
+    # US47: only connectors with a confirmed live keyword-filter mechanism support Fetch
+    # Scope's "filtered" mode -- see CONTEXT.md's Fetch Scope glossary entry.
+    supports_fetch_scope: bool = False
 
 
 _solid_jobs = SolidJobsConnector(campaign=get_settings().solid_jobs_campaign)
@@ -66,12 +69,22 @@ _remoteok = RemoteOKConnector()
 _remotive = RemotiveConnector()
 
 CONNECTOR_REGISTRY: dict[str, ConnectorSpec] = {
-    SOLID_JOBS: ConnectorSpec(name=SOLID_JOBS, label=_solid_jobs.name, dispatch=_solid_jobs.run),
+    SOLID_JOBS: ConnectorSpec(
+        name=SOLID_JOBS,
+        label=_solid_jobs.name,
+        dispatch=_solid_jobs.run,
+        supports_fetch_scope=True,
+    ),
     JUSTJOINIT: ConnectorSpec(name=JUSTJOINIT, label=_justjoinit.name, dispatch=_justjoinit.run),
     NOFLUFFJOBS: ConnectorSpec(
         name=NOFLUFFJOBS, label=_nofluffjobs.name, dispatch=_nofluffjobs.run
     ),
-    BULLDOGJOB: ConnectorSpec(name=BULLDOGJOB, label=_bulldogjob.name, dispatch=_bulldogjob.run),
+    BULLDOGJOB: ConnectorSpec(
+        name=BULLDOGJOB,
+        label=_bulldogjob.name,
+        dispatch=_bulldogjob.run,
+        supports_fetch_scope=True,
+    ),
     ROCKET_JOBS: ConnectorSpec(
         name=ROCKET_JOBS, label=_rocket_jobs.name, dispatch=_rocket_jobs.run
     ),
@@ -79,6 +92,7 @@ CONNECTOR_REGISTRY: dict[str, ConnectorSpec] = {
         name=PRACUJ,
         label=_pracuj.name,
         dispatch=_pracuj.run,
+        supports_fetch_scope=True,
         # Browser-driven fetching is far more expensive than every other connector's plain
         # HTTP call (P3US41, see `docs/adr/0026`), so it gets a longer interval than the
         # shared 300s default -- the same "expensive, throttle hard" rationale ADR 0024/0026

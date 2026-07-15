@@ -59,7 +59,7 @@ Key architectural constraints:
 - **ELT pattern**: raw API payload always stored before normalisation
 - **Dedup**: hash on canonical URL; fallback hash on title + company + location
 - **No auto-send**: Applications are never created or sent without explicit user approval
-- **Unified MatchScore**: every connector is scored by the same LangChain Matcher into one schema/table; the `engine` field is kept for schema stability but is only ever `"langchain"` today — the originally-planned second engine (`sjctl evaluate`, SOLID.Jobs-only) was abandoned before P3US23 shipped (see ARCHITECTURE.md's P3US23 section and `docs/adr/0022-connector-registry-is-the-single-source-of-truth.md`)
+- **Unified MatchScore**: every connector is scored by the same LangChain Matcher into one schema/table; the `engine` field is kept for schema stability but is only ever `"langchain"` today — the originally-planned second engine (`sjctl evaluate`, SOLID.Jobs-only) was abandoned before P3US23 shipped (see `docs/architecture/matching.md`'s P3US23 section and `docs/adr/0022-connector-registry-is-the-single-source-of-truth.md`)
 - **SSE for swarm progress**: not WebSocket (OD-8)
 - **Send queue**: rate-limited, daily cap enforced as a hard block (OD-5)
 
@@ -95,7 +95,7 @@ User stories live in `user stories/000 high level guide.md`. When implementing a
 2. Mirror patterns from prior stories in the same phase.
 3. Commit convention: `US<NN> <short message>` for stories, matching the story's file ID under `user stories/P<phase>/` (e.g. `US01 python repo scaffold`); `BUG<number> <short message>` for bugs. Single-line subject only — no body, no bullet points, no trailers (e.g. no `Co-Authored-By`).
 4. After implementation, run `make ci` (must be zero failures), then test end-to-end on the real stack with `make up`.
-5. Update ARCHITECTURE.md (or equivalent) to reflect new endpoint contracts or design decisions.
+5. Update the relevant `docs/architecture/*.md` file (see `ARCHITECTURE.md`'s index) to reflect new endpoint contracts or design decisions — root `ARCHITECTURE.md` itself only changes for repo-layout/dependency/core-`app/`-package changes.
 
 ## Code Quality Rules
 

@@ -19,7 +19,7 @@ from app.dlq.types import FailureType
 from app.ingestion.registry import CONNECTOR_REGISTRY
 from app.schemas.match_score import MatchScore
 from app.schemas.offer import Offer
-from app.schemas.profile import Profile
+from app.schemas.profile import Profile, hard_skill_names
 
 logger = logging.getLogger(__name__)
 
@@ -190,15 +190,11 @@ def _deal_breaker_hit(profile: Profile, offer: Offer) -> str | None:
     return None
 
 
-def _hard_skill_names(profile: Profile) -> list[str]:
-    return [skill.name for skill in profile.skills if skill.hard]
-
-
 def _missing_hard_skills(profile: Profile, offer: Offer) -> bool:
     # Inverse of _deal_breaker_hit: True only when the profile has at least one skill flagged
     # hard and none of them are found in the offer haystack (OR semantics — any single match
     # clears the veto). Uses the exact same word-boundary/optional-separator regex construction.
-    hard_skills = _hard_skill_names(profile)
+    hard_skills = hard_skill_names(profile)
     if not hard_skills:
         return False
     haystack = _offer_haystack(offer)
@@ -268,7 +264,7 @@ async def score_offer_with_langchain(
         score_percent = _cap_score_for_missing_hard_skill(score_percent)
         rationale = (
             f"{rationale} None of the required hard skills "
-            f"({', '.join(_hard_skill_names(profile))}) were found in this offer; "
+            f"({', '.join(hard_skill_names(profile))}) were found in this offer; "
             f"score capped at {_HARD_SKILL_MISS_CAP}."
         )
 

@@ -3,6 +3,7 @@ import type { components } from './schema';
 
 export type SourceStatus = components['schemas']['SourceStatus'];
 export type FetchRangeUpdateRequest = components['schemas']['FetchRangeUpdateRequest'];
+export type FetchScopeUpdateRequest = components['schemas']['FetchScopeUpdateRequest'];
 
 export async function fetchSchedulerStatus(): Promise<SourceStatus[]> {
   const { data, error } = await apiClient.GET('/scheduler/status');
@@ -67,6 +68,22 @@ export async function updateAllSourceFetchRanges(
   }
 
   return data.sources;
+}
+
+export async function updateSourceFetchScope(
+  source: string,
+  payload: FetchScopeUpdateRequest,
+): Promise<SourceStatus> {
+  const { data, error } = await apiClient.PUT('/scheduler/sources/{source}/fetch-scope', {
+    params: { path: { source } },
+    body: payload,
+  });
+
+  if (error) {
+    throw new Error('failed to update fetch scope');
+  }
+
+  return data;
 }
 
 export async function updateSourceAutoFetch(

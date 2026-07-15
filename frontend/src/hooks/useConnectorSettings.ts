@@ -9,6 +9,7 @@ import {
   updateSourceAutoFetch,
   updateSourceEnabled,
   updateSourceFetchRange,
+  updateSourceFetchScope,
   updateSourceInterval,
 } from '../api/scheduler';
 import { useSchedulerStatus, type UseSchedulerStatusResult } from './useSchedulerStatus';
@@ -21,6 +22,7 @@ export interface UseConnectorSettingsResult {
   saveIntervalAll: (seconds: number) => Promise<void>;
   saveRange: (connector: string, range: FetchRangeUpdateRequest) => Promise<boolean>;
   saveRangeAll: (range: FetchRangeUpdateRequest) => Promise<boolean>;
+  saveFetchScope: (connector: string, mode: 'all' | 'filtered') => Promise<boolean>;
   saveAutoFetch: (connector: string, enabled: boolean) => Promise<void>;
   saveAutoFetchAll: (enabled: boolean) => Promise<void>;
   saveEnabled: (connector: string, enabled: boolean) => Promise<void>;
@@ -107,6 +109,22 @@ export function useConnectorSettings(): UseConnectorSettingsResult {
     return success;
   }
 
+  async function saveFetchScope(connector: string, mode: 'all' | 'filtered'): Promise<boolean> {
+    setSavingOne(connector, true);
+    setError(null);
+    let success = false;
+    try {
+      await updateSourceFetchScope(connector, { mode });
+      await refetch();
+      success = true;
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSavingOne(connector, false);
+    }
+    return success;
+  }
+
   async function saveAutoFetch(connector: string, enabled: boolean): Promise<void> {
     setSavingOne(connector, true);
     setError(null);
@@ -167,6 +185,7 @@ export function useConnectorSettings(): UseConnectorSettingsResult {
     saveIntervalAll,
     saveRange,
     saveRangeAll,
+    saveFetchScope,
     saveAutoFetch,
     saveAutoFetchAll,
     saveEnabled,

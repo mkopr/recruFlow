@@ -28,6 +28,7 @@ class SourceStatus(BaseModel):
     name: str
     schedule: dict[str, Any]
     fetch_range: dict[str, Any]
+    fetch_scope: dict[str, Any]
     auto_fetch_enabled: bool
     connector_enabled: bool
     last_fetched_at: datetime | None
@@ -69,6 +70,10 @@ class FetchRangeUpdateRequest(BaseModel):
         if self.until is not None and self.since > self.until:
             raise ValueError("since must not be after until")
         return self
+
+
+class FetchScopeUpdateRequest(BaseModel):
+    mode: Literal["all", "filtered"]
 
 
 class AutoFetchUpdateRequest(BaseModel):

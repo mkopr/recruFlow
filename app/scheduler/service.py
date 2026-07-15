@@ -31,6 +31,7 @@ def _default_config_template() -> dict[str, Any]:
         "schedule": {"type": "interval", "seconds": 300},
         "auto_fetch_enabled": True,
         "connector_enabled": True,
+        "fetch_scope": {"mode": "all"},
     }
 
 
@@ -205,6 +206,26 @@ async def set_all_source_fetch_ranges(
         source.config_json = {**source.config_json, "fetch_range": fetch_range}
         await session.flush()
     return list(sources)
+
+
+class FetchScopeNotSupportedError(Exception):
+    pass
+
+
+async def set_source_fetch_scope(
+    session: AsyncSession, connector: str, fetch_scope: dict[str, Any]
+) -> Source:
+    source = await resolve_source_by_connector(session, connector)
+    if (
+        fetch_scope.get("mode") == "filtered"
+        and not CONNECTOR_REGISTRY[connector].supports_fetch_scope
+    ):
+        raise FetchScopeNotSupportedError(
+            f"connector {connector!r} does not support filtered fetch scope"
+        )
+    source.config_json = {**source.config_json, "fetch_scope": fetch_scope}
+    await session.flush()
+    return source
 
 
 async def set_source_auto_fetch(session: AsyncSession, connector: str, enabled: bool) -> Source:

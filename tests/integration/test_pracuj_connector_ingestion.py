@@ -9,6 +9,7 @@ from app.connectors.pracuj import PracujConnector
 from app.db.models import IngestionFailure, Source
 from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
+from app.db.models import Profile as ProfileModel
 from app.ingestion.normalize import PRACUJ
 from app.ingestion.types import IngestionResult
 from app.llm.matcher import _MatcherOutput
@@ -392,9 +393,15 @@ async def test_run_pracuj_ingestion_resumes_from_persisted_listing_page_cursor(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_pracuj_connector_failure_recorded_not_swallowed(
+async def test_pracuj_connector_skips_a_challenged_detail_page_and_keeps_the_rest(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # BUG43 follow-up: this used to assert an IngestionFailure got recorded and the whole page
+    # aborted on a single 403'd detail page -- that was true back when this connector shared one
+    # browser context for a whole run, so one challenge really did mean nothing else on the page
+    # would succeed either. Now that `run` opens a fresh context per fetch (BUG43's fix), a lone
+    # challenged detail URL is just a skip, and the real regression to guard against is the
+    # *rest* of the page silently getting thrown away with it.
     source = await _create_source(db_session, config_json=_FAST_IT_CONFIG)
     ok_slug, challenge_slug = _unique_slug("ok"), _unique_slug("challenge")
     ok_url, challenge_url = _job_url(ok_slug), _job_url(challenge_slug)
@@ -413,6 +420,15 @@ async def test_pracuj_connector_failure_recorded_not_swallowed(
     result = await PracujConnector().run(db_session, source)
     await db_session.commit()
 
+    assert result.ok is True
+    assert result.created == 1
+    rows = (
+        (await db_session.execute(select(OfferModel).where(OfferModel.source_id == source.id)))
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].title == "Backend Engineer"
     failures = (
         (
             await db_session.execute(
@@ -422,11 +438,7 @@ async def test_pracuj_connector_failure_recorded_not_swallowed(
         .scalars()
         .all()
     )
-    assert not (result.ok is True and result.created == 0 and not failures), (
-        "connector must not silently report zero offers on a mid-run challenge page"
-    )
-    assert len(failures) == 1
-    assert failures[0].status == "open"
+    assert failures == []
 
 
 @pytest.mark.integration
@@ -479,3 +491,87 @@ async def test_pracuj_offer_becomes_scoring_eligible(
         assert len(rows) == 1
     finally:
         await _delete_sources_and_dependents(db_session, [source.id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_filtered_fetch_scope_loops_category_filter_per_hard_skill_term(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _deactivate_all_profiles(db_session)
+    profile = ProfileModel(
+        name=f"profile-{uuid4()}",
+        is_active=True,
+        data={"skills": [{"name": "Python", "hard": True}, {"name": "Go", "hard": True}]},
+    )
+    db_session.add(profile)
+    await db_session.flush()
+    await db_session.commit()
+
+    source = await _create_source(
+        db_session, config_json={"fetch_scope": {"mode": "filtered"}, "rate_limit_delay_seconds": 0}
+    )
+
+    python_slug, go_slug = _unique_slug("python-dev"), _unique_slug("go-dev")
+    python_url, go_url = _job_url(python_slug), _job_url(go_slug)
+    python_record = _detail_record(2001, "Python Developer", python_url)
+    go_record = _detail_record(2002, "Go Developer", go_url)
+
+    python_listing_url = _listing_url("Python")
+    go_listing_url = _listing_url("Go")
+    requested_listing_urls: list[str] = []
+
+    def _router(url: str) -> _FakeResponse | None:
+        if url == python_listing_url:
+            requested_listing_urls.append(url)
+            return _FakeResponse(text=_listing_html([_group(offer_url=python_url)]))
+        if url == go_listing_url:
+            requested_listing_urls.append(url)
+            return _FakeResponse(text=_listing_html([_group(offer_url=go_url)]))
+        if url == python_url:
+            return _FakeResponse(text=_detail_html(python_record))
+        if url == go_url:
+            return _FakeResponse(text=_detail_html(go_record))
+        return None
+
+    _install_router(monkeypatch, _router)
+
+    result = await PracujConnector().run(db_session, source)
+    await db_session.commit()
+
+    assert sorted(requested_listing_urls) == sorted([python_listing_url, go_listing_url])
+    assert result.ok is True
+    assert result.fetched == 2
+    assert result.created == 2
+    rows = (
+        (await db_session.execute(select(OfferModel).where(OfferModel.source_id == source.id)))
+        .scalars()
+        .all()
+    )
+    titles = {row.title for row in rows}
+    assert titles == {"Python Developer", "Go Developer"}
+    # filtered runs must not touch listing_page_cursor (start_page always 1 per term)
+    assert "listing_page_cursor" not in source.config_json
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_filtered_fetch_scope_blocked_when_no_active_profile(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _deactivate_all_profiles(db_session)
+    await db_session.commit()
+
+    source = await _create_source(db_session, config_json={"fetch_scope": {"mode": "filtered"}})
+
+    def _fail() -> Any:
+        raise AssertionError("must not launch Playwright when fetch scope is blocked")
+
+    monkeypatch.setattr(pracuj, "async_playwright", _fail)
+
+    result = await PracujConnector().run(db_session, source)
+    await db_session.commit()
+
+    assert result.ok is False
+    assert result.error_message is not None
+    assert "no active profile" in result.error_message

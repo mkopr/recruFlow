@@ -353,18 +353,31 @@ async def test_collect_offers_returns_not_ok_when_first_listing_fetch_fails() ->
 
 
 @pytest.mark.asyncio
-async def test_collect_offers_flags_mid_run_failure_when_a_detail_fetch_fails(
+async def test_collect_offers_skips_a_single_failed_detail_fetch_and_keeps_going(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(asyncio, "sleep", _no_sleep := _fake_sleep())
+    # BUG43 follow-up: a failed detail fetch used to abort the whole page (see git history for
+    # the pre-fix version of this test) -- that made sense back when this connector shared one
+    # browser context for the entire run and a single failure really did mean Cloudflare had
+    # blocked everything after it. Now that `run` opens a fresh context per fetch, one failed
+    # detail fetch is just a skip, like Bulldogjob/Rocket Jobs's per-URL `continue` -- it must
+    # not throw away every other candidate already enumerated on this page.
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep())
     listing_url = "https://www.pracuj.pl/praca/it;kw?pn=1&rop=10"
     ok_url = "https://www.pracuj.pl/praca/ok,oferta,1"
     failing_url = "https://www.pracuj.pl/praca/challenge,oferta,2"
+    another_ok_url = "https://www.pracuj.pl/praca/ok,oferta,3"
 
     async def fake_fetch_html(url: str) -> str | None:
         if url == listing_url:
-            return _listing_html([_group(offer_url=ok_url), _group(offer_url=failing_url)])
-        if url == ok_url:
+            return _listing_html(
+                [
+                    _group(offer_url=ok_url),
+                    _group(offer_url=failing_url),
+                    _group(offer_url=another_ok_url),
+                ]
+            )
+        if url in (ok_url, another_ok_url):
             return _detail_html(_HOURLY_ONLY_DETAIL_RECORD)
         if url == failing_url:
             return None
@@ -380,9 +393,11 @@ async def test_collect_offers_flags_mid_run_failure_when_a_detail_fetch_fails(
     )
 
     assert enumeration_ok is True
-    assert mid_run_failure is True
-    assert offers == [_HOURLY_ONLY_DETAIL_RECORD]
-    # A mid-run failure means page 1 itself was never fully processed -- retry it, don't skip.
+    assert mid_run_failure is False
+    # Both surrounding offers were collected -- only the failing one was skipped, not the
+    # whole page.
+    assert offers == [_HOURLY_ONLY_DETAIL_RECORD, _HOURLY_ONLY_DETAIL_RECORD]
+    # Short page (3 < page_size=10) -- reached the end, wrap for next pass.
     assert next_start_page == 1
 
 
@@ -596,6 +611,93 @@ async def test_pracuj_run_records_failure_on_mid_run_fetch_failure(
 
     assert recorded["source_id"] == 7
     assert recorded["dedup_key"] == "source:7"
+
+
+def test_supports_fetch_scope_is_true() -> None:
+    assert PracujConnector().supports_fetch_scope() is True
+
+
+@pytest.mark.asyncio
+async def test_pracuj_run_filtered_mode_blocked_never_launches_playwright(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db.models import Source
+    from app.ingestion.fetch_scope import FetchScopeResolution
+    from app.ingestion.types import IngestionResult
+
+    async def _fake_resolve_fetch_scope_terms(session: Any, config: Any) -> FetchScopeResolution:
+        return FetchScopeResolution(mode="filtered", terms=[], blocked_reason="blocked in test")
+
+    monkeypatch.setattr(pracuj, "resolve_fetch_scope_terms", _fake_resolve_fetch_scope_terms)
+
+    def _fail(*a: Any, **kw: Any) -> None:
+        raise AssertionError("must not launch Playwright when fetch scope is blocked")
+
+    monkeypatch.setattr(pracuj, "async_playwright", _fail)
+
+    connector = PracujConnector()
+    source = Source(id=1, connector="pracuj", config_json={"fetch_scope": {"mode": "filtered"}})
+
+    result = await connector.run(None, source)  # type: ignore[arg-type]
+
+    assert result == IngestionResult(
+        ok=False, fetched=0, created=0, error_message="blocked in test"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pracuj_run_filtered_mode_loops_collect_offers_once_per_hard_skill_term(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db.models import Source
+    from app.ingestion.fetch_scope import FetchScopeResolution
+    from app.ingestion.types import IngestionResult
+
+    async def _fake_resolve_fetch_scope_terms(session: Any, config: Any) -> FetchScopeResolution:
+        return FetchScopeResolution(mode="filtered", terms=["Python", "Go"], blocked_reason=None)
+
+    monkeypatch.setattr(pracuj, "resolve_fetch_scope_terms", _fake_resolve_fetch_scope_terms)
+    monkeypatch.setattr(pracuj, "async_playwright", _fake_async_playwright)
+
+    calls: list[dict[str, Any]] = []
+
+    async def _fake_collect_offers(
+        fetch_html: Any, **kwargs: Any
+    ) -> tuple[list[Any], bool, bool, int]:
+        calls.append(kwargs)
+        return [{"id": kwargs["category_filter"]}], True, False, 1
+
+    monkeypatch.setattr(pracuj, "_collect_offers", _fake_collect_offers)
+
+    captured: dict[str, Any] = {}
+
+    async def _fake_run_paginated_ingestion(
+        session: Any, source_id: int, **kwargs: Any
+    ) -> IngestionResult:
+        captured.update(kwargs)
+        return IngestionResult(ok=True, fetched=1, created=1)
+
+    monkeypatch.setattr(pracuj, "run_paginated_ingestion", _fake_run_paginated_ingestion)
+
+    connector = PracujConnector()
+    source = Source(
+        id=1,
+        connector="pracuj",
+        config_json={"fetch_scope": {"mode": "filtered"}, "listing_page_cursor": 5},
+    )
+
+    result = await connector.run(None, source)  # type: ignore[arg-type]
+
+    assert [c["category_filter"] for c in calls] == ["Python", "Go"]
+    assert all(c["start_page"] == 1 for c in calls)
+    # pracuj.py collects offers across all terms first, then makes one final
+    # run_paginated_ingestion call over the concatenated list (unlike base.py/sitemap_detail.py,
+    # which accumulate one IngestionResult per term) -- so the result here is the single fake
+    # call's own return value, not a per-term sum.
+    assert result == IngestionResult(ok=True, fetched=1, created=1)
+    assert captured["fetch_page"](0, 10) == ([{"id": "Python"}, {"id": "Go"}], None)
+    # filtered runs must not touch listing_page_cursor (BUG42 resumption is unfiltered-only)
+    assert source.config_json["listing_page_cursor"] == 5
 
 
 class _FakePage:

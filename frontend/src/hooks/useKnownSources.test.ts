@@ -23,8 +23,16 @@ describe('useKnownSources', () => {
         offer_count: 5,
         scored_count: 2,
         unscored_count: 3,
+        supports_fetch_scope: false,
       },
-      { id: 'solid_jobs', label: 'SOLID.Jobs', offer_count: 1, scored_count: 1, unscored_count: 0 },
+      {
+        id: 'solid_jobs',
+        label: 'SOLID.Jobs',
+        offer_count: 1,
+        scored_count: 1,
+        unscored_count: 0,
+        supports_fetch_scope: false,
+      },
     ]);
 
     const { result } = renderHook(() => useKnownSources());
@@ -50,6 +58,7 @@ describe('useKnownSources', () => {
         offer_count: 5,
         scored_count: 2,
         unscored_count: 3,
+        supports_fetch_scope: false,
       },
     ]);
 
@@ -57,7 +66,14 @@ describe('useKnownSources', () => {
     await waitFor(() => expect(result.current.sources).toHaveLength(1));
 
     fetchConnectorsMock.mockResolvedValueOnce([
-      { id: 'solid_jobs', label: 'SOLID.Jobs', offer_count: 9, scored_count: 4, unscored_count: 5 },
+      {
+        id: 'solid_jobs',
+        label: 'SOLID.Jobs',
+        offer_count: 9,
+        scored_count: 4,
+        unscored_count: 5,
+        supports_fetch_scope: false,
+      },
     ]);
     result.current.refetch();
 
@@ -69,6 +85,7 @@ describe('useKnownSources', () => {
           offer_count: 9,
           scored_count: 4,
           unscored_count: 5,
+          supports_fetch_scope: false,
         },
       ]),
     );

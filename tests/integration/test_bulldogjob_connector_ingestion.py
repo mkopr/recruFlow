@@ -2,15 +2,17 @@ import gzip
 import json
 import time
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
 import pytest
 from app.connectors.bulldogjob import BULLDOGJOB_SITEMAP_INDEX_URL, BulldogjobConnector
 from app.db.models import Offer as OfferModel
+from app.db.models import Profile as ProfileModel
 from app.db.models import Source
 from app.ingestion.types import IngestionResult
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 JOBS_SITEMAP_URL = "https://bulldogjob.com/en/jobs.xml.gz"
@@ -502,3 +504,105 @@ async def test_run_bulldogjob_ingestion_uses_page_size_from_config(
     await db_session.commit()
 
     assert len(call_log) == 8
+
+
+def _filtered_listing_url(term: str) -> str:
+    return f"https://bulldogjob.com/companies/jobs/s/skills,{quote(term, safe='')}"
+
+
+def _filtered_listing_html(job_ids: list[str]) -> str:
+    payload = {
+        "props": {
+            "pageProps": {"totalCount": len(job_ids), "jobs": [{"id": jid} for jid in job_ids]}
+        }
+    }
+    return (
+        '<html><body><script id="__NEXT_DATA__" type="application/json">'
+        f"{json.dumps(payload)}</script></body></html>"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_filtered_fetch_scope_fetches_one_filtered_listing_page_per_hard_skill(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await db_session.execute(update(ProfileModel).values(is_active=False))
+    profile = ProfileModel(
+        name=f"profile-{uuid4()}",
+        is_active=True,
+        data={"skills": [{"name": "Python", "hard": True}, {"name": "Go", "hard": True}]},
+    )
+    db_session.add(profile)
+    await db_session.flush()
+    await db_session.commit()
+
+    source = await _create_source(db_session, config_json={"fetch_scope": {"mode": "filtered"}})
+
+    python_id, go_id = _unique_job_id("python-dev"), _unique_job_id("go-dev")
+    python_url, go_url = _job_url(python_id), _job_url(go_id)
+    python_listing_url, go_listing_url = (
+        _filtered_listing_url("Python"),
+        _filtered_listing_url("Go"),
+    )
+    requested_listing_urls: list[str] = []
+
+    def _router(url: str, **kwargs: Any) -> _FakeResponse:
+        if url == python_listing_url:
+            requested_listing_urls.append(url)
+            return _FakeResponse(text=_filtered_listing_html([python_id]))
+        if url == go_listing_url:
+            requested_listing_urls.append(url)
+            return _FakeResponse(text=_filtered_listing_html([go_id]))
+        if url == python_url:
+            return _FakeResponse(text=_detail_html(python_id, "Python Developer"))
+        if url == go_url:
+            return _FakeResponse(text=_detail_html(go_id, "Go Developer"))
+        return _FakeResponse(status_error=httpx.ConnectError("unexpected url"))
+
+    monkeypatch.setattr(httpx, "get", _router)
+
+    result = await BulldogjobConnector().run(db_session, source)
+    await db_session.commit()
+
+    assert sorted(requested_listing_urls) == sorted([python_listing_url, go_listing_url])
+    assert result.ok is True
+    assert result.fetched == 2
+    assert result.created == 2
+    rows = (
+        (await db_session.execute(select(OfferModel).where(OfferModel.source_id == source.id)))
+        .scalars()
+        .all()
+    )
+    titles = {row.title for row in rows}
+    assert titles == {"Python Developer", "Go Developer"}
+    # filtered runs must not persist sitemap_cursor -- see docs/adr/0027
+    assert "sitemap_cursor" not in source.config_json
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_filtered_fetch_scope_blocked_when_active_profile_has_no_hard_skills(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await db_session.execute(update(ProfileModel).values(is_active=False))
+    profile = ProfileModel(
+        name=f"profile-{uuid4()}", is_active=True, data={"skills": [{"name": "Python"}]}
+    )
+    db_session.add(profile)
+    await db_session.flush()
+    await db_session.commit()
+
+    source = await _create_source(db_session, config_json={"fetch_scope": {"mode": "filtered"}})
+
+    def _fail(*a: Any, **kw: Any) -> _FakeResponse:
+        raise AssertionError("must not fetch when fetch scope is blocked")
+
+    monkeypatch.setattr(httpx, "get", _fail)
+
+    result = await BulldogjobConnector().run(db_session, source)
+    await db_session.commit()
+
+    assert result.ok is False
+    assert result.error_message is not None
+    assert "starred" in result.error_message
