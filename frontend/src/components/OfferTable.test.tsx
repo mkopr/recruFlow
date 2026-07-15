@@ -25,6 +25,7 @@ const patchOfferMock = vi.mocked(offersApi.patchOffer);
 const loadScoreAlertPrefsMock = vi.mocked(scoreAlertPrefs.loadScoreAlertPrefs);
 const onOfferPatchedMock = vi.fn();
 const onScoreHeaderClickMock = vi.fn();
+const onPostedHeaderClickMock = vi.fn();
 
 function mockScoreAlertPrefs(minScorePercent: number): void {
   loadScoreAlertPrefsMock.mockReturnValue({
@@ -95,6 +96,7 @@ function renderTable(
       minScore={overrides.minScore ?? ''}
       sort={overrides.sort ?? DEFAULT_SORT}
       onScoreHeaderClick={onScoreHeaderClickMock}
+      onPostedHeaderClick={onPostedHeaderClickMock}
       onOfferPatched={onOfferPatchedMock}
     />,
   );
@@ -107,6 +109,7 @@ beforeEach(() => {
   loadScoreAlertPrefsMock.mockReset();
   onOfferPatchedMock.mockReset();
   onScoreHeaderClickMock.mockReset();
+  onPostedHeaderClickMock.mockReset();
   mockScoreAlertPrefs(90);
 });
 
@@ -263,6 +266,38 @@ describe('OfferTable', () => {
     renderTable([makeOffer()], { sort: DEFAULT_SORT });
 
     expect(screen.getByRole('button', { name: 'Score' })).toBeInTheDocument();
+  });
+
+  it('calls onPostedHeaderClick when the Posted header is clicked, without re-sorting locally', async () => {
+    const offerOlder = makeOffer({ id: 1, title: 'Older', posted_at: '2026-01-01T00:00:00Z' });
+    const offerNewer = makeOffer({ id: 2, title: 'Newer', posted_at: '2026-06-01T00:00:00Z' });
+
+    renderTable([offerOlder, offerNewer]);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Posted ▼' }));
+
+    expect(onPostedHeaderClickMock).toHaveBeenCalledTimes(1);
+    const rows = screen.getAllByRole('row').slice(1);
+    expect(rows[0]).toHaveTextContent('Older');
+    expect(rows[1]).toHaveTextContent('Newer');
+  });
+
+  it('shows an ascending indicator on the Posted header when sorted by posted date ascending', () => {
+    renderTable([makeOffer()], { sort: { orderBy: 'posted_at', order: 'asc' } });
+
+    expect(screen.getByRole('button', { name: 'Posted ▲' })).toBeInTheDocument();
+  });
+
+  it('shows a descending indicator on the Posted header when sorted by posted date descending', () => {
+    renderTable([makeOffer()], { sort: DEFAULT_SORT });
+
+    expect(screen.getByRole('button', { name: 'Posted ▼' })).toBeInTheDocument();
+  });
+
+  it('shows no sort indicator on the Posted header when sorted by score', () => {
+    renderTable([makeOffer()], { sort: { orderBy: 'score_percent', order: 'desc' } });
+
+    expect(screen.getByRole('button', { name: 'Posted' })).toBeInTheDocument();
   });
 
   it('renders both scored and unscored offers as given (filtering happens server-side)', () => {

@@ -70,6 +70,15 @@ export function OfferListPage() {
     );
   };
 
+  const handlePostedHeaderClick = () => {
+    setPage(0);
+    setSort((current) =>
+      current.orderBy === 'posted_at'
+        ? { orderBy: 'posted_at', order: current.order === 'asc' ? 'desc' : 'asc' }
+        : { orderBy: 'posted_at', order: 'desc' },
+    );
+  };
+
   // A background scoring run can complete well after the ingest response comes back
   // (BUG16) — this re-pulls the current page each time a run finishes, so score
   // badges (now inline on each offer, BUG26) can appear without a manual reload.
@@ -121,6 +130,7 @@ export function OfferListPage() {
         minScore={minScore}
         sort={sort}
         onScoreHeaderClick={handleScoreHeaderClick}
+        onPostedHeaderClick={handlePostedHeaderClick}
         onOfferPatched={updateOffer}
       />
 

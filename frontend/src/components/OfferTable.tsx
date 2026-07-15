@@ -13,6 +13,7 @@ interface OfferTableProps {
   minScore: number | '';
   sort: OfferListSort;
   onScoreHeaderClick: () => void;
+  onPostedHeaderClick: () => void;
   onOfferPatched: (updated: OfferSummary) => void;
 }
 
@@ -66,12 +67,18 @@ function getEmptyState(offers: OfferSummary[], minScore: number | '', loading: b
   return <NoOffersEmptyState />;
 }
 
+function sortIndicator(sort: OfferListSort, column: OfferListSort['orderBy']): string {
+  if (sort.orderBy !== column) return '';
+  return sort.order === 'asc' ? ' ▲' : ' ▼';
+}
+
 export function OfferTable({
   offers,
   loading,
   minScore,
   sort,
   onScoreHeaderClick,
+  onPostedHeaderClick,
   onOfferPatched,
 }: OfferTableProps) {
   const [selectedOfferId, setSelectedOfferId] = useState<number | null>(null);
@@ -90,8 +97,8 @@ export function OfferTable({
   const notesOffer =
     notesOfferId != null ? offers.find((offer) => offer.id === notesOfferId) : undefined;
 
-  const scoreSortIndicator =
-    sort.orderBy === 'score_percent' ? (sort.order === 'asc' ? ' ▲' : ' ▼') : '';
+  const scoreSortIndicator = sortIndicator(sort, 'score_percent');
+  const postedSortIndicator = sortIndicator(sort, 'posted_at');
 
   const handleToggleApplied = async (offer: OfferSummary) => {
     const updated = await patchOffer(offer.id, { applied: !offer.applied });
@@ -126,7 +133,11 @@ export function OfferTable({
               <th className="px-4 py-3 font-medium">Salary</th>
               <th className="px-4 py-3 font-medium">Remote</th>
               <th className="px-4 py-3 font-medium">Seniority</th>
-              <th className="px-4 py-3 font-medium">Posted</th>
+              <th className="px-4 py-3 font-medium">
+                <button type="button" className="font-medium" onClick={onPostedHeaderClick}>
+                  Posted{postedSortIndicator}
+                </button>
+              </th>
               <th className="px-4 py-3 font-medium">
                 <button type="button" className="font-medium" onClick={onScoreHeaderClick}>
                   Score{scoreSortIndicator}
