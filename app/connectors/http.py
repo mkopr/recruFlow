@@ -1,6 +1,7 @@
 import gzip
 import json
 import logging
+import xml.etree.ElementTree as ET
 from typing import Any
 
 import httpx
@@ -38,6 +39,47 @@ def fetch_json(
     except json.JSONDecodeError:
         logger.error(
             "%s returned malformed JSON: url=%r body=%r", source_name, url, response.text[:500]
+        )
+        return None
+
+
+def fetch_xml(
+    url: str,
+    *,
+    source_name: str,
+    logger: logging.Logger,
+    params: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: float = 10.0,
+) -> ET.Element | None:
+    """Low-level XML fetch primitive, the RSS/XML sibling of `fetch_json`. Only fetches and
+    parses well-formed-XML-or-not -- it knows nothing about RSS `<item>`/`<channel>` shape;
+    that validation belongs one layer up in the connector module, same split as
+    `extract_envelope_list` for `fetch_json`.
+    """
+    try:
+        response = httpx.get(
+            url,
+            params=params,
+            timeout=timeout,
+            headers={"User-Agent": "recruFlow/0.1", **(headers or {})},
+        )
+        response.raise_for_status()
+    except httpx.HTTPError:
+        logger.error(
+            "failed to fetch %s offers: url=%r params=%r",
+            source_name,
+            url,
+            params,
+            exc_info=True,
+        )
+        return None
+
+    try:
+        return ET.fromstring(response.text)
+    except ET.ParseError:
+        logger.error(
+            "%s returned malformed XML: url=%r body=%r", source_name, url, response.text[:500]
         )
         return None
 

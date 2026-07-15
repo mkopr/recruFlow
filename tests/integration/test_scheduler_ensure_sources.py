@@ -14,6 +14,7 @@ from app.ingestion.normalize import (
     REMOTIVE,
     ROCKET_JOBS,
     SOLID_JOBS,
+    WE_WORK_REMOTELY,
 )
 from app.ingestion.registry import ConnectorSpec
 from app.scheduler.service import ensure_sources_exist
@@ -23,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_ensure_sources_exist_creates_eight_builtin_sources(
+async def test_ensure_sources_exist_creates_nine_builtin_sources(
     db_session: AsyncSession,
 ) -> None:
     await ensure_sources_exist(db_session)
@@ -45,6 +46,7 @@ async def test_ensure_sources_exist_creates_eight_builtin_sources(
         PRACUJ,
         REMOTEOK,
         REMOTIVE,
+        WE_WORK_REMOTELY,
     }
     for row in by_connector.values():
         assert row.config_json["schedule"]["type"] == "interval"

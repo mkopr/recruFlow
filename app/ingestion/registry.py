@@ -13,6 +13,7 @@ from app.connectors.remoteok import RemoteOKConnector
 from app.connectors.remotive import RemotiveConnector
 from app.connectors.rocket_jobs import RocketJobsConnector
 from app.connectors.solid_jobs import SolidJobsConnector
+from app.connectors.we_work_remotely import run_we_work_remotely_ingestion
 from app.db.models import Source
 from app.ingestion.normalize import (
     BULLDOGJOB,
@@ -23,6 +24,7 @@ from app.ingestion.normalize import (
     REMOTIVE,
     ROCKET_JOBS,
     SOLID_JOBS,
+    WE_WORK_REMOTELY,
 )
 from app.ingestion.types import IngestionResult
 
@@ -73,6 +75,12 @@ CONNECTOR_REGISTRY: dict[str, ConnectorSpec] = {
     PRACUJ: ConnectorSpec(name=PRACUJ, label="Pracuj.pl", dispatch=PracujConnector().run),
     REMOTEOK: ConnectorSpec(name=REMOTEOK, label="RemoteOK", dispatch=RemoteOKConnector().run),
     REMOTIVE: ConnectorSpec(name=REMOTIVE, label="Remotive", dispatch=RemotiveConnector().run),
+    # implements Connector directly, see we_work_remotely.py module docstring
+    WE_WORK_REMOTELY: ConnectorSpec(
+        name=WE_WORK_REMOTELY,
+        label="We Work Remotely",
+        dispatch=run_we_work_remotely_ingestion,
+    ),
 }
 
 

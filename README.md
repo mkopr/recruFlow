@@ -457,6 +457,40 @@ too: `category` is a role-family label, not a seniority signal, and `job_type` (
 `"full_time"`) is a work-time-schedule value, not a legal contract form — see CLAUDE.md's Contract
 Type vs. work-time-schedule distinction.
 
+## We Work Remotely connector
+
+`app/connectors/we_work_remotely.py` ingests offers from We Work Remotely
+(weworkremotely.com), a global remote-first job board whose only confirmed public source is an
+RSS feed at `GET https://weworkremotely.com/remote-jobs.rss` — its `/api/v1/remote-jobs/`
+endpoint returns `401 Unauthorized` (`WWW-Authenticate: Token realm="Application"`), confirmed
+live, and is a partner/employer-posting API rather than a public read endpoint. Because the feed
+is RSS/XML rather than JSON and carries no pagination cursor, this connector implements the
+`Connector` protocol directly (a plain async function registered in `CONNECTOR_REGISTRY`) instead
+of subclassing `JobBoardConnector` — the one deliberate exception across this batch of connectors,
+documented in the module's own docstring. It dispatches through the same generic
+`CONNECTOR_REGISTRY`-driven route as every other connector, with no bespoke handler:
+
+```bash
+curl -X POST http://localhost:8000/ingest/we_work_remotely
+```
+
+```json
+{"source": "we_work_remotely", "ok": true, "fetched": 100, "created": 12, "error_message": null}
+```
+
+There is no pagination cursor: `next_cursor` always returns `None`, since one request always
+returns the feed's full current live set (single-shot, not real pagination). Company name is
+split off the RSS `<title>` field (formatted `"Company Name: Job Title"` on every live posting
+sampled), not parsed from `<description>` — a title with no separator yields an empty company,
+which fails schema validation and is dead-lettered the same way any other connector's missing
+required field is. `salary_max` is a best-effort regex parse of a rare `"Up to USD <amount>"` line
+in `<description>`; a miss (the common case) leaves `salary_min`/`salary_max` as `None`, logged at
+debug level, not a source-level failure. `seniority` and `contract_type` are always `None`: the
+feed carries no seniority signal at all, and its `<type>` field (e.g. `"Full-Time"`/`"Contract"`)
+is a work-time-schedule value, not a legal contract form — see CLAUDE.md's Contract Type
+vs. work-time-schedule distinction, the same reasoning Remotive's `job_type` field is left
+unmapped for.
+
 ## Scheduler
 
 `app/scheduler/` wires [APScheduler](https://apscheduler.readthedocs.io/) into the FastAPI

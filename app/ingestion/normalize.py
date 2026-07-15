@@ -11,6 +11,7 @@ ROCKET_JOBS = "rocket_jobs"
 PRACUJ = "pracuj"
 REMOTEOK = "remoteok"
 REMOTIVE = "remotive"
+WE_WORK_REMOTELY = "we_work_remotely"
 
 CANONICAL_SENIORITY_LEVELS: tuple[str, ...] = ("junior", "mid", "senior", "lead", "expert")
 
