@@ -56,17 +56,20 @@ export function SourceFetchCard({
       type="button"
       onClick={handleClick}
       disabled={loading}
-      className="card card-interactive flex min-w-40 flex-1 flex-col items-start gap-0.5 px-4 py-3 text-left"
+      title={label}
+      className="card card-interactive flex min-w-0 flex-1 flex-col items-start gap-0.5 px-3 py-3 text-left"
     >
-      <span className="text-sm font-medium">{label}</span>
+      <span className="w-full truncate text-xs font-medium">{label}</span>
       <span
         className={
-          error ? 'text-xs text-[var(--color-danger)]' : 'text-xs text-[var(--color-text-muted)]'
+          error
+            ? 'w-full truncate text-[10px] text-[var(--color-danger)]'
+            : 'w-full truncate text-[10px] text-[var(--color-text-muted)] opacity-70'
         }
       >
         {status}
       </span>
-      <span className="text-xs text-[var(--color-text-muted)]">
+      <span className="text-[10px] text-[var(--color-text-muted)] opacity-70">
         {scoredCount} / {offerCount}
       </span>
     </button>

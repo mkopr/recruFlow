@@ -86,7 +86,7 @@ export function OfferListPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-screen-2xl flex-col gap-4 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
-      <div className="flex flex-wrap gap-3">
+      <div className="flex flex-nowrap gap-2">
         {knownSources.map((source) => (
           <SourceFetchCard
             key={source.id}

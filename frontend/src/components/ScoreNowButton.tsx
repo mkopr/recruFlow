@@ -62,15 +62,17 @@ export function ScoreNowButton({ status, onScored }: ScoreNowButtonProps) {
       type="button"
       onClick={handleClick}
       disabled={disabled}
-      className="card card-interactive card-accent flex min-w-40 flex-1 flex-col items-start gap-0.5 px-4 py-3 text-left"
+      className="card card-interactive card-accent flex min-w-0 flex-1 flex-col items-start gap-0.5 px-3 py-3 text-left"
     >
-      <span className="flex items-center gap-1.5 text-sm font-medium text-[var(--color-accent)]">
+      <span className="flex w-full items-center gap-1.5 truncate text-xs font-medium text-[var(--color-accent)]">
         <ZapIcon />
-        Score now
+        <span className="truncate">Score now</span>
       </span>
       <span
         className={
-          error ? 'text-xs text-[var(--color-danger)]' : 'text-xs text-[var(--color-text-muted)]'
+          error
+            ? 'w-full truncate text-[10px] text-[var(--color-danger)]'
+            : 'w-full truncate text-[10px] text-[var(--color-text-muted)] opacity-70'
         }
       >
         {subtitle}
