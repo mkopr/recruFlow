@@ -294,7 +294,10 @@ class PracujConnector(JobBoardConnector):
     HTTP fallback: `docs/adr/0026-pracuj-playwright-cloudflare-feasibility-spike.md` confirmed
     stock Playwright Chromium clears the challenge cleanly and repeatedly, so this connector's
     entire fetch path -- enumeration and detail alike -- goes through a Playwright browser
-    context, reused across the whole run rather than relaunched per page/offer.
+    context. One browser *process* is launched per run and reused, but each fetch gets its own
+    fresh context (BUG43: the challenge allows exactly one clean navigation per context before
+    blocking every later request in it, so context reuse across fetches silently zeroed out
+    every automated run).
 
     Given Pracuj.pl spans every industry, not just IT, `config_json["category_filter"]`
     (default `"it"`, mirroring `SolidJobsConnector`'s `division` config) is applied at
@@ -407,11 +410,23 @@ class PracujConnector(JobBoardConnector):
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=True)
             try:
-                context = await browser.new_context(user_agent=_DESKTOP_USER_AGENT, locale="pl-PL")
-                page = await context.new_page()
 
                 async def fetch_html(url: str) -> str | None:
-                    return await _fetch_rendered_page(page, url)
+                    # BUG43: Cloudflare's Managed Challenge on this zone lets exactly one
+                    # clean navigation through per browser context, then blocks (403,
+                    # challenge page) every later request in that same context regardless
+                    # of delay -- confirmed live 2026-07-15 by reproducing listing-then-
+                    # detail (and even listing-then-listing) fetches back to back. A fresh
+                    # context per fetch resets that budget without the much higher cost of
+                    # relaunching the whole browser process for every page/offer.
+                    context = await browser.new_context(
+                        user_agent=_DESKTOP_USER_AGENT, locale="pl-PL"
+                    )
+                    try:
+                        page = await context.new_page()
+                        return await _fetch_rendered_page(page, url)
+                    finally:
+                        await context.close()
 
                 offers, enumeration_ok, mid_run_failure, next_start_page = await _collect_offers(
                     fetch_html,

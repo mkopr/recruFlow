@@ -51,6 +51,9 @@ class _FakeContext:
     async def new_page(self) -> _FakePage:
         return _FakePage(self._router)
 
+    async def close(self) -> None:
+        return None
+
 
 class _FakeBrowser:
     def __init__(self, router: Router) -> None:
