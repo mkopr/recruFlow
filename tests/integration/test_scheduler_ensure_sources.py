@@ -81,11 +81,13 @@ async def test_ensure_sources_exist_seeds_remoteok_with_shorter_interval(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_ensure_sources_exist_seeds_remotive_with_default_categories(
+async def test_ensure_sources_exist_seeds_remotive_with_default_categories_and_tos_interval(
     db_session: AsyncSession,
 ) -> None:
     # Remotive scopes ingestion to IT-relevant categories by default (P3US43) -- a freshly
     # seeded source should not silently ingest every Remotive category (sales, marketing, ...).
+    # The 21600s (6h) interval is a ToS-compliance floor, not a throughput choice (BUG45):
+    # Remotive's API states usage should not exceed "max. 4 times a day".
     await db_session.execute(delete(Source).where(Source.connector == REMOTIVE))
     await db_session.commit()
 
@@ -95,6 +97,7 @@ async def test_ensure_sources_exist_seeds_remotive_with_default_categories(
     source = await db_session.scalar(select(Source).where(Source.connector == REMOTIVE))
     assert source is not None
     assert source.config_json["categories"] == list(REMOTIVE_DEFAULT_CATEGORIES)
+    assert source.config_json["schedule"]["seconds"] == 21600
 
 
 @pytest.mark.integration

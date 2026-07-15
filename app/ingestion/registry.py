@@ -104,7 +104,15 @@ CONNECTOR_REGISTRY: dict[str, ConnectorSpec] = {
         dispatch=_remotive.run,
         # Scopes ingestion to IT-relevant categories by default (P3US43) -- a freshly seeded
         # source should not silently ingest every Remotive category (sales, marketing, ...).
-        seed_config_overrides={"categories": list(REMOTIVE_DEFAULT_CATEGORIES)},
+        # `schedule` here is a hard ToS constraint, not a throughput tuning choice like
+        # REMOTEOK's or PRACUJ's overrides above: Remotive's API response states usage should
+        # not exceed "max. 4 times a day" and warns "excessive requests will be blocked"
+        # (confirmed live 2026-07-15, BUG45) -- 21600s (6h) is exactly that budget, since one
+        # run is now a single request (see `RemotiveConnector.fetch_page`).
+        seed_config_overrides={
+            "schedule": {"type": "interval", "seconds": 21600},
+            "categories": list(REMOTIVE_DEFAULT_CATEGORIES),
+        },
     ),
     # implements Connector directly, see we_work_remotely.py module docstring
     WE_WORK_REMOTELY: ConnectorSpec(

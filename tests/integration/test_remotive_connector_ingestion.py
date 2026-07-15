@@ -53,12 +53,14 @@ def _job(job_id: int, **overrides: Any) -> dict[str, Any]:
     return job
 
 
-def _router(responses: dict[str, list[dict[str, Any]]]) -> Any:
+def _single_response(jobs: list[dict[str, Any]]) -> Any:
+    # BUG45: the connector now makes exactly one request per run (Remotive's `category`
+    # query param turned out to be a no-op live), so the fake transport no longer needs to
+    # route by category -- every call gets the same full jobs list back.
     def _get(url: str, params: dict[str, Any] | None = None, **kwargs: Any) -> _FakeResponse:
         assert url == REMOTIVE_URL
-        assert params is not None
-        category = params["category"]
-        return _FakeResponse(json_data={"jobs": responses.get(category, [])})
+        assert params == {}
+        return _FakeResponse(json_data={"jobs": jobs})
 
     return _get
 
@@ -69,11 +71,11 @@ async def test_run_remotive_ingestion_persists_and_maps_offers_across_categories
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = await _create_source(db_session)
-    source.config_json = {"categories": ["software-dev", "qa"]}
-    job1 = _job(int(uuid4().int % 1_000_000))
-    job2 = _job(int(uuid4().int % 1_000_000))
+    source.config_json = {"categories": ["software-development", "qa"]}
+    job1 = _job(int(uuid4().int % 1_000_000), category="Software Development")
+    job2 = _job(int(uuid4().int % 1_000_000), category="Quality Assurance")
 
-    monkeypatch.setattr(httpx, "get", _router({"software-dev": [job1], "qa": [job2]}))
+    monkeypatch.setattr(httpx, "get", _single_response([job1, job2]))
 
     result = await RemotiveConnector().run(db_session, source)
     await db_session.commit()
@@ -106,13 +108,13 @@ async def test_run_remotive_ingestion_respects_fetch_range_with_naive_publicatio
     # instead of raising.
     source = await _create_source(db_session)
     source.config_json = {
-        "categories": ["software-dev"],
+        "categories": ["software-development"],
         "fetch_range": {"mode": "range", "since": "2026-07-01T00:00:00+00:00", "until": None},
     }
     in_range_job = _job(int(uuid4().int % 1_000_000), publication_date="2026-07-13T07:05:10")
     out_of_range_job = _job(int(uuid4().int % 1_000_000), publication_date="2026-06-01T00:00:00")
 
-    monkeypatch.setattr(httpx, "get", _router({"software-dev": [in_range_job, out_of_range_job]}))
+    monkeypatch.setattr(httpx, "get", _single_response([in_range_job, out_of_range_job]))
 
     result = await RemotiveConnector().run(db_session, source)
     await db_session.commit()
@@ -129,40 +131,14 @@ async def test_run_remotive_ingestion_respects_fetch_range_with_naive_publicatio
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_run_remotive_ingestion_dedups_job_appearing_in_two_categories(
-    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    source = await _create_source(db_session)
-    source.config_json = {"categories": ["software-dev", "qa"]}
-    job = _job(int(uuid4().int % 1_000_000))
-
-    monkeypatch.setattr(httpx, "get", _router({"software-dev": [job], "qa": [job]}))
-
-    result = await RemotiveConnector().run(db_session, source)
-    await db_session.commit()
-
-    assert result.fetched == 2
-    assert result.created == 1
-
-    rows = (
-        (await db_session.execute(select(OfferModel).where(OfferModel.source_id == source.id)))
-        .scalars()
-        .all()
-    )
-    assert len(rows) == 1
-    assert rows[0].canonical_url == job["url"]
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
 async def test_run_remotive_ingestion_rerun_dedups_across_runs(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = await _create_source(db_session)
-    source.config_json = {"categories": ["software-dev"]}
+    source.config_json = {"categories": ["software-development"]}
     job = _job(int(uuid4().int % 1_000_000))
 
-    monkeypatch.setattr(httpx, "get", _router({"software-dev": [job]}))
+    monkeypatch.setattr(httpx, "get", _single_response([job]))
 
     first = await RemotiveConnector().run(db_session, source)
     await db_session.commit()
@@ -179,9 +155,13 @@ async def test_run_remotive_ingestion_rerun_dedups_across_runs(
 async def test_run_remotive_ingestion_excludes_non_configured_categories(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # BUG45: this scope used to be (unintentionally) unenforced, because Remotive's
+    # `category` query param is a no-op live -- Sales/Marketing/Medical jobs had been
+    # silently reaching the DB despite `categories` only listing software-development. The
+    # client-side filter added in `fetch_page` is what actually makes this scope real.
     source = await _create_source(db_session)
-    source.config_json = {"categories": ["software-dev"]}
-    software_job = _job(int(uuid4().int % 1_000_000))
+    source.config_json = {"categories": ["software-development"]}
+    software_job = _job(int(uuid4().int % 1_000_000), category="Software Development")
     sales_job = _job(
         int(uuid4().int % 1_000_000),
         category="Sales",
@@ -191,10 +171,9 @@ async def test_run_remotive_ingestion_excludes_non_configured_categories(
     calls: list[dict[str, Any]] = []
 
     def _get(url: str, params: dict[str, Any] | None = None, **kwargs: Any) -> _FakeResponse:
-        assert params is not None
+        assert params == {}
         calls.append(params)
-        responses = {"software-dev": [software_job], "sales": [sales_job]}
-        return _FakeResponse(json_data={"jobs": responses.get(params["category"], [])})
+        return _FakeResponse(json_data={"jobs": [software_job, sales_job]})
 
     monkeypatch.setattr(httpx, "get", _get)
 
@@ -202,7 +181,7 @@ async def test_run_remotive_ingestion_excludes_non_configured_categories(
     await db_session.commit()
 
     assert result.created == 1
-    assert {"category": "sales"} not in calls
+    assert len(calls) == 1
 
     sales_row = await db_session.scalar(
         select(OfferModel).where(OfferModel.canonical_url == sales_job["url"])
@@ -216,11 +195,11 @@ async def test_run_remotive_ingestion_records_dead_letter_on_malformed_job_eleme
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = await _create_source(db_session)
-    source.config_json = {"categories": ["software-dev"]}
+    source.config_json = {"categories": ["software-development"]}
     good_job = _job(int(uuid4().int % 1_000_000))
     bad_job = _job(int(uuid4().int % 1_000_000), company_name="", title="")
 
-    monkeypatch.setattr(httpx, "get", _router({"software-dev": [good_job, bad_job]}))
+    monkeypatch.setattr(httpx, "get", _single_response([good_job, bad_job]))
 
     result = await RemotiveConnector().run(db_session, source)
     await db_session.commit()
@@ -252,9 +231,9 @@ async def test_run_remotive_ingestion_scoring_eligibility(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = await _create_source(db_session, connector=REMOTIVE)
-    source.config_json = {"categories": ["software-dev"]}
+    source.config_json = {"categories": ["software-development"]}
     job = _job(int(uuid4().int % 1_000_000))
-    monkeypatch.setattr(httpx, "get", _router({"software-dev": [job]}))
+    monkeypatch.setattr(httpx, "get", _single_response([job]))
 
     try:
         ingestion_result = await RemotiveConnector().run(db_session, source)

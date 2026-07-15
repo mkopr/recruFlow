@@ -37,6 +37,27 @@ async def finish_run_error(session: AsyncSession, run: SchedulerRun, *, error_me
     await session.flush()
 
 
+async def reconcile_stale_running_runs(session: AsyncSession) -> int:
+    """Sweep every `SchedulerRun` still at `status='running'` into `error` (BUG45 finding #4).
+
+    `_run_source_async` only ever reaches `finish_run_ok`/`finish_run_error` from inside the
+    same coroutine `start_run` began; if the process stops mid-run (crash, hot-reload,
+    `docker compose up` recreate) that coroutine is simply gone and nothing else ever
+    finalizes the row, so it's orphaned at `running` forever. Must be called once at process
+    boot, before `register_jobs` schedules any job -- at that point no run can legitimately
+    still be in flight, so every `running` row found here is guaranteed stale, not racing a
+    real in-progress run.
+    """
+    stmt = select(SchedulerRun).where(SchedulerRun.status == "running")
+    stale_runs = (await session.scalars(stmt)).all()
+    for run in stale_runs:
+        run.status = "error"
+        run.error_message = "interrupted: process restarted while run was in flight"
+        run.finished_at = datetime.now(UTC)
+    await session.flush()
+    return len(stale_runs)
+
+
 async def get_latest_run_by_source(session: AsyncSession, source_id: int) -> SchedulerRun | None:
     stmt = (
         select(SchedulerRun)

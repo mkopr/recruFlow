@@ -18,6 +18,7 @@ from app.api.routes.scoring import router as scoring_router
 from app.config import get_settings
 from app.db.session import get_engine, get_sessionmaker
 from app.scheduler.lifecycle import register_jobs, register_scoring_job
+from app.scheduler.runs import reconcile_stale_running_runs
 from app.scheduler.service import ensure_sources_exist
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     async with sessionmaker() as session:
         await ensure_sources_exist(session)
+        stale_run_count = await reconcile_stale_running_runs(session)
         await session.commit()
+    if stale_run_count:
+        logger.warning(
+            "reconciled %d scheduler run(s) orphaned at status='running' by a prior process exit",
+            stale_run_count,
+        )
 
     scheduler = AsyncIOScheduler(timezone="UTC")
     job_count = await register_jobs(scheduler, sessionmaker)

@@ -1,8 +1,9 @@
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import httpx
 import pytest
-from app.db.models import Source
+from app.db.models import SchedulerRun, Source
 from app.db.session import get_engine, get_sessionmaker
 from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
 from app.scheduler.lifecycle import (
@@ -67,6 +68,51 @@ async def test_lifespan_shutdown_stops_scheduler_cleanly() -> None:
 
     assert scheduler.running is False
     scheduler.get_jobs()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_lifespan_startup_reconciles_stale_running_runs() -> None:
+    from app.main import app
+
+    engine = get_engine()
+    sessionmaker = get_sessionmaker(engine)
+    connector = f"orphaned-{uuid4()}"
+    async with sessionmaker() as session:
+        source = Source(
+            name=connector,
+            connector=connector,
+            config_json={"schedule": {"type": "interval", "seconds": 300}},
+        )
+        session.add(source)
+        await session.commit()
+        source_id = source.id
+
+        stale_run = SchedulerRun(
+            source_id=source_id,
+            trigger_type="automatic",
+            status="running",
+            started_at=datetime.now(UTC) - timedelta(days=1),
+        )
+        session.add(stale_run)
+        await session.commit()
+        stale_run_id = stale_run.id
+
+    try:
+        async with app.router.lifespan_context(app):
+            pass
+
+        async with sessionmaker() as session:
+            refreshed = await session.get(SchedulerRun, stale_run_id)
+            assert refreshed is not None
+            assert refreshed.status == "error"
+            assert refreshed.finished_at is not None
+    finally:
+        async with sessionmaker() as session:
+            await session.execute(delete(SchedulerRun).where(SchedulerRun.id == stale_run_id))
+            await session.execute(delete(Source).where(Source.id == source_id))
+            await session.commit()
+        await engine.dispose()
 
 
 @pytest.mark.integration

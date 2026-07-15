@@ -1,7 +1,7 @@
 from typing import Any
 
 import pytest
-from app.connectors.remotive import DEFAULT_CATEGORIES, REMOTIVE_URL, RemotiveConnector
+from app.connectors.remotive import REMOTIVE_URL, RemotiveConnector
 from app.ingestion.registry import CONNECTOR_REGISTRY
 
 
@@ -23,42 +23,48 @@ def test_next_cursor_always_returns_none() -> None:
     assert connector.next_cursor({}, [], cursor=0, page_size=100) is None
 
 
-def _fake_fetch_json(responses: dict[str, Any]) -> Any:
+def _fake_fetch_json(payload: Any) -> Any:
     calls: list[dict[str, Any]] = []
 
     def _fetch_json(url: str, *, source_name: str, logger: Any, params: dict[str, Any]) -> Any:
         calls.append({"url": url, "params": params})
-        category = params["category"]
-        return responses.get(category)
+        return payload
 
     _fetch_json.calls = calls  # type: ignore[attr-defined]
     return _fetch_json
 
 
-def test_fetch_page_makes_one_request_per_configured_category(
+def test_fetch_page_makes_exactly_one_request_regardless_of_configured_categories(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # BUG45: Remotive's `category` query param is a no-op on the live API -- every category
+    # value returns the identical full snapshot -- so N configured categories must still mean
+    # exactly one HTTP request, with the filtering happening client-side afterwards instead.
     from app.connectors import remotive
 
     fake = _fake_fetch_json(
         {
-            "software-dev": {"jobs": [{"id": 1}]},
-            "qa": {"jobs": [{"id": 2}]},
+            "jobs": [
+                {"id": 1, "category": "Software Development"},
+                {"id": 2, "category": "Quality Assurance"},
+            ]
         }
     )
     monkeypatch.setattr(remotive, "fetch_json", fake)
 
     connector = RemotiveConnector()
-    result = connector.fetch_page({"categories": ["software-dev", "qa"]}, cursor=0, page_size=100)
+    result = connector.fetch_page(
+        {"categories": ["software-development", "qa"]}, cursor=0, page_size=100
+    )
 
     assert result is not None
-    merged, next_cursor = result
-    assert merged == [{"id": 1}, {"id": 2}]
-    assert next_cursor is None
-    assert fake.calls == [
-        {"url": REMOTIVE_URL, "params": {"category": "software-dev"}},
-        {"url": REMOTIVE_URL, "params": {"category": "qa"}},
+    offers, next_cursor = result
+    assert offers == [
+        {"id": 1, "category": "Software Development"},
+        {"id": 2, "category": "Quality Assurance"},
     ]
+    assert next_cursor is None
+    assert fake.calls == [{"url": REMOTIVE_URL, "params": {}}]
 
 
 def test_fetch_page_uses_default_categories_when_none_configured(
@@ -66,40 +72,100 @@ def test_fetch_page_uses_default_categories_when_none_configured(
 ) -> None:
     from app.connectors import remotive
 
-    fake = _fake_fetch_json({category: {"jobs": []} for category in DEFAULT_CATEGORIES})
+    fake = _fake_fetch_json({"jobs": [{"id": 1, "category": "Software Development"}]})
     monkeypatch.setattr(remotive, "fetch_json", fake)
 
     connector = RemotiveConnector()
-    connector.fetch_page({}, cursor=0, page_size=100)
+    result = connector.fetch_page({}, cursor=0, page_size=100)
 
-    assert [call["params"]["category"] for call in fake.calls] == list(DEFAULT_CATEGORIES)
+    assert result is not None
+    offers, _ = result
+    assert offers == [{"id": 1, "category": "Software Development"}]
+
+
+def test_fetch_page_filters_out_categories_not_in_configured_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Live evidence (2026-07-15): non-configured categories like Sales/Marketing/Medical had
+    # been silently reaching the DB since P3US43 because server-side filtering never actually
+    # worked -- this is the client-side filter that now makes the configured scope real.
+    from app.connectors import remotive
+
+    fake = _fake_fetch_json(
+        {
+            "jobs": [
+                {"id": 1, "category": "Software Development"},
+                {"id": 2, "category": "Sales"},
+            ]
+        }
+    )
+    monkeypatch.setattr(remotive, "fetch_json", fake)
+
+    connector = RemotiveConnector()
+    result = connector.fetch_page({"categories": ["software-development"]}, cursor=0, page_size=100)
+
+    assert result is not None
+    offers, _ = result
+    assert offers == [{"id": 1, "category": "Software Development"}]
+
+
+def test_fetch_page_warns_and_ignores_unrecognized_category_slug(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from app.connectors import remotive
+
+    fake = _fake_fetch_json({"jobs": [{"id": 1, "category": "Software Development"}]})
+    monkeypatch.setattr(remotive, "fetch_json", fake)
+
+    connector = RemotiveConnector()
+    with caplog.at_level("WARNING"):
+        result = connector.fetch_page(
+            {"categories": ["software-development", "not-a-real-slug"]}, cursor=0, page_size=100
+        )
+
+    assert result is not None
+    offers, _ = result
+    assert offers == [{"id": 1, "category": "Software Development"}]
+    assert any("unrecognized category slug" in record.message for record in caplog.records)
 
 
 def test_fetch_page_extracts_via_jobs_envelope_key(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.connectors import remotive
 
-    fake = _fake_fetch_json({"software-dev": {"jobs": [{"id": 1}, {"id": 2}]}})
+    fake = _fake_fetch_json(
+        {
+            "jobs": [
+                {"id": 1, "category": "Software Development"},
+                {"id": 2, "category": "Software Development"},
+            ]
+        }
+    )
     monkeypatch.setattr(remotive, "fetch_json", fake)
 
     connector = RemotiveConnector()
-    result = connector.fetch_page({"categories": ["software-dev"]}, cursor=0, page_size=100)
+    result = connector.fetch_page({"categories": ["software-development"]}, cursor=0, page_size=100)
 
     assert result is not None
-    merged, _ = result
-    assert merged == [{"id": 1}, {"id": 2}]
+    offers, _ = result
+    assert offers == [
+        {"id": 1, "category": "Software Development"},
+        {"id": 2, "category": "Software Development"},
+    ]
 
 
-def test_fetch_page_returns_none_when_every_category_response_missing_jobs_key(
+def test_fetch_page_returns_none_when_response_missing_jobs_key(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     from app.connectors import remotive
 
-    fake = _fake_fetch_json({"software-dev": {"unexpected": "shape"}})
+    fake = _fake_fetch_json({"unexpected": "shape"})
     monkeypatch.setattr(remotive, "fetch_json", fake)
 
     connector = RemotiveConnector()
     with caplog.at_level("ERROR"):
-        result = connector.fetch_page({"categories": ["software-dev"]}, cursor=0, page_size=100)
+        result = connector.fetch_page(
+            {"categories": ["software-development"]}, cursor=0, page_size=100
+        )
 
     assert result is None
     assert any(
@@ -107,25 +173,16 @@ def test_fetch_page_returns_none_when_every_category_response_missing_jobs_key(
     )
 
 
-def test_fetch_page_continues_past_one_failed_category_when_another_succeeds(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_fetch_page_returns_none_when_fetch_json_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.connectors import remotive
 
-    fake = _fake_fetch_json(
-        {
-            "software-dev": {"unexpected": "shape"},
-            "qa": {"jobs": [{"id": 42}]},
-        }
-    )
+    fake = _fake_fetch_json(None)
     monkeypatch.setattr(remotive, "fetch_json", fake)
 
     connector = RemotiveConnector()
-    result = connector.fetch_page({"categories": ["software-dev", "qa"]}, cursor=0, page_size=100)
+    result = connector.fetch_page({"categories": ["software-development"]}, cursor=0, page_size=100)
 
-    assert result is not None
-    merged, _ = result
-    assert merged == [{"id": 42}]
+    assert result is None
 
 
 def test_map_remotive_offer_maps_all_known_fields() -> None:

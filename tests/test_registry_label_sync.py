@@ -27,7 +27,8 @@ def test_seed_config_overrides_present_for_pracuj_remoteok_remotive() -> None:
         "schedule": {"type": "interval", "seconds": 120}
     }
     assert CONNECTOR_REGISTRY[REMOTIVE].seed_config_overrides == {
-        "categories": ["software-development", "devops", "qa", "data"]
+        "schedule": {"type": "interval", "seconds": 21600},
+        "categories": ["software-development", "devops", "qa", "data"],
     }
 
 

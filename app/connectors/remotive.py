@@ -9,6 +9,18 @@ from app.ingestion.normalize import REMOTIVE, extract_envelope_list, normalize_s
 REMOTIVE_URL = "https://remotive.com/api/remote-jobs"
 DEFAULT_CATEGORIES: tuple[str, ...] = ("software-development", "devops", "qa", "data")
 
+# Maps the slugs `categories` config selects on to the exact display-name string Remotive
+# stamps on each job's own `category` field (confirmed live via
+# https://remotive.com/api/remote-jobs/categories, 2026-07-15, BUG45) -- used for *client-side*
+# filtering post-fetch, since the API's `category` query param turned out to be a no-op (see
+# `fetch_page`).
+CATEGORY_SLUG_TO_NAME: dict[str, str] = {
+    "software-development": "Software Development",
+    "devops": "Devops",
+    "qa": "Quality Assurance",
+    "data": "Data and Analytics",
+}
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,10 +43,17 @@ def _normalize_posted_at(value: Any) -> str | None:
 
 
 class RemotiveConnector(JobBoardConnector):
-    """Remotive's category param accepts a single value per call, so one page of this
-    connector is N sequential per-category requests merged into one list, not a single
-    cursor-paginated fetch -- the same "fetch shape doesn't fit build_params/next_cursor"
-    deviation Bulldogjob's own `fetch_page` override already documents and normalizes.
+    """Remotive's public `/api/remote-jobs` endpoint documents a `category` query param, but
+    it's a no-op on the free tier this connector uses: every category value returns the
+    identical ~38-job snapshot, confirmed live 2026-07-15 (BUG45) -- including jobs from
+    categories never in `DEFAULT_CATEGORIES` (Sales, Marketing, Medical, ...), which had been
+    silently reaching the DB ever since P3US43 despite the config's documented intent to scope
+    to IT-relevant categories only. Querying per-category anyway (as this connector used to)
+    means N identical requests every run for nothing -- against Remotive's own stated terms
+    ("max. 4 times a day ... excessive requests will be blocked"), that's a real risk of losing
+    API access entirely. `fetch_page` now fetches once and filters by category client-side
+    instead, which both fixes the request volume and makes the category scope actually work
+    for the first time.
     """
 
     name = "Remotive"
@@ -94,34 +113,24 @@ class RemotiveConnector(JobBoardConnector):
         self, config: dict[str, Any], cursor: Any, page_size: int
     ) -> tuple[list[dict[str, Any]], Any | None] | None:
         categories = [str(c) for c in config.get("categories") or DEFAULT_CATEGORIES]
-        if not categories:
-            categories = list(DEFAULT_CATEGORIES)
+
+        allowed_names: set[str] = set()
+        for slug in categories:
+            name = CATEGORY_SLUG_TO_NAME.get(slug)
+            if name is None:
+                logger.warning("%s: unrecognized category slug %r, skipping", self.name, slug)
+                continue
+            allowed_names.add(name)
 
         url = self.default_url()
-        merged_offers: list[dict[str, Any]] = []
-        succeeded = 0
-
-        for category in categories:
-            payload = fetch_json(
-                url, source_name=self.name, logger=logger, params={"category": category}
-            )
-            if payload is None:
-                continue
-
-            offers = extract_envelope_list(payload, self.envelope_key)
-            if offers is None:
-                logger.error(
-                    "%s returned unexpected JSON shape: url=%r category=%r",
-                    self.name,
-                    url,
-                    category,
-                )
-                continue
-
-            succeeded += 1
-            merged_offers.extend(offers)
-
-        if succeeded == 0:
+        payload = fetch_json(url, source_name=self.name, logger=logger, params={})
+        if payload is None:
             return None
 
-        return merged_offers, None
+        offers = extract_envelope_list(payload, self.envelope_key)
+        if offers is None:
+            logger.error("%s returned unexpected JSON shape: url=%r", self.name, url)
+            return None
+
+        filtered_offers = [offer for offer in offers if offer.get("category") in allowed_names]
+        return filtered_offers, None
