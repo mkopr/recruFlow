@@ -1,16 +1,11 @@
 import json
 import logging
 import re
-import time
 from typing import Any
 
-import httpx
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.connectors.base import JobBoardConnector
 from app.connectors.http import fetch_gzip_xml
-from app.connectors.sitemap import _parse_sitemap_locs, next_sitemap_cursor, resolve_sitemap_cursor
-from app.db.models import Source
+from app.connectors.sitemap import parse_sitemap_locs
+from app.connectors.sitemap_detail import SitemapDetailPageConnector
 from app.ingestion.normalize import (
     BULLDOGJOB,
     normalize_remote,
@@ -18,17 +13,8 @@ from app.ingestion.normalize import (
     normalize_seniority,
     to_int,
 )
-from app.ingestion.runner import resolve_fetch_range, run_paginated_ingestion
-from app.ingestion.types import IngestionResult
 
 BULLDOGJOB_SITEMAP_INDEX_URL = "https://bulldogjob.com/sitemap.en.xml.gz"
-
-# BUG42-followup: BUG41's cursor-persistence fix let a run actually walk hundreds of detail
-# pages in a row for the first time (previously every run restarted at cursor 0 and never got
-# far past page 1) -- doing that with zero delay between requests got bulldogjob.com's own
-# per-IP rate limiter to return real 429s mid-run, confirmed live 2026-07-14. This default is
-# a starting throttle, not tuned against a documented limit.
-DEFAULT_RATE_LIMIT_DELAY_SECONDS = 0.5
 
 _NEXT_DATA_PATTERN = re.compile(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL)
 # The `jobs.xml.gz` sub-sitemap mixes real job detail URLs (`/companies/jobs/<id>-<slug>`)
@@ -87,31 +73,19 @@ def _pick_salary(job: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
     return {}, None
 
 
-class BulldogjobConnector(JobBoardConnector):
+class BulldogjobConnector(SitemapDetailPageConnector):
     """Bulldogjob has no offset/cursor-paginated endpoint (US38's Domain Decision): its real
     "next page" affordance is a client-side call not observable from a plain request (see
     `docs/adr/0023-bulldogjob-sitemap-and-embedded-next-data-investigation.md`). This connector
     instead enumerates every live job URL from Bulldogjob's own sitemap, then live-fetches each
-    URL's HTML and parses its embedded `__NEXT_DATA__` JSON -- so it overrides both `fetch_page`
-    and `run` rather than using the inherited cursor-pagination loop, the same deviation
-    `NoFluffJobsConnector` documents for its own single-shot feed.
+    URL's HTML and parses its embedded `__NEXT_DATA__` JSON, via the shared
+    `SitemapDetailPageConnector` base (US46, see also `RocketJobsConnector`).
     """
 
     name = "Bulldogjob"
 
-    def default_url(self) -> str:
+    def sitemap_url(self) -> str:
         return BULLDOGJOB_SITEMAP_INDEX_URL
-
-    def build_params(
-        self, config: dict[str, Any], *, cursor: Any, page_size: int
-    ) -> dict[str, Any]:
-        # Bulldogjob's fetch shape has no query-parameterized page call -- see class docstring.
-        return {}
-
-    def next_cursor(
-        self, payload: Any, offers: list[dict[str, Any]], *, cursor: Any, page_size: int
-    ) -> Any | None:
-        return None
 
     def map_offer(self, source_id: int, raw: dict[str, Any]) -> dict[str, Any]:
         raw_data = raw.get("props", {}).get("pageProps", {}).get("data", {})
@@ -159,7 +133,7 @@ class BulldogjobConnector(JobBoardConnector):
         if index_xml is None:
             return None
 
-        sub_sitemap_urls = _parse_sitemap_locs(index_xml, "sitemap")
+        sub_sitemap_urls = parse_sitemap_locs(index_xml, "sitemap")
         if not sub_sitemap_urls:
             logger.error("Bulldogjob sitemap index had no sub-sitemaps: url=%r", index_url)
             return None
@@ -172,90 +146,8 @@ class BulldogjobConnector(JobBoardConnector):
         if jobs_xml is None:
             return None
 
-        urls = _parse_sitemap_locs(jobs_xml, "url")
+        urls = parse_sitemap_locs(jobs_xml, "url")
         return [url for url in urls if _JOB_URL_PATTERN.match(url)]
 
-    def _fetch_detail_html(self, url: str) -> str | None:
-        try:
-            response = httpx.get(url, timeout=10.0, headers={"User-Agent": "recruFlow/0.1"})
-            response.raise_for_status()
-        except httpx.HTTPError:
-            logger.error("failed to fetch %s detail page: url=%r", self.name, url, exc_info=True)
-            return None
-        return response.text
-
-    async def run(
-        self, session: AsyncSession, source: Source, force_refresh: bool = False
-    ) -> IngestionResult:
-        config = source.config_json or {}
-        since, until = resolve_fetch_range(config.get("fetch_range"))
-        # Each Bulldogjob "page" is `page_size` live per-URL HTTP fetches, not one batched API
-        # call, so these fallback bounds cap total live traffic per run at `page_size *
-        # max_pages` (20 * 50 = 1000), comfortably covering the ~1000-URL sitemap observed live
-        # 2026-07-13 -- unlike the other three connectors' cheap single-request pages.
-        page_size = int(config.get("page_size", 20))
-        max_pages = int(config.get("max_pages", 50))
-        already_seen_stop_threshold = int(config.get("already_seen_stop_threshold", 20))
-        rate_limit_delay_seconds = float(
-            config.get("rate_limit_delay_seconds", DEFAULT_RATE_LIMIT_DELAY_SECONDS)
-        )
-
-        urls = self.fetch_sitemap_urls(config)
-        if urls is None:
-            return IngestionResult(
-                ok=False, fetched=0, created=0, error_message=f"failed to fetch {self.name} offers"
-            )
-
-        # BUG41: sitemap order is stable but not recency-sorted, so restarting at cursor 0
-        # every run just re-walks the same already-ingested prefix forever. `sitemap_cursor`
-        # persists where the previous run left off; `last_cursor` tracks this run's true end
-        # (including "reached the end", i.e. `None`) so it can be written back below.
-        initial_cursor = resolve_sitemap_cursor(config, len(urls))
-        last_cursor: int | None = initial_cursor
-
-        def fetch_page(
-            cursor: int, page_size: int
-        ) -> tuple[list[dict[str, Any]], int | None] | None:
-            nonlocal last_cursor
-            chunk_urls = urls[cursor : cursor + page_size]
-            if not chunk_urls:
-                last_cursor = None
-                return [], None
-
-            offers: list[dict[str, Any]] = []
-            for url in chunk_urls:
-                if rate_limit_delay_seconds > 0:
-                    time.sleep(rate_limit_delay_seconds)
-                html = self._fetch_detail_html(url)
-                if html is None:
-                    continue
-                parsed = extract_next_data(html, url=url)
-                if parsed is None:
-                    continue
-                offers.append(parsed)
-
-            next_cursor = cursor + page_size if cursor + page_size < len(urls) else None
-            last_cursor = next_cursor
-            return offers, next_cursor
-
-        result = await run_paginated_ingestion(
-            session,
-            source.id,
-            source_name=self.name,
-            fetch_page=fetch_page,
-            map_offer=self.map_offer,
-            initial_cursor=initial_cursor,
-            page_size=page_size,
-            max_pages=max_pages,
-            already_seen_stop_threshold=already_seen_stop_threshold,
-            force_refresh=force_refresh,
-            logger=logger,
-            since=since,
-            until=until,
-            # Bulldogjob's sitemap isn't sorted newest-first (see the class docstring and
-            # ADR 0017) -- a sitemap-order page being wholly older than `since` says nothing
-            # about the rest of the catalog, so that early-stop must not apply here (BUG41).
-            sorted_by_recency=False,
-        )
-        source.config_json = {**config, "sitemap_cursor": next_sitemap_cursor(last_cursor)}
-        return result
+    def extract_detail_json(self, html: str, *, url: str | None) -> dict[str, Any] | None:
+        return extract_next_data(html, url=url)

@@ -1,0 +1,148 @@
+import logging
+import time
+from abc import ABC, abstractmethod
+from typing import Any
+
+import httpx
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.connectors.base import JobBoardConnector
+from app.connectors.sitemap import next_sitemap_cursor, resolve_sitemap_cursor
+from app.db.models import Source
+from app.ingestion.runner import resolve_fetch_range, run_paginated_ingestion
+from app.ingestion.types import IngestionResult
+
+# BUG42-followup: BUG41's cursor-persistence fix let a run actually walk hundreds of detail
+# pages in a row for the first time (previously every run restarted at cursor 0 and never got
+# far past page 1) -- doing that with zero delay between requests got bulldogjob.com's own
+# per-IP rate limiter to return real 429s mid-run, confirmed live 2026-07-14. This default is
+# a starting throttle, not tuned against a documented limit.
+DEFAULT_RATE_LIMIT_DELAY_SECONDS = 0.5
+
+logger = logging.getLogger(__name__)
+
+
+class SitemapDetailPageConnector(JobBoardConnector, ABC):
+    """Shared base for connectors with no cursor-paginated endpoint (US38's Domain Decision):
+    their real "next page" affordance is a client-side call not observable from a plain
+    request. These connectors instead enumerate every live job URL from the job board's own
+    sitemap, then live-fetch each URL's HTML and parse an embedded per-page JSON blob -- so
+    they need this dedicated `run()` shape rather than the inherited cursor-pagination loop
+    (US46, extracted from `BulldogjobConnector` and `RocketJobsConnector`, ~90% duplicated
+    prior to this extraction).
+    """
+
+    @abstractmethod
+    def sitemap_url(self) -> str: ...
+
+    @abstractmethod
+    def fetch_sitemap_urls(self, config: dict[str, Any]) -> list[str] | None: ...
+
+    @abstractmethod
+    def extract_detail_json(self, html: str, *, url: str | None) -> dict[str, Any] | None: ...
+
+    def follow_redirects_on_detail_fetch(self) -> bool:
+        return False
+
+    def default_url(self) -> str:
+        return self.sitemap_url()
+
+    def build_params(
+        self, config: dict[str, Any], *, cursor: Any, page_size: int
+    ) -> dict[str, Any]:
+        # this connector's fetch shape has no query-parameterized page call
+        return {}
+
+    def next_cursor(
+        self, payload: Any, offers: list[dict[str, Any]], *, cursor: Any, page_size: int
+    ) -> Any | None:
+        return None
+
+    def _fetch_detail_html(self, url: str) -> str | None:
+        try:
+            response = httpx.get(
+                url,
+                timeout=10.0,
+                headers={"User-Agent": "recruFlow/0.1"},
+                follow_redirects=self.follow_redirects_on_detail_fetch(),
+            )
+            response.raise_for_status()
+        except httpx.HTTPError:
+            logger.error("failed to fetch %s detail page: url=%r", self.name, url, exc_info=True)
+            return None
+        return response.text
+
+    async def run(
+        self, session: AsyncSession, source: Source, force_refresh: bool = False
+    ) -> IngestionResult:
+        config = source.config_json or {}
+        since, until = resolve_fetch_range(config.get("fetch_range"))
+        # Each "page" is `page_size` live per-URL HTTP fetches, not one batched API call, so
+        # these fallback bounds cap total live traffic per run at `page_size * max_pages`
+        # (20 * 50 = 1000).
+        page_size = int(config.get("page_size", 20))
+        max_pages = int(config.get("max_pages", 50))
+        already_seen_stop_threshold = int(config.get("already_seen_stop_threshold", 20))
+        rate_limit_delay_seconds = float(
+            config.get("rate_limit_delay_seconds", DEFAULT_RATE_LIMIT_DELAY_SECONDS)
+        )
+
+        urls = self.fetch_sitemap_urls(config)
+        if urls is None:
+            return IngestionResult(
+                ok=False, fetched=0, created=0, error_message=f"failed to fetch {self.name} offers"
+            )
+
+        # BUG41: sitemap order is stable but not recency-sorted, so restarting at cursor 0
+        # every run just re-walks the same already-ingested prefix forever. `sitemap_cursor`
+        # persists where the previous run left off; `last_cursor` tracks this run's true end
+        # (including "reached the end", i.e. `None`) so it can be written back below.
+        initial_cursor = resolve_sitemap_cursor(config, len(urls))
+        last_cursor: int | None = initial_cursor
+
+        def fetch_page(
+            cursor: int, page_size: int
+        ) -> tuple[list[dict[str, Any]], int | None] | None:
+            nonlocal last_cursor
+            chunk_urls = urls[cursor : cursor + page_size]
+            if not chunk_urls:
+                last_cursor = None
+                return [], None
+
+            offers: list[dict[str, Any]] = []
+            for url in chunk_urls:
+                if rate_limit_delay_seconds > 0:
+                    time.sleep(rate_limit_delay_seconds)
+                html = self._fetch_detail_html(url)
+                if html is None:
+                    continue
+                parsed = self.extract_detail_json(html, url=url)
+                if parsed is None:
+                    continue
+                offers.append(parsed)
+
+            next_cursor = cursor + page_size if cursor + page_size < len(urls) else None
+            last_cursor = next_cursor
+            return offers, next_cursor
+
+        result = await run_paginated_ingestion(
+            session,
+            source.id,
+            source_name=self.name,
+            fetch_page=fetch_page,
+            map_offer=self.map_offer,
+            initial_cursor=initial_cursor,
+            page_size=page_size,
+            max_pages=max_pages,
+            already_seen_stop_threshold=already_seen_stop_threshold,
+            force_refresh=force_refresh,
+            logger=logger,
+            since=since,
+            until=until,
+            # The sitemap isn't sorted newest-first (see ADR 0017) -- a sitemap-order page
+            # being wholly older than `since` says nothing about the rest of the catalog, so
+            # that early-stop must not apply here (BUG41).
+            sorted_by_recency=False,
+        )
+        source.config_json = {**config, "sitemap_cursor": next_sitemap_cursor(last_cursor)}
+        return result

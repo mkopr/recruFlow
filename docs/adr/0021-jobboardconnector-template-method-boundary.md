@@ -30,3 +30,15 @@ enough to cover those cases, but keeps type-checking and IDE navigation.
 **Consequences**: P3US38-44 each implement exactly one connector file, overriding the 4 abstract
 methods and a hook only when their API genuinely needs it — no other file changes required for a
 "vanilla" connector.
+
+**Follow-up (2026-07-15, US46)**: this ADR's "no other file changes required" prediction held for
+7 of 9 connectors, but Bulldogjob (P3US38) and Rocket Jobs (P3US40) turned out to need a genuine
+escape hatch — no cursor-paginated endpoint exists for either, so both overrode the fixed
+`fetch_page`/`run` methods this ADR says should never be overridden, and ended up ~90%
+duplicated with each other in the process. US46 added a second inheritance tier,
+`SitemapDetailPageConnector` (`app/connectors/sitemap_detail.py`), between `JobBoardConnector`
+and these two connectors: it re-fixes `run()` around the sitemap-enumeration/per-URL-detail-fetch
+shape those two connectors share, so the original boundary's spirit — "the parts that must stay
+identical across connectors of the same shape are fixed, not reimplemented per connector" —
+still holds, just one level down. A 10th connector needing this same shape now costs one file
+implementing 3 hooks, not a copy-paste from Bulldogjob or Rocket Jobs.

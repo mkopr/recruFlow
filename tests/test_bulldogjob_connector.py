@@ -3,7 +3,7 @@ from typing import Any
 
 import httpx
 import pytest
-from app.connectors import bulldogjob
+from app.connectors import bulldogjob, sitemap_detail
 from app.connectors.bulldogjob import (
     BULLDOGJOB_SITEMAP_INDEX_URL,
     BulldogjobConnector,
@@ -309,7 +309,7 @@ async def test_bulldogjob_run_delegates_to_run_paginated_ingestion_with_sitemap_
         captured.update(kwargs)
         return IngestionResult(ok=True, fetched=0, created=0)
 
-    monkeypatch.setattr(bulldogjob, "run_paginated_ingestion", _fake_run_paginated_ingestion)
+    monkeypatch.setattr(sitemap_detail, "run_paginated_ingestion", _fake_run_paginated_ingestion)
 
     connector = BulldogjobConnector()
     source = Source(id=1, connector="bulldogjob", config_json={})
@@ -337,7 +337,7 @@ async def test_bulldogjob_run_reads_kwargs_from_config(monkeypatch: pytest.Monke
         captured.update(kwargs)
         return IngestionResult(ok=True, fetched=0, created=0)
 
-    monkeypatch.setattr(bulldogjob, "run_paginated_ingestion", _fake_run_paginated_ingestion)
+    monkeypatch.setattr(sitemap_detail, "run_paginated_ingestion", _fake_run_paginated_ingestion)
 
     connector = BulldogjobConnector()
     source = Source(

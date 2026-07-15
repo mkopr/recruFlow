@@ -12,6 +12,7 @@ from app.ingestion.normalize import WE_WORK_REMOTELY, normalize_salary
 from app.ingestion.runner import resolve_fetch_range, run_paginated_ingestion
 from app.ingestion.types import IngestionResult
 
+NAME = "We Work Remotely"
 WE_WORK_REMOTELY_RSS_URL = "https://weworkremotely.com/remote-jobs.rss"
 
 _ITEM_FIELDS: tuple[str, ...] = (
@@ -141,15 +142,13 @@ def map_offer(source_id: int, raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def fetch_page(cursor: Any, page_size: int) -> tuple[list[dict[str, Any]], Any | None] | None:
-    root = fetch_xml(WE_WORK_REMOTELY_RSS_URL, source_name="We Work Remotely", logger=logger)
+    root = fetch_xml(WE_WORK_REMOTELY_RSS_URL, source_name=NAME, logger=logger)
     if root is None:
         return None
 
     items = _extract_rss_items(root, url=WE_WORK_REMOTELY_RSS_URL)
     if items is None:
-        logger.error(
-            "We Work Remotely returned unexpected feed shape: url=%r", WE_WORK_REMOTELY_RSS_URL
-        )
+        logger.error("%s returned unexpected feed shape: url=%r", NAME, WE_WORK_REMOTELY_RSS_URL)
         return None
 
     return items, None
@@ -171,7 +170,7 @@ async def run_we_work_remotely_ingestion(
     return await run_paginated_ingestion(
         session,
         source.id,
-        source_name="We Work Remotely",
+        source_name=NAME,
         fetch_page=fetch_page,
         map_offer=map_offer,
         initial_cursor=0,

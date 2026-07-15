@@ -28,3 +28,17 @@ planned in P3US38-44.
 **Consequences**: Adding a connector becomes a 2-step checklist — write the `JobBoardConnector`
 subclass, add one `CONNECTOR_REGISTRY` entry. Scheduler seeding, matching eligibility, and every
 frontend list pick it up automatically; there is nothing left to silently miss.
+
+**Follow-up (2026-07-15, US46)**: two things this ADR didn't fully close regrew outside the
+registry across P3US38-44 and were fixed by US46. First, `scheduler/service.py` grew its own
+`_connector_config_overrides` `if connector == X` branching ladder for Pracuj/RemoteOK/Remotive's
+seed defaults — the exact "hand-editing an outside-the-registry place" pattern this ADR set out
+to eliminate, just reintroduced one layer down instead of at the connector-existence level this
+ADR covers. `ConnectorSpec` now carries a `seed_config_overrides` field so these defaults travel
+with the registry entry itself. Second, `registry.py` itself restated every connector's display
+`label` as an independent string literal alongside its `dispatch`, a second source of truth for a
+value each connector's own `.name` attribute already held — labels are now derived from the
+connector instance (`label=<instance>.name`), mirroring this ADR's own
+`LANGCHAIN_SOURCES = frozenset(CONNECTOR_REGISTRY.keys())` derivation. The "2-step checklist" in
+Consequences still holds; both fixes make more of what a connector needs live inside those two
+steps rather than requiring a third, unlisted edit.

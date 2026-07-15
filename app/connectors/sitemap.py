@@ -4,7 +4,7 @@ from typing import Any
 _SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 
 
-def _parse_sitemap_locs(xml_text: str, tag: str) -> list[str]:
+def parse_sitemap_locs(xml_text: str, tag: str) -> list[str]:
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError:

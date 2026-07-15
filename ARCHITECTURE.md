@@ -2949,6 +2949,69 @@ number the user types in, no persisted config in between. See the P3US29 section
 - **Market-scope callout** (same note RemoteOK's and Remotive's own sections make): We Work
   Remotely, like RemoteOK and Remotive, is a global remote-first board, not Poland-specific.
 
+### Connector architecture cleanup (US46)
+
+A design audit of all 9 connectors against ADR 0021/0022 (P3US37/38-44) found the two ADRs'
+promises had eroded in practice — Bulldogjob and Rocket Jobs turned out to be ~90% duplicated
+code, not two independent connectors, and a seed-config-override ladder had regrown in
+`scheduler/service.py` outside the registry, the exact anti-pattern ADR 0022 was written to
+eliminate. This story is structural only: no connector's live fetch output, dedup, or
+normalization behavior changed.
+
+- **`app/connectors/sitemap_detail.py`'s `SitemapDetailPageConnector`** is a new intermediate
+  base between `JobBoardConnector` and `BulldogjobConnector`/`RocketJobsConnector`
+  (`JobBoardConnector` → `SitemapDetailPageConnector` → `{Bulldogjob,RocketJobs}Connector`), the
+  same subclass-of-subclass shape `ADR 0021` already established for `JobBoardConnector` itself.
+  It captures the sitemap-cursor-persisted, rate-limited, per-URL-detail-fetch `run()` shape both
+  connectors previously each carried their own copy of: reading `page_size`/`max_pages`/
+  `already_seen_stop_threshold`/`rate_limit_delay_seconds` from config, resolving/persisting
+  `sitemap_cursor` via `resolve_sitemap_cursor`/`next_sitemap_cursor` (BUG41), and the
+  rate-limited per-URL `fetch_page` closure. Each subclass now implements only 3 hooks:
+  `sitemap_url()` (replaces `default_url`), `fetch_sitemap_urls(config)`, and
+  `extract_detail_json(html, *, url)` (the `extract_next_data`/`extract_job_posting_json_ld`
+  swap point) — plus `follow_redirects_on_detail_fetch()`, defaulting to `False`, which Rocket
+  Jobs overrides to `True` (its one real behavioral difference from Bulldogjob, a 308-redirect
+  quirk confirmed live 2026-07-14). `map_offer` and every connector-specific parsing helper
+  (`_join_locations`/`_pick_salary` for Bulldogjob, `_find_job_posting`/`_extract_location`/
+  `_external_id_from_url` for Rocket Jobs) stay in their own connector modules, untouched.
+
+- **`app/connectors/http.py`'s four fetch functions** (`fetch_json`, `fetch_xml`,
+  `fetch_gzip_xml`, `fetch_text`) now share one internal `_get()` helper for the transport-level
+  `try/except httpx.HTTPError` — issuing the GET with the merged `User-Agent` header and
+  `raise_for_status()`, logging and returning `None` on failure. `_get()` takes `error_noun`
+  (`"offers"` for `fetch_json`/`fetch_xml`, `"sitemap"` for `fetch_gzip_xml`/`fetch_text`) and
+  `log_params` (`True`/`False` in the same split) so each function's existing log message
+  wording stays byte-identical — this was a behavior-preserving refactor verified by running
+  `tests/test_http.py` unmodified.
+
+- **`ConnectorSpec.seed_config_overrides: dict[str, Any]`** (new field, `field(default_factory=dict)`
+  on the still-frozen dataclass) replaces `scheduler/service.py`'s `_connector_config_overrides`
+  branching function. Pracuj's, RemoteOK's, and Remotive's per-connector seed defaults (P3US41/42/43)
+  now live directly on their `CONNECTOR_REGISTRY` entries; `ensure_sources_exist` reads
+  `CONNECTOR_REGISTRY[connector].seed_config_overrides` instead of branching on connector identity
+  — the override now travels with the connector's own registry entry rather than living in a
+  second file that has to be kept in sync with it.
+
+- **`registry.py` no longer restates each connector's display label as an independent string
+  literal.** Every `JobBoardConnector`-backed entry's `label` is now sourced from
+  `<instance>.name` (e.g. `label=_bulldogjob.name`), reusing the same connector instance already
+  constructed for `dispatch=<instance>.run` — the same "derive, don't restate" pattern
+  `LANGCHAIN_SOURCES = frozenset(CONNECTOR_REGISTRY.keys())` (`app/llm/matcher.py`) established.
+  We Work Remotely (which implements the `Connector` Protocol directly, not
+  `JobBoardConnector`) keeps an explicit label string, but now sourced from a new
+  `we_work_remotely.NAME` module constant rather than a second inline literal.
+  `tests/test_registry_label_sync.py` guards this: it asserts `spec.label ==
+  spec.dispatch.__self__.name` for every class-backed entry, so a future edit that desyncs them
+  fails loudly instead of silently drifting.
+
+- **`sitemap.py`'s `parse_sitemap_locs` is now public** (renamed from `_parse_sitemap_locs`) —
+  it's imported across module boundaries (`bulldogjob.py`, `rocket_jobs.py`), so the leading
+  underscore was misleading about its actual visibility contract.
+
+See `docs/adr/0021-jobboardconnector-template-method-boundary.md` and
+`docs/adr/0022-connector-registry-is-the-single-source-of-truth.md` for the follow-up notes
+recording where this story's extraction fits against each ADR's original decision.
+
 ### The Protocol connector — spike failed, not implemented (P3US39)
 
 - **Status**: P3US39 is a hard two-phase gate — Phase 1 (feasibility spike) before any

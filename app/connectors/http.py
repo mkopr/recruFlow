@@ -7,6 +7,46 @@ from typing import Any
 import httpx
 
 
+def _get(
+    url: str,
+    *,
+    source_name: str,
+    logger: logging.Logger,
+    params: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: float = 10.0,
+    follow_redirects: bool = False,
+    error_noun: str = "offers",
+    log_params: bool = True,
+) -> httpx.Response | None:
+    try:
+        response = httpx.get(
+            url,
+            params=params,
+            timeout=timeout,
+            headers={"User-Agent": "recruFlow/0.1", **(headers or {})},
+            follow_redirects=follow_redirects,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError:
+        if log_params:
+            logger.error(
+                "failed to fetch %s %s: url=%r params=%r",
+                source_name,
+                error_noun,
+                url,
+                params,
+                exc_info=True,
+            )
+        else:
+            logger.error(
+                "failed to fetch %s %s: url=%r", source_name, error_noun, url, exc_info=True
+            )
+        return None
+
+    return response
+
+
 def fetch_json(
     url: str,
     *,
@@ -16,22 +56,16 @@ def fetch_json(
     headers: dict[str, str] | None = None,
     timeout: float = 10.0,
 ) -> Any | None:
-    try:
-        response = httpx.get(
-            url,
-            params=params,
-            timeout=timeout,
-            headers={"User-Agent": "recruFlow/0.1", **(headers or {})},
-        )
-        response.raise_for_status()
-    except httpx.HTTPError:
-        logger.error(
-            "failed to fetch %s offers: url=%r params=%r",
-            source_name,
-            url,
-            params,
-            exc_info=True,
-        )
+    response = _get(
+        url,
+        source_name=source_name,
+        logger=logger,
+        params=params,
+        headers=headers,
+        timeout=timeout,
+        error_noun="offers",
+    )
+    if response is None:
         return None
 
     try:
@@ -57,22 +91,16 @@ def fetch_xml(
     that validation belongs one layer up in the connector module, same split as
     `extract_envelope_list` for `fetch_json`.
     """
-    try:
-        response = httpx.get(
-            url,
-            params=params,
-            timeout=timeout,
-            headers={"User-Agent": "recruFlow/0.1", **(headers or {})},
-        )
-        response.raise_for_status()
-    except httpx.HTTPError:
-        logger.error(
-            "failed to fetch %s offers: url=%r params=%r",
-            source_name,
-            url,
-            params,
-            exc_info=True,
-        )
+    response = _get(
+        url,
+        source_name=source_name,
+        logger=logger,
+        params=params,
+        headers=headers,
+        timeout=timeout,
+        error_noun="offers",
+    )
+    if response is None:
         return None
 
     try:
@@ -91,15 +119,15 @@ def fetch_gzip_xml(
     logger: logging.Logger,
     timeout: float = 10.0,
 ) -> str | None:
-    try:
-        response = httpx.get(
-            url,
-            timeout=timeout,
-            headers={"User-Agent": "recruFlow/0.1"},
-        )
-        response.raise_for_status()
-    except httpx.HTTPError:
-        logger.error("failed to fetch %s sitemap: url=%r", source_name, url, exc_info=True)
+    response = _get(
+        url,
+        source_name=source_name,
+        logger=logger,
+        timeout=timeout,
+        error_noun="sitemap",
+        log_params=False,
+    )
+    if response is None:
         return None
 
     try:
@@ -116,16 +144,16 @@ def fetch_text(
     logger: logging.Logger,
     timeout: float = 10.0,
 ) -> str | None:
-    try:
-        response = httpx.get(
-            url,
-            timeout=timeout,
-            headers={"User-Agent": "recruFlow/0.1"},
-            follow_redirects=True,
-        )
-        response.raise_for_status()
-    except httpx.HTTPError:
-        logger.error("failed to fetch %s sitemap: url=%r", source_name, url, exc_info=True)
+    response = _get(
+        url,
+        source_name=source_name,
+        logger=logger,
+        timeout=timeout,
+        follow_redirects=True,
+        error_noun="sitemap",
+        log_params=False,
+    )
+    if response is None:
         return None
 
     return response.text

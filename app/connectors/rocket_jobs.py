@@ -1,17 +1,12 @@
 import json
 import logging
 import re
-import time
 from typing import Any
 from urllib.parse import urlparse
 
-import httpx
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.connectors.base import JobBoardConnector
 from app.connectors.http import fetch_text
-from app.connectors.sitemap import _parse_sitemap_locs, next_sitemap_cursor, resolve_sitemap_cursor
-from app.db.models import Source
+from app.connectors.sitemap import parse_sitemap_locs
+from app.connectors.sitemap_detail import SitemapDetailPageConnector
 from app.ingestion.normalize import (
     ROCKET_JOBS,
     normalize_remote,
@@ -19,18 +14,8 @@ from app.ingestion.normalize import (
     normalize_seniority,
     to_int,
 )
-from app.ingestion.runner import resolve_fetch_range, run_paginated_ingestion
-from app.ingestion.types import IngestionResult
 
 ROCKET_JOBS_SITEMAP_URL = "https://rocketjobs.pl/sitemaps/active-jobs.xml"
-
-# BUG42-followup: BUG41's cursor-persistence fix let a run actually walk hundreds of detail
-# pages in a row for the first time (previously every run restarted at cursor 0 and never got
-# far past page 1) -- doing that with zero delay between requests got Bulldogjob's own per-IP
-# rate limiter to return real 429s mid-run, confirmed live 2026-07-14 -- applying the same
-# throttle here pre-emptively since Rocket Jobs shares the identical per-URL fetch shape. This
-# default is a starting throttle, not tuned against a documented limit.
-DEFAULT_RATE_LIMIT_DELAY_SECONDS = 0.5
 
 # JSON-LD script tags can appear multiple times per page (breadcrumbs, org data, ...), unlike
 # Bulldogjob's single `__NEXT_DATA__` block, so every match is inspected for `@type` rather
@@ -99,7 +84,7 @@ def _external_id_from_url(url: str | None) -> str | None:
     return slug or None
 
 
-class RocketJobsConnector(JobBoardConnector):
+class RocketJobsConnector(SitemapDetailPageConnector):
     """Rocket Jobs shares its underlying platform with JustJoin.it -- its sitemap URL even
     redirects to a `public.justjoin.com`-hosted path -- but is ingested independently via
     this separate connector.
@@ -112,25 +97,20 @@ class RocketJobsConnector(JobBoardConnector):
     (`docs/adr/0025-rocket-jobs-sitemap-and-json-ld-investigation.md`). Like
     `BulldogjobConnector` (P3US38), there is no cursor-paginated endpoint, so this connector
     enumerates every live job URL from the sitemap, then live-fetches each URL's HTML and
-    parses its embedded schema.org `JobPosting` JSON-LD block -- overriding both `fetch_page`
-    and `run` rather than using the inherited cursor-pagination loop.
+    parses its embedded schema.org `JobPosting` JSON-LD block, via the shared
+    `SitemapDetailPageConnector` base (US46).
     """
 
     name = "Rocket Jobs"
 
-    def default_url(self) -> str:
+    def sitemap_url(self) -> str:
         return ROCKET_JOBS_SITEMAP_URL
 
-    def build_params(
-        self, config: dict[str, Any], *, cursor: Any, page_size: int
-    ) -> dict[str, Any]:
-        # Rocket Jobs's fetch shape has no query-parameterized page call -- see class docstring.
-        return {}
-
-    def next_cursor(
-        self, payload: Any, offers: list[dict[str, Any]], *, cursor: Any, page_size: int
-    ) -> Any | None:
-        return None
+    def follow_redirects_on_detail_fetch(self) -> bool:
+        # Sitemap-listed URLs occasionally 308-redirect to a canonicalized path (confirmed
+        # live 2026-07-14) -- follow so a redirected-but-otherwise-good URL isn't skipped as a
+        # broken detail page.
+        return True
 
     def map_offer(self, source_id: int, raw: dict[str, Any]) -> dict[str, Any]:
         raw_org = raw.get("hiringOrganization")
@@ -191,11 +171,11 @@ class RocketJobsConnector(JobBoardConnector):
         # rocketjobs.pl's sitemap URL redirects through a public.justjoin.com-hosted path
         # straight to its urlset (part0.xml) today, but a `<sitemapindex>` pointing at
         # multiple parts is handled too, in case the site later splits the sitemap.
-        urls = _parse_sitemap_locs(xml_text, "url")
+        urls = parse_sitemap_locs(xml_text, "url")
         if urls:
             return urls
 
-        sub_sitemap_urls = _parse_sitemap_locs(xml_text, "sitemap")
+        sub_sitemap_urls = parse_sitemap_locs(xml_text, "sitemap")
         if not sub_sitemap_urls:
             logger.error("Rocket Jobs sitemap had no <url> or <sitemap> entries: url=%r", index_url)
             return None
@@ -206,106 +186,20 @@ class RocketJobsConnector(JobBoardConnector):
             sub_xml = fetch_text(sub_url, source_name=self.name, logger=logger)
             if sub_xml is None:
                 continue
-            for url in _parse_sitemap_locs(sub_xml, "url"):
+            for url in parse_sitemap_locs(sub_xml, "url"):
                 if url not in seen:
                     seen.add(url)
                     all_urls.append(url)
 
         return all_urls if all_urls else None
 
-    def _fetch_detail_html(self, url: str) -> str | None:
-        try:
-            # Sitemap-listed URLs occasionally 308-redirect to a canonicalized path (confirmed
-            # live 2026-07-14) -- follow_redirects=True so a redirected-but-otherwise-good URL
-            # isn't skipped as a broken detail page.
-            response = httpx.get(
-                url, timeout=10.0, headers={"User-Agent": "recruFlow/0.1"}, follow_redirects=True
-            )
-            response.raise_for_status()
-        except httpx.HTTPError:
-            logger.error("failed to fetch %s detail page: url=%r", self.name, url, exc_info=True)
+    def extract_detail_json(self, html: str, *, url: str | None) -> dict[str, Any] | None:
+        parsed = extract_job_posting_json_ld(html, url=url)
+        if parsed is None:
             return None
-        return response.text
-
-    async def run(
-        self, session: AsyncSession, source: Source, force_refresh: bool = False
-    ) -> IngestionResult:
-        config = source.config_json or {}
-        since, until = resolve_fetch_range(config.get("fetch_range"))
-        # Each Rocket Jobs "page" is `page_size` live per-URL HTTP fetches, not one batched API
-        # call, mirroring Bulldogjob (P3US38). 13,387 live job URLs were observed under the
-        # sitemap 2026-07-13, so these fallback bounds (`max_pages` = max sitemap-URL chunks
-        # per run; 20 * 50 = 1000 URLs/run) intentionally process the catalog across ~14 runs
-        # rather than attempting a full crawl in one run -- already_seen_stop_threshold
-        # short-circuits reruns quickly once caught up.
-        page_size = int(config.get("page_size", 20))
-        max_pages = int(config.get("max_pages", 50))
-        already_seen_stop_threshold = int(config.get("already_seen_stop_threshold", 20))
-        rate_limit_delay_seconds = float(
-            config.get("rate_limit_delay_seconds", DEFAULT_RATE_LIMIT_DELAY_SECONDS)
-        )
-
-        urls = self.fetch_sitemap_urls(config)
-        if urls is None:
-            return IngestionResult(
-                ok=False, fetched=0, created=0, error_message=f"failed to fetch {self.name} offers"
-            )
-
-        # BUG41: sitemap order is stable but not recency-sorted, so restarting at cursor 0
-        # every run just re-walks the same already-ingested prefix forever. `sitemap_cursor`
-        # persists where the previous run left off; `last_cursor` tracks this run's true end
-        # (including "reached the end", i.e. `None`) so it can be written back below.
-        initial_cursor = resolve_sitemap_cursor(config, len(urls))
-        last_cursor: int | None = initial_cursor
-
-        def fetch_page(
-            cursor: int, page_size: int
-        ) -> tuple[list[dict[str, Any]], int | None] | None:
-            nonlocal last_cursor
-            chunk_urls = urls[cursor : cursor + page_size]
-            if not chunk_urls:
-                last_cursor = None
-                return [], None
-
-            offers: list[dict[str, Any]] = []
-            for url in chunk_urls:
-                if rate_limit_delay_seconds > 0:
-                    time.sleep(rate_limit_delay_seconds)
-                html = self._fetch_detail_html(url)
-                if html is None:
-                    continue
-                parsed = extract_job_posting_json_ld(html, url=url)
-                if parsed is None:
-                    continue
-                # `_source_url` is additive provenance (the URL this record was actually
-                # fetched from), not a fabricated field -- see map_offer's comment on why
-                # canonical_url needs it. It is persisted as part of raw_payload alongside the
-                # untouched parsed JSON-LD fields.
-                parsed["_source_url"] = url
-                offers.append(parsed)
-
-            next_cursor = cursor + page_size if cursor + page_size < len(urls) else None
-            last_cursor = next_cursor
-            return offers, next_cursor
-
-        result = await run_paginated_ingestion(
-            session,
-            source.id,
-            source_name=self.name,
-            fetch_page=fetch_page,
-            map_offer=self.map_offer,
-            initial_cursor=initial_cursor,
-            page_size=page_size,
-            max_pages=max_pages,
-            already_seen_stop_threshold=already_seen_stop_threshold,
-            force_refresh=force_refresh,
-            logger=logger,
-            since=since,
-            until=until,
-            # Rocket Jobs's sitemap isn't sorted newest-first (see the class docstring and
-            # ADR 0017) -- a sitemap-order page being wholly older than `since` says nothing
-            # about the rest of the catalog, so that early-stop must not apply here (BUG41).
-            sorted_by_recency=False,
-        )
-        source.config_json = {**config, "sitemap_cursor": next_sitemap_cursor(last_cursor)}
-        return result
+        # `_source_url` is additive provenance (the URL this record was actually fetched
+        # from), not a fabricated field -- see map_offer's comment on why canonical_url needs
+        # it. It is persisted as part of raw_payload alongside the untouched parsed JSON-LD
+        # fields.
+        parsed["_source_url"] = url
+        return parsed

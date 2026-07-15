@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 import pytest
-from app.connectors import rocket_jobs
+from app.connectors import rocket_jobs, sitemap_detail
 from app.connectors.rocket_jobs import (
     ROCKET_JOBS_SITEMAP_URL,
     RocketJobsConnector,
@@ -365,7 +365,7 @@ async def test_rocket_jobs_run_delegates_to_run_paginated_ingestion_with_sitemap
         captured.update(kwargs)
         return IngestionResult(ok=True, fetched=0, created=0)
 
-    monkeypatch.setattr(rocket_jobs, "run_paginated_ingestion", _fake_run_paginated_ingestion)
+    monkeypatch.setattr(sitemap_detail, "run_paginated_ingestion", _fake_run_paginated_ingestion)
 
     connector = RocketJobsConnector()
     source = Source(id=1, connector="rocket_jobs", config_json={})
@@ -393,7 +393,7 @@ async def test_rocket_jobs_run_reads_kwargs_from_config(monkeypatch: pytest.Monk
         captured.update(kwargs)
         return IngestionResult(ok=True, fetched=0, created=0)
 
-    monkeypatch.setattr(rocket_jobs, "run_paginated_ingestion", _fake_run_paginated_ingestion)
+    monkeypatch.setattr(sitemap_detail, "run_paginated_ingestion", _fake_run_paginated_ingestion)
 
     connector = RocketJobsConnector()
     source = Source(

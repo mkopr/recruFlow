@@ -5,18 +5,8 @@ import pytest
 from app.connectors.remotive import DEFAULT_CATEGORIES as REMOTIVE_DEFAULT_CATEGORIES
 from app.db.models import Source
 from app.ingestion import registry
-from app.ingestion.normalize import (
-    BULLDOGJOB,
-    JUSTJOINIT,
-    NOFLUFFJOBS,
-    PRACUJ,
-    REMOTEOK,
-    REMOTIVE,
-    ROCKET_JOBS,
-    SOLID_JOBS,
-    WE_WORK_REMOTELY,
-)
-from app.ingestion.registry import ConnectorSpec
+from app.ingestion.normalize import JUSTJOINIT, PRACUJ, REMOTEOK, REMOTIVE, SOLID_JOBS
+from app.ingestion.registry import CONNECTOR_REGISTRY, ConnectorSpec
 from app.scheduler.service import ensure_sources_exist
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,17 +27,7 @@ async def test_ensure_sources_exist_creates_nine_builtin_sources(
     )
     by_connector = {row.connector: row for row in rows if row.connector is not None}
 
-    assert set(by_connector) == {
-        SOLID_JOBS,
-        JUSTJOINIT,
-        NOFLUFFJOBS,
-        BULLDOGJOB,
-        ROCKET_JOBS,
-        PRACUJ,
-        REMOTEOK,
-        REMOTIVE,
-        WE_WORK_REMOTELY,
-    }
+    assert set(by_connector) == set(CONNECTOR_REGISTRY.keys())
     for row in by_connector.values():
         assert row.config_json["schedule"]["type"] == "interval"
         assert row.config_json["connector_enabled"] is True

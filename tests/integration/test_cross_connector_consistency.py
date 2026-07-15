@@ -104,6 +104,17 @@ async def _rows_for_source(session: AsyncSession, source_id: int) -> list[OfferM
     return list(result.scalars().all())
 
 
+# US46 finding #7: this file intentionally covers only the original 3 cursor-paginated JSON
+# connectors (SOLID.Jobs, JustJoin.it, NoFluffJobs) because they share one mocking shape
+# (monkeypatch.setattr(httpx, "get", ...)). The 6 newer connectors' cross-cutting
+# normalization behavior (remote-flag, seniority, salary-currency) is already exercised
+# per-connector in each connector's own tests/test_<name>_connector.py map_offer tests --
+# Bulldogjob/Rocket Jobs need sitemap+detail-page double-fetch mocking and Pracuj needs
+# Playwright mocking this file has no precedent for, so extending this file to all 9 would add
+# new test infrastructure rather than reuse the existing shape. Naming this scope explicitly
+# so a future reader doesn't mistake it for an oversight.
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_all_three_connectors_run_end_to_end_and_persist_valid_offers(
