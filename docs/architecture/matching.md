@@ -134,7 +134,7 @@
   what the (mocked-in-tests, non-deterministic-in-production) LLM output claims. This is scoped to
   salary only, per this story's acceptance criteria; `seniority_fit` has no backing `Profile` field
   at all to be conservative about, and `work_mode_location`/`contract_type` don't get an equivalent
-  backstop yet — tracked as **OD-9** in `user stories/000 high level guide.md`.
+  backstop yet — tracked as **OD-9**.
 - **Routing**: `LANGCHAIN_SOURCES = frozenset({SOLID_JOBS, JUSTJOINIT, NOFLUFFJOBS})` and the pure
   predicate `is_langchain_source(connector)` decide which offers this chain scores — all three real
   connectors route here (see P3US23 below); only a `None`/unrecognised connector (e.g. a manually

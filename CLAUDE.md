@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **recruFlow** is a local job-application automation system for the Polish market. It runs entirely on the developer's machine via Docker Compose, uses a local LLM (Ollama) for AI work, and automates ingestion, scoring, tailoring, and sending of job applications.
 
-The `recruFlow/` directory is the application root (currently bootstrapping). All planning and phase documentation lives in `user stories/`.
+The `recruFlow/` directory is the application root.
 
 ## Tech Stack
 
@@ -45,7 +45,7 @@ Single test: `uv run pytest tests/path/to/test_file.py::test_function_name`
 
 ## Architecture
 
-The system is structured around these phases (see `user stories/000 high level guide.md` for full scope):
+The system is structured around these phases:
 
 - **Phase 0** — Foundations: project scaffold, Docker Compose, DB bootstrap, FastAPI skeleton, CI
 - **Phase 1** — Ingestion: connectors for SOLID.Jobs, JustJoin.it, NoFluffJobs (all direct HTTP APIs); APScheduler; offer list UI
@@ -87,15 +87,14 @@ Use these terms consistently in code, schemas, and PR descriptions:
 | **Remote** | An Offer requiring zero on-site presence. Hybrid arrangements are not Remote — they are tracked in a source's raw payload but not surfaced as a distinct normalised field in v1 |
 | **Contract Type** | The legal/administrative form of an Offer's employment (e.g. UoP, B2B) — distinct from work-time schedule (full-time/part-time), which is not modelled |
 
-## Implementing User Stories
+## Development Workflow
 
-User stories live in `user stories/000 high level guide.md`. When implementing a story:
+When implementing a change:
 
-1. Use `user stories/plan_prompt_compact.txt` to generate a full implementation prompt for the target story — it instructs reading all dependencies, ARCHITECTURE.md, CONVENTIONS.md, and existing tests before writing code.
-2. Mirror patterns from prior stories in the same phase.
-3. Commit convention: `US<NN> <short message>` for stories, matching the story's file ID under `user stories/P<phase>/` (e.g. `US01 python repo scaffold`); `BUG<number> <short message>` for bugs. Single-line subject only — no body, no bullet points, no trailers (e.g. no `Co-Authored-By`).
-4. After implementation, run `make ci` (must be zero failures), then test end-to-end on the real stack with `make up`.
-5. Update the relevant `docs/architecture/*.md` file (see `ARCHITECTURE.md`'s index) to reflect new endpoint contracts or design decisions — root `ARCHITECTURE.md` itself only changes for repo-layout/dependency/core-`app/`-package changes.
+1. Mirror patterns from prior work in the same subsystem — read existing routes/connectors/tests for the pattern to follow before writing new code.
+2. Commit convention: `US<NN> <short message>` for stories, `BUG<number> <short message>` for bugs. Single-line subject only — no body, no bullet points, no trailers (e.g. no `Co-Authored-By`).
+3. After implementation, run `make ci` (must be zero failures), then test end-to-end on the real stack with `make up`.
+4. Update the relevant `docs/architecture/*.md` file (see `ARCHITECTURE.md`'s index) to reflect new endpoint contracts or design decisions — root `ARCHITECTURE.md` itself only changes for repo-layout/dependency/core-`app/`-package changes.
 
 ## Code Quality Rules
 

@@ -34,7 +34,7 @@ async def _reset_test_profiles(session: AsyncSession) -> None:
 async def test_reset_test_profiles_succeeds_when_a_match_score_references_the_default_name(
     db_session: AsyncSession,
 ) -> None:
-    """BUG15 (user stories/BUG/BUG15_...): DEFAULT_PROFILE_NAME ("active-profile") is
+    """BUG15: DEFAULT_PROFILE_NAME ("active-profile") is
     not test-exclusive -- it's the same literal name upsert_active_profile assigns in
     real usage. `_reset_test_profiles`'s "deactivate all, then delete by fixed name"
     strategy assumes it always owns every profile carrying that name, but a real

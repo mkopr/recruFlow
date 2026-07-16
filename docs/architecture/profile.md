@@ -39,7 +39,7 @@
     `_check_salary_range` pattern, because a target below the floor is a real, catchable input
     error, not a legitimate edge case.
 - **Single-active-profile invariant**: exactly one `profiles` row may have `is_active=true` at a
-  time — this is **Open Decision OD-3** from `user stories/000 high level guide.md` ("Profile:
+  time — this is **Open Decision OD-3** ("Profile:
   single active vs named profiles"), resolved as "one active Profile at a time, matching sjctl's
   own default behaviour". Enforced by `app/db/profile_repo.py`'s `activate_profile(session,
   profile_id)`: two `UPDATE` statements in the caller's existing transaction — clear every other
@@ -115,7 +115,7 @@
   section below).
 - **Three-way split LLM call (BUG09)**: `_call_llm` no longer asks the model to fill all of
   `CVExtraction` in a single structured-output call. Manual testing against a real two-page CV
-  (`user stories/CV.pdf`) showed that once the schema grew to cover projects/industry
+  showed that once the schema grew to cover projects/industry
   tags/contact/headline on top of the original five list fields, the local 8B model
   (`llama3.1:8b`) silently returned empty lists for whatever didn't fit in its context budget,
   rather than erroring — first dropping everything but the header fields, then (after trimming
