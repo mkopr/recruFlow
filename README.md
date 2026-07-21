@@ -17,28 +17,27 @@ Docker Compose — no cloud services, no data leaving your box.
 
 ## Contents
 
-- [Screenshots](#screenshots)
-- [Quick start](#quick-start)
-- [Useful commands](#useful-commands)
-- [Environment variables](#environment-variables)
+- [Prerequisites](#prerequisites)
+- [Quick Start](#quick-start)
+- [Useful Commands](#useful-commands)
+- [Environment Variables](#environment-variables)
 - [Walkthrough](#walkthrough)
 - [Architecture](#architecture)
 - [Connectors](#connectors)
-- [Standards & conventions](#standards--conventions)
-- [Domain glossary](#domain-glossary)
+- [Standards & Conventions](#standards--conventions)
+- [Domain Glossary](#domain-glossary)
 - [Roadmap](#roadmap)
 
 ---
 
-## Screenshots
+## Prerequisites
 
-Screenshots of each page are embedded inline in the [Walkthrough](#walkthrough) section below;
-architecture and infrastructure diagrams are in the [Architecture](#architecture) section.
+- [Docker](https://docs.docker.com/get-docker/) + Docker Compose
+- [uv](https://docs.astral.sh/uv/)
+- [pnpm](https://pnpm.io/)
+- Git
 
-## Quick start
-
-**Prerequisites**: [Docker](https://docs.docker.com/get-docker/) + Docker Compose,
-[uv](https://docs.astral.sh/uv/), [pnpm](https://pnpm.io/), Git.
+## Quick Start
 
 ```bash
 git clone <repo-url> && cd recruFlow
@@ -65,7 +64,7 @@ Offers start flowing in automatically — every connector is on its own schedule
 interval) as soon as the `api` container boots, no manual trigger required. Use the **Fetch now**
 buttons on the Offers page, or `POST /ingest/{source}`, to pull immediately instead of waiting.
 
-## Useful commands
+## Useful Commands
 
 Setup & running:
 
@@ -102,7 +101,7 @@ Other:
 | --- | --- |
 | `make clean` | Remove `__pycache__`, `.mypy_cache`, `.ruff_cache`, `.pytest_cache`, `dist`, `build` |
 
-## Environment variables
+## Environment Variables
 
 Copy `.env.example` to `.env` and fill in the blanks — every variable the project uses is
 documented there with a comment. Highlights:
@@ -129,7 +128,9 @@ interpolated by match percentage) that opens a drawer with the per-dimension bre
 rationale on click. A **Fetch now** button per connector triggers an immediate ingestion run.
 Rows you haven't opened yet that score above your alert threshold get a highlighted accent.
 
-<img src="docs/Capture1.JPG" alt="Offers page — filterable offer table with score badges" width="900">
+<p align="center">
+  <img src="docs/Capture1.JPG" alt="Offers page — filterable offer table with score badges" width="900">
+</p>
 
 ### Profile — `/profile`
 
@@ -137,7 +138,9 @@ Upload a CV (PDF/DOCX) and a local LLM extracts a structured profile — skills,
 education, certifications, languages — facts only, nothing invented. Edit any field by hand, then
 **Save** (as a draft) or **Set as active** (the profile every offer gets scored against).
 
-<img src="docs/Capture2.JPG" alt="Profile page — structured candidate profile editor" width="900">
+<p align="center">
+  <img src="docs/Capture2.JPG" alt="Profile page — structured candidate profile editor" width="900">
+</p>
 
 ### Settings — `/settings`
 
@@ -146,7 +149,9 @@ Per-connector cards (fetch cadence, fetch date range, auto-fetch, stop/start), o
 preferences (minimum score to alert on, sound, volume — all live via a Server-Sent Events
 stream).
 
-<img src="docs/Capture4.JPG" alt="Settings page — per-connector cards and notification preferences" width="900">
+<p align="center">
+  <img src="docs/Capture4.JPG" alt="Settings page — per-connector cards and notification preferences" width="900">
+</p>
 
 ### Failures — `/failures`
 
@@ -154,7 +159,9 @@ A dead-letter queue viewer for the ingestion and scoring pipelines. Every antici
 that used to just log-and-drop now lands here as one durable row per failing resource, with a
 **Retry** button that replays it through the original code path.
 
-<img src="docs/Capture3.JPG" alt="Failures page — dead letter queue viewer with retry" width="900">
+<p align="center">
+  <img src="docs/Capture3.JPG" alt="Failures page — dead letter queue viewer with retry" width="900">
+</p>
 
 ## Architecture
 
@@ -167,7 +174,9 @@ that used to just log-and-drop now lands here as one durable row per failing res
 | Scheduling | APScheduler, wired into the FastAPI lifespan |
 | Package managers | `uv` (Python) · `pnpm` (Node) |
 
-<img src="docs/System%20context.JPG" alt="System context diagram" width="900">
+<p align="center">
+  <img src="docs/System%20context.JPG" alt="System context diagram" width="900">
+</p>
 
 Key design decisions:
 
@@ -186,11 +195,15 @@ Key design decisions:
 
 **Ingestion pipeline**
 
-<img src="docs/Ingestion%20pipeline%20flow.JPG" alt="Ingestion pipeline flow diagram" width="900">
+<p align="center">
+  <img src="docs/Ingestion%20pipeline%20flow.JPG" alt="Ingestion pipeline flow diagram" width="900">
+</p>
 
 **Scoring pipeline**
 
-<img src="docs/Scoring%20pipeline%20flow.JPG" alt="Scoring pipeline flow diagram" width="900">
+<p align="center">
+  <img src="docs/Scoring%20pipeline%20flow.JPG" alt="Scoring pipeline flow diagram" width="900">
+</p>
 
 More detail on both flows, plus the full set of infrastructure and sequence diagrams, is in
 [docs/detailed infrastructure diagrams.html](<docs/detailed infrastructure diagrams.html>).
@@ -227,7 +240,7 @@ per-connector code in the scheduler, matcher, or frontend:
 One spike ([The Protocol](docs/architecture/connectors/the-protocol-spike-failed.md)) was
 attempted and abandoned — Cloudflare's Managed Challenge persisted past every mitigation tried.
 
-## Standards & conventions
+## Standards & Conventions
 
 - **Python**: `ruff` (line length 100, ruleset `E/F/I/UP/B/C90`, max cyclomatic complexity 10),
   `mypy` strict where practical.
@@ -244,7 +257,7 @@ attempted and abandoned — Cloudflare's Managed Challenge persisted past every 
 - **Commits**: `US<NN> <short message>` for user stories, `BUG<NN> <short message>` for bug
   fixes — single-line subject, no body, no trailers.
 
-## Domain glossary
+## Domain Glossary
 
 The full glossary lives in [CLAUDE.md](CLAUDE.md) (canonical terms) and
 [CONTEXT.md](CONTEXT.md) (terms sharpened during design sessions, with alternatives rejected).
