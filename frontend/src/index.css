@@ -3,7 +3,7 @@
 :root {
   /* Tells the browser to paint native chrome (select popups, scrollbars,
      form controls) using its dark palette instead of defaulting to light
-     when the page itself never says otherwise (BUG17). */
+     when the page itself never says otherwise. */
   color-scheme: dark;
 
   --color-bg: #0f1115;

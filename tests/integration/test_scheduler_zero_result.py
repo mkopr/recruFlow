@@ -77,7 +77,7 @@ async def test_scheduled_run_first_page_failure_records_ingestion_failure(
     record = await run_source(NOFLUFFJOBS, trigger_type="automatic")
 
     # scheduler_runs' existing status/warning/fetched semantics are untouched by
-    # recording a dead letter alongside them (US33's acceptance criteria).
+    # recording a dead letter alongside them.
     assert record.status == "ok"
     assert record.warning is True
     assert record.fetched == 0

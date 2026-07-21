@@ -2,21 +2,23 @@
 
 [Architecture index](../../../ARCHITECTURE.md) · [Connectors overview](../connectors.md)
 
-### NoFluffJobs connector (P1US4)
+### NoFluffJobs connector
 
-- **Investigation finding (resolves the NoFluffJobs half of OD-4 — JustJoin.it's half was
-  resolved by US12)**: NoFluffJobs exposes a real, unauthenticated JSON endpoint, so Path A (thin
-  HTTP client) was implemented — no Playwright scraper. The endpoint was found by downloading
-  `nofluffjobs.com`'s own served Angular bundle (`main.<hash>.js`) and grepping it for the
-  `HttpClient` gateway code, then confirming every candidate against the live site with `curl` —
-  see `docs/adr/0004-nofluffjobs-json-endpoint-investigation.md` for the full trail. Two candidates
+- **Investigation finding (resolves the NoFluffJobs half of Open Decision OD-4 — JustJoin.it's
+  half was resolved separately, documented in justjoinit.md)**: NoFluffJobs exposes a real,
+  unauthenticated JSON endpoint, so Path A (thin HTTP client) was implemented — no Playwright
+  scraper. The endpoint was found by downloading `nofluffjobs.com`'s own served Angular bundle
+  (`main.<hash>.js`) and grepping it for the `HttpClient` gateway code, then confirming every
+  candidate against the live site with `curl` — see
+  `docs/adr/0004-nofluffjobs-json-endpoint-investigation.md` for the full trail. Two candidates
   were wrong in different ways before the real one was found: `POST /api/search/posting` (the real
   search-results endpoint) requires `salaryCurrency`/`salaryPeriod` query params but then returns a
   bare `500` for every request body shape tried; `GET /api/posting` returns `200` but dumps the
   *entire* current listing inventory unpaginated (~89 MB). The endpoint actually used is:
   `GET https://nofluffjobs.com/api/joboffers/main?pageSize=<N>&salaryCurrency=PLN&salaryPeriod=month`
   — the site's own homepage "recommended offers" feed.
-- **`app/connectors/nofluffjobs.py`** — the third of three sibling connectors (P1US2–US4). Exposes
+- **`app/connectors/nofluffjobs.py`** — the third of three sibling connectors shipped together
+  with SOLID.Jobs and JustJoin.it. Exposes
   `run_nofluffjobs_ingestion(session, source) -> IngestionResult` as the single public entrypoint.
   Does not commit the session and does not create or seed a `Source` row, matching
   `solid_jobs.py`/`justjoinit.py`'s conventions.
@@ -33,7 +35,7 @@
   need the still-broken `search/posting` endpoint (or a different strategy entirely) if a later
   story needs it. Because ingestion is a single HTTP request per run, no `rate_limit_delay_seconds`
   config key exists for this connector — there is nothing to delay between.
-- **`Source.last_fetched_at` is deliberately *not* used to filter or skip offers here (BUG02)**: a
+- **`Source.last_fetched_at` is deliberately *not* used to filter or skip offers here**: a
   tempting fix would be to skip persisting offers whose `posted_at` predates the last successful
   run, but because this endpoint is a re-ranked recommendation feed rather than a stable
   chronological list, an offer could re-enter the feed's ranking later without ever having been
@@ -58,9 +60,8 @@
   | `title` | `title` | |
   | `company` | `name` | Not `company` — NoFluffJobs's own field name for the employer is `name` |
   | `location` | `location.places[].city` | Joined with `", "` (mirrors `map_justjoinit_offer`'s location join) |
-  | `remote` | `location.fullyRemote` | Already a literal boolean matching the `Remote` glossary definition exactly (zero on-site presence) — routed through `app.ingestion.normalize.normalize_remote` (P1US5) unchanged, since a `bool` input is passed straight through. The top-level `fullyRemote` field on the posting itself was observed to always be `False` across a ~2000-record sample and is not used |
-  | `seniority` | `seniority[]` | A list on the wire, observed always length 1 in live sampling; each item mapped to the shared canonical vocabulary via `app.ingestion.normalize.normalize_seniority` (P1US5), then joined with `", "` if ever multi-valued — see "Cross-connector schema consistency" in ../ingestion.md |
-  | `salary_min`/`salary_max`/`salary_currency`/`contract_type` | `salary.{from,to,currency,type}` | `salary.type` takes values `permanent`/`b2b`/`zlecenie` in the wild — passed through verbatim as `contract_type`, permanently no vocabulary translation (out of scope per the `Contract Type` glossary entry, not deferred). Salary values arrive as floats and are coerced to `int`; currency passed through `normalize_salary` (P1US5) |
+  | `remote` | `location.fullyRemote` | Already a literal boolean matching the `Remote` glossary definition exactly (zero on-site presence) — routed through `app.ingestion.normalize.normalize_remote` unchanged, since a `bool` input is passed straight through. The top-level `fullyRemote` field on the posting itself was observed to always be `False` across a ~2000-record sample and is not used |
+  | `seniority` | `seniority[]` | A list on the wire, observed always length 1 in live sampling; each item mapped to the shared canonical vocabulary via `app.ingestion.normalize.normalize_seniority`, then joined with `", "` if ever multi-valued — see "Cross-connector schema consistency" in ../ingestion.md |
+  | `salary_min`/`salary_max`/`salary_currency`/`contract_type` | `salary.{from,to,currency,type}` | `salary.type` takes values `permanent`/`b2b`/`zlecenie` in the wild — passed through verbatim as `contract_type`, permanently no vocabulary translation (out of scope per the `Contract Type` glossary entry, not deferred). Salary values arrive as floats and are coerced to `int`; currency passed through `normalize_salary` |
   | `posted_at` | `posted` | A Unix **milliseconds** epoch integer (not an ISO string, unlike JustJoin.it's `publishedAt`) — divided by 1000 and converted with `datetime.fromtimestamp(..., tz=UTC)` |
   | `description` | *(not mapped — always `None`)* | **Known limitation**, same as JustJoin.it's: the listing payload has no full job-description field |
-

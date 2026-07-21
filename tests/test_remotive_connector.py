@@ -37,9 +37,9 @@ def _fake_fetch_json(payload: Any) -> Any:
 def test_fetch_page_makes_exactly_one_request_regardless_of_configured_categories(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # BUG45: Remotive's `category` query param is a no-op on the live API -- every category
-    # value returns the identical full snapshot -- so N configured categories must still mean
-    # exactly one HTTP request, with the filtering happening client-side afterwards instead.
+    # Remotive's `category` query param is a no-op on the live API -- every category value
+    # returns the identical full snapshot -- so N configured categories must still mean exactly
+    # one HTTP request, with the filtering happening client-side afterwards instead.
     from app.connectors import remotive
 
     fake = _fake_fetch_json(
@@ -87,8 +87,8 @@ def test_fetch_page_filters_out_categories_not_in_configured_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Live evidence (2026-07-15): non-configured categories like Sales/Marketing/Medical had
-    # been silently reaching the DB since P3US43 because server-side filtering never actually
-    # worked -- this is the client-side filter that now makes the configured scope real.
+    # been silently reaching the DB because server-side filtering never actually worked -- this
+    # is the client-side filter that now makes the configured scope real.
     from app.connectors import remotive
 
     fake = _fake_fetch_json(

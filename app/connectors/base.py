@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class JobBoardConnector(ABC):
-    """Template Method shared by every job board connector (P3US37, see
+    """Template Method shared by every job board connector (see
     `docs/adr/0021-jobboardconnector-template-method-boundary.md`).
 
     `fetch_page` and `run` are fixed -- they implement the fetch -> extract ->

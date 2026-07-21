@@ -147,8 +147,8 @@ async def _fetch_offer_details(
     """Detail-fetches each URL in `candidate_urls`, appending successfully parsed records to
     `collected` in place. A failed fetch (`fetch_html` returned `None`, already logged by
     `_fetch_rendered_page`) or a malformed-but-fetched record is skipped, not fatal -- mirrors
-    Bulldogjob/Rocket Jobs's per-URL `if html is None: continue` (`sitemap_detail.py`). BUG43:
-    this used to abort the whole page on the first failed detail fetch, back when this
+    Bulldogjob/Rocket Jobs's per-URL `if html is None: continue` (`sitemap_detail.py`). This
+    used to abort the whole page on the first failed detail fetch, back when this
     connector shared one browser context across an entire run and Cloudflare's challenge meant
     a failure there really did mean every later request in the run was doomed too. Now that
     `run` opens a fresh context per fetch, a single failure is just as likely to be an ordinary
@@ -189,7 +189,7 @@ async def _collect_offers(
     needs, applying `rate_limit_delay_seconds` before every fetch.
 
     `start_page` resumes enumeration from a previous run's persisted `listing_page_cursor`
-    (BUG42, the same class of gap BUG41 fixed for Rocket Jobs/Bulldogjob's sitemap
+    (the same class of gap fixed for Rocket Jobs/Bulldogjob's sitemap
     enumeration): starting at page 1 every run meant every hourly tick re-crawled and
     deduped-away the same first `page_size * max_pages` listings forever, never reaching the
     rest of the category's results.
@@ -198,7 +198,7 @@ async def _collect_offers(
     means the first listing-page fetch itself failed -- `run` maps this straight to
     `IngestionResult(ok=False, ...)`, and `next_start_page` is meaningless in that case.
     `mid_run_failure=True` means a *later listing-page* fetch failed after that (page 2+ of this
-    run) -- unlike an individual detail fetch (see `_fetch_offer_details`'s docstring, BUG43),
+    run) -- unlike an individual detail fetch (see `_fetch_offer_details`'s docstring),
     losing the listing page itself means there's no way to know what the rest of that page's
     offer URLs even were, so collection stops there rather than guessing; whatever was already
     collected is still returned so it gets persisted, and `next_start_page` points back at the
@@ -298,7 +298,7 @@ class PracujConnector(JobBoardConnector):
     stock Playwright Chromium clears the challenge cleanly and repeatedly, so this connector's
     entire fetch path -- enumeration and detail alike -- goes through a Playwright browser
     context. One browser *process* is launched per run and reused, but each fetch gets its own
-    fresh context (BUG43: the challenge allows exactly one clean navigation per context before
+    fresh context (the challenge allows exactly one clean navigation per context before
     blocking every later request in it, so context reuse across fetches silently zeroed out
     every automated run).
 
@@ -406,14 +406,14 @@ class PracujConnector(JobBoardConnector):
         rate_limit_delay_seconds = float(
             config.get("rate_limit_delay_seconds", DEFAULT_RATE_LIMIT_DELAY_SECONDS)
         )
-        # BUG42: Pracuj.pl's search-listing enumeration has the same stable-but-not-recency-
-        # sorted shape as Rocket Jobs/Bulldogjob's sitemaps (BUG41) -- resume from where the
+        # Pracuj.pl's search-listing enumeration has the same stable-but-not-recency-
+        # sorted shape as Rocket Jobs/Bulldogjob's sitemaps -- resume from where the
         # last run left off instead of re-crawling page 1 every time.
         start_page = int(config.get("listing_page_cursor", 1) or 1)
         if start_page < 1:
             start_page = 1
 
-        # US47 Fetch Scope: a cheap short-circuit before launching Chromium for a run that's
+        # Fetch Scope: a cheap short-circuit before launching Chromium for a run that's
         # going to be blocked anyway.
         scope_resolution = await resolve_fetch_scope_terms(session, config)
         if scope_resolution.blocked_reason is not None:
@@ -427,7 +427,7 @@ class PracujConnector(JobBoardConnector):
             try:
 
                 async def fetch_html(url: str) -> str | None:
-                    # BUG43: Cloudflare's Managed Challenge on this zone lets exactly one
+                    # Cloudflare's Managed Challenge on this zone lets exactly one
                     # clean navigation through per browser context, then blocks (403,
                     # challenge page) every later request in that same context regardless
                     # of delay -- confirmed live 2026-07-15 by reproducing listing-then-
@@ -444,7 +444,7 @@ class PracujConnector(JobBoardConnector):
                         await context.close()
 
                 if filtered_terms:
-                    # Filtered runs don't participate in BUG42's listing_page_cursor
+                    # Filtered runs don't participate in the listing_page_cursor
                     # resumption -- always start_page=1 per term, a deliberate scope
                     # reduction documented alongside Bulldogjob's own filtered-mode gap
                     # (docs/adr/0027).
@@ -524,7 +524,7 @@ class PracujConnector(JobBoardConnector):
             logger=logger,
             since=since,
             until=until,
-            # Pracuj.pl's search-listing order isn't recency-sorted either (see BUG41/ADR
+            # Pracuj.pl's search-listing order isn't recency-sorted either (see ADR
             # 0017) -- a wholly-stale prefetched batch says nothing about the rest of the
             # (already fully prefetched) listing.
             sorted_by_recency=False,

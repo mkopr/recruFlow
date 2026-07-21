@@ -7,7 +7,7 @@ from app.ingestion.registry import CONNECTOR_REGISTRY
 def test_label_matches_connector_name_for_every_class_backed_entry() -> None:
     # Guards against `label` and `dispatch.__self__.name` drifting apart -- mirrors
     # `test_langchain_sources_equals_registry_keys`'s "would fail loudly if a future edit
-    # desyncs them" framing (US46).
+    # desyncs them" framing.
     for connector, spec in CONNECTOR_REGISTRY.items():
         instance = getattr(spec.dispatch, "__self__", None)
         if isinstance(instance, JobBoardConnector):

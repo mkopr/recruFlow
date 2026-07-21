@@ -162,8 +162,8 @@ async def run_we_work_remotely_ingestion(
     RSS/XML feed (its `/api/v1/remote-jobs/` endpoint returns 401, `WWW-Authenticate: Token
     realm="Application"`, confirmed live 2026-07-15; see ARCHITECTURE.md), not JSON, and has
     no cursor, while `JobBoardConnector.fetch_page` is fixed around `fetch_json` plus a
-    cursor. This is this connector batch's one deliberate exception (P3US44), not an
-    oversight left over from the P3US37 refactor.
+    cursor. This is this connector batch's one deliberate exception, not an
+    oversight left over from the shared Template Method refactor other connectors went through.
     """
     config = source.config_json or {}
     since, until = resolve_fetch_range(config.get("fetch_range"))

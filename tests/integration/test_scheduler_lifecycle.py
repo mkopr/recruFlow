@@ -31,15 +31,15 @@ async def test_lifespan_registers_one_job_per_builtin_source_with_configured_int
     for connector in (SOLID_JOBS, JUSTJOINIT, NOFLUFFJOBS):
         assert build_job_id(connector) in jobs
 
-    # P3US28: all three built-in connectors now default to a uniform 300s interval.
+    # All three built-in connectors default to a uniform 300s interval.
     expected_seconds = _default_config_template()["schedule"]["seconds"]
     for connector in (SOLID_JOBS, JUSTJOINIT, NOFLUFFJOBS):
         job = jobs[build_job_id(connector)]
         assert isinstance(job.trigger, IntervalTrigger)
         assert job.trigger.interval.total_seconds() == expected_seconds
 
-    # BUG24: the backlog-draining job must be registered independently of any
-    # per-source ingestion schedule, so it keeps advancing even between fetches.
+    # The backlog-draining job must be registered independently of any per-source
+    # ingestion schedule, so it keeps advancing even between fetches.
     assert SCORING_JOB_ID in jobs
     assert isinstance(jobs[SCORING_JOB_ID].trigger, IntervalTrigger)
 
@@ -179,8 +179,8 @@ async def test_register_jobs_pauses_job_for_source_with_auto_fetch_disabled() ->
 @pytest.mark.asyncio
 async def test_register_jobs_pauses_job_for_source_with_connector_disabled() -> None:
     # Mirrors test_register_jobs_pauses_job_for_source_with_auto_fetch_disabled above, but for
-    # the other half of connector_should_auto_run's AND (P3US37): auto_fetch_enabled=True alone
-    # must not be enough to leave the job running if connector_enabled is False.
+    # the other half of connector_should_auto_run's AND: auto_fetch_enabled=True alone must
+    # not be enough to leave the job running if connector_enabled is False.
     engine = get_engine()
     sessionmaker = get_sessionmaker(engine)
     connector = f"stopped-{uuid4()}"

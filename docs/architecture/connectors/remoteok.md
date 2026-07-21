@@ -2,15 +2,15 @@
 
 [Architecture index](../../../ARCHITECTURE.md) · [Connectors overview](../connectors.md)
 
-### RemoteOK connector (P3US42)
+### RemoteOK connector
 
 - **Purpose**: the simplest of the seven new job-board connectors added after Phase 3, and
   deliberately so — RemoteOK exposes a genuine, confirmed, public, unauthenticated JSON API at
   `GET https://remoteok.com/api`, no signup/key, and no pagination at all: a single `GET` returns
   a bare JSON array with no cursor/page parameter of any kind. This makes `RemoteOKConnector`
-  structurally immune to the BUG41/BUG42 cursor-restart bug class (there is no cursor to persist
-  incorrectly, because there is no cursor), and needs no sitemap-walking helper, no Playwright,
-  and no per-page rate-limit throttle.
+  structurally immune to the cursor-restart bug class two earlier connectors hit (there is no
+  cursor to persist incorrectly, because there is no cursor), and needs no sitemap-walking
+  helper, no Playwright, and no per-page rate-limit throttle.
 
 - **The endpoint's real payload size is a fixed ~100-item rolling window, not an exhaustive
   archive**: confirmed live 2026-07-14 with plain `curl` against the real endpoint — the response
@@ -67,9 +67,8 @@
   `120`-second interval — shorter than the shared `300`s default, the opposite direction from
   Pracuj.pl's longer-interval override, since this is a single lightweight GET with no pagination
   cost. No scheduler, matcher, or frontend edit beyond the registry entry and this one interval
-  override was needed — the same P3US37 "adding a connector" checklist outcome every connector
+  override was needed — the same "adding a connector" checklist outcome every connector
   since Bulldogjob has confirmed. Automatically scoring-eligible via `LANGCHAIN_SOURCES`
   (`app/llm/matcher.py`) deriving from `CONNECTOR_REGISTRY.keys()`, and automatically visible to
   the frontend via `useKnownSources()`'s `GET /connectors` call — no `app/llm/matcher.py` or
   `frontend/src/` edit was needed for this connector at all.
-

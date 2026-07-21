@@ -149,11 +149,11 @@ async def _wipe_all_offers_and_dependents(session: AsyncSession) -> None:
 async def test_list_offers_returns_offers_from_multiple_sources_within_requested_scope(
     client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
-    # A request with no filters only returns page one (BUG26 pagination) against a dev
-    # DB that carries a large, ever-growing real backlog, so two bare test offers would
-    # be buried past page one and never come back — scope both sources to one shared
-    # connector instead so a single `source` filter still exercises "multiple sources,
-    # one query" without competing against the rest of the table.
+    # A request with no filters only returns page one against a dev DB that carries a large,
+    # ever-growing real backlog, so two bare test offers would be buried past page one and
+    # never come back — scope both sources to one shared connector instead so a single
+    # `source` filter still exercises "multiple sources, one query" without competing
+    # against the rest of the table.
     connector = f"multi-src-{uuid4()}"
     source_a = await _create_source(db_session, connector=connector)
     source_b = await _create_source(db_session, connector=connector)
@@ -201,8 +201,8 @@ async def test_list_offers_filters_by_source(
 async def test_list_offers_filters_by_remote(
     client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
-    # Scoped to a dedicated connector (BUG26 pagination): otherwise these two bare
-    # test offers compete for page one against the dev DB's real backlog.
+    # Scoped to a dedicated connector: otherwise these two bare test offers compete
+    # for page one against the dev DB's real backlog.
     connector = f"remote-filter-{uuid4()}"
     source_id = await _create_source(db_session, connector=connector)
     remote_offer = await _create_offer(db_session, source_id, remote=True)
@@ -232,8 +232,8 @@ async def test_list_offers_filters_by_remote(
 async def test_list_offers_filters_by_seniority_substring_match(
     client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
-    # Scoped to a dedicated connector (BUG26 pagination): otherwise these two bare
-    # test offers compete for page one against the dev DB's real backlog.
+    # Scoped to a dedicated connector: otherwise these two bare test offers compete
+    # for page one against the dev DB's real backlog.
     connector = f"senior-filt-{uuid4()}"
     source_id = await _create_source(db_session, connector=connector)
     senior_offer = await _create_offer(db_session, source_id, seniority="senior, lead")
@@ -255,8 +255,8 @@ async def test_list_offers_filters_by_seniority_substring_match(
 async def test_list_offers_filters_by_min_salary_meets_or_exceeds(
     client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
-    # Scoped to a dedicated connector (BUG26 pagination): otherwise these bare
-    # test offers compete for page one against the dev DB's real backlog.
+    # Scoped to a dedicated connector: otherwise these bare test offers compete
+    # for page one against the dev DB's real backlog.
     connector = f"min-sal-filt-{uuid4()}"
     source_id = await _create_source(db_session, connector=connector)
     above_max = await _create_offer(db_session, source_id, salary_max=20000)
@@ -368,7 +368,7 @@ async def test_list_offers_sorts_by_score_percent_desc_across_full_dataset(
     # Server-side sort must reflect the full dataset, not just the newest page: the
     # highest score here (92) belongs to the *oldest* posted offer, so a naive
     # posted_at-ordered page followed by client-side re-sort would never surface it
-    # correctly once paginated (BUG31).
+    # correctly once paginated.
     await _deactivate_all_profiles(db_session)
     connector = f"sort-score-{uuid4()}"
     source_id = await _create_source(db_session, connector=connector)
@@ -463,8 +463,8 @@ async def test_list_offers_sorts_by_score_percent_asc_unscored_still_last(
 async def test_list_offers_score_sort_applies_before_pagination(
     client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
-    # Regression guard for BUG31: page two of a score-sorted request must be the
-    # next-best scores overall, not whatever posted_at-ordered offers landed there.
+    # Regression guard: page two of a score-sorted request must be the next-best
+    # scores overall, not whatever posted_at-ordered offers landed there.
     await _deactivate_all_profiles(db_session)
     connector = f"sort-page-{uuid4()}"
     source_id = await _create_source(db_session, connector=connector)

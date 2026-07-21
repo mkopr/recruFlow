@@ -18,7 +18,7 @@ export interface UseOffersResult {
 }
 
 // Filter changes (esp. every keystroke in "Min salary") are debounced by this
-// much before firing the network fetch (BUG17) — the initial load on mount
+// much before firing the network fetch — the initial load on mount
 // is exempt so the page doesn't sit idle for no reason.
 const FILTER_DEBOUNCE_MS = 300;
 

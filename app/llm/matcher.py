@@ -293,7 +293,7 @@ async def score_offers_with_langchain(
     chain_factory: Callable[[], MatcherChain] = _build_chain,
     on_progress: Callable[[int], None] | None = None,
 ) -> list[MatchScoreModel]:
-    # BUG40: `connectors` defaults to LANGCHAIN_SOURCES for backward compatibility, but a
+    # `connectors` defaults to LANGCHAIN_SOURCES for backward compatibility, but a
     # caller that already scoped its own offer selection to an explicit connector set (e.g.
     # app/scoring/batch.py's select_scoring_candidates) must pass that same set here --
     # otherwise this per-offer gate silently falls back to the module-level default and

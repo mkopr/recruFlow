@@ -400,7 +400,7 @@ async def test_run_solid_jobs_ingestion_respects_max_pages_ceiling(
     assert result.created == 3
 
 
-# US34 -- fetch_range integration for this connector. justjoinit/nofluffjobs get at least one
+# fetch_range integration for this connector. justjoinit/nofluffjobs get at least one
 # equivalent smoke test added by the same pattern; the filtering logic itself lives in the
 # shared runner (see tests/test_ingestion_runner.py) but each connector's raw posted_at shape
 # (an ISO string here, an already-parsed datetime for nofluffjobs) is worth a direct check.
@@ -508,7 +508,7 @@ async def test_run_solid_jobs_ingestion_range_filter_does_not_trip_already_seen_
     assert result.created == 1
 
 
-# US47 -- Fetch Scope filtered-mode integration for SOLID.Jobs.
+# Fetch Scope filtered-mode integration for SOLID.Jobs.
 
 
 @pytest.mark.integration
@@ -607,8 +607,8 @@ async def test_filtered_fetch_scope_blocked_run_is_recorded_and_retryable_via_dl
     scheduled_client: httpx.AsyncClient,
 ) -> None:
     # End-to-end through the real HTTP surface: PUT fetch-scope filtered -> POST /ingest ->
-    # GET /failures/ingestion -> POST retry, reusing BUG37's existing "IngestionResult(ok=False)
-    # becomes a RUN_FETCH_FAILED row" pathway with zero new DLQ code (US47).
+    # GET /failures/ingestion -> POST retry, reusing the existing "IngestionResult(ok=False)
+    # becomes a RUN_FETCH_FAILED row" pathway with zero new DLQ code.
     engine = get_engine()
     sessionmaker = get_sessionmaker(engine)
     try:
@@ -647,7 +647,7 @@ async def test_filtered_fetch_scope_blocked_run_is_recorded_and_retryable_via_dl
     finally:
         # Reset the real, singleton solid_jobs Source row back to defaults so later tests in
         # this suite that hit /ingest/solid_jobs or /scheduler/... aren't silently blocked by
-        # this test's fetch-scope change (mirrors BUG28's "tests must not leak shared state").
+        # this test's fetch-scope change (tests must not leak shared state).
         reset_response = await scheduled_client.put(
             "/scheduler/sources/solid_jobs/fetch-scope", json={"mode": "all"}
         )

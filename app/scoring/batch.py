@@ -52,7 +52,7 @@ class ScoringProgress:
 
 _progress = ScoringProgress()
 
-# BUG29: run_batch_scoring has independent callers (the scheduled backlog job and the
+# run_batch_scoring has independent callers (the scheduled backlog job and the
 # manual /score/batch route) that can otherwise overlap in the same event loop -- each
 # opens its own session and awaits real network calls to Ollama, leaving plenty of time
 # for a second call to pick up the same "unscored" offers before the first commits. This
@@ -68,8 +68,9 @@ def _open_scoring_failures(profile_id: int) -> Select[tuple[int]]:
     """Offer ids with an unresolved ScoringFailure for this profile.
 
     Excluded from selection so a batch doesn't keep spending its whole limit
-    re-attempting offers that fail deterministically (e.g. BUG32's salary_fit
-    validation bug) -- that starved genuinely-new offers of any progress since
+    re-attempting offers that fail deterministically (e.g. a salary_fit validation bug
+    that made certain offers fail scoring every time) -- that starved genuinely-new
+    offers of any progress since
     the same handful of offers are always "newest unscored" and get reselected
     every run. Resolving (or retrying via POST /failures/scoring/{id}/retry)
     the underlying ScoringFailure row makes an offer eligible again.
@@ -100,7 +101,7 @@ def _candidate_offers_stmt(
 
 
 def _in_fetch_range(offer: OfferModel, config_json: dict[str, Any] | None) -> bool:
-    """Whether `offer` falls inside its Source's configured `fetch_range` (US34/US36).
+    """Whether `offer` falls inside its Source's configured `fetch_range`.
 
     Undated offers evaluate as "now", same fallback `resolve_fetch_range`'s callers in
     `app/ingestion/runner.py` use (ADR 0017) -- never as "always eligible", since a

@@ -196,10 +196,9 @@ def test_join_location_returns_none_when_all_parts_empty() -> None:
 
 
 def test_join_location_preserves_strings_longer_than_255_chars() -> None:
-    """BUG44: WWR postings open to a long list of regions produced a joined location over
-    255 chars, which used to fail Offer schema validation and drop the whole posting -- the
-    join itself must not truncate; the fix widened Offer.location instead (see
-    test_offer_schema.py)."""
+    """WWR postings open to a long list of regions produced a joined location over 255 chars,
+    which used to fail Offer schema validation and drop the whole posting -- the join itself
+    must not truncate; the fix widened Offer.location instead (see test_offer_schema.py)."""
     raw = {
         "region": "Anywhere in the World",
         "country": ", ".join(f"Country {i}" for i in range(30)),

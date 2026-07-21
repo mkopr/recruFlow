@@ -54,9 +54,9 @@ def _job(job_id: int, **overrides: Any) -> dict[str, Any]:
 
 
 def _single_response(jobs: list[dict[str, Any]]) -> Any:
-    # BUG45: the connector now makes exactly one request per run (Remotive's `category`
-    # query param turned out to be a no-op live), so the fake transport no longer needs to
-    # route by category -- every call gets the same full jobs list back.
+    # The connector makes exactly one request per run (Remotive's `category` query param
+    # turned out to be a no-op live), so the fake transport doesn't need to route by
+    # category -- every call gets the same full jobs list back.
     def _get(url: str, params: dict[str, Any] | None = None, **kwargs: Any) -> _FakeResponse:
         assert url == REMOTIVE_URL
         assert params == {}
@@ -155,9 +155,9 @@ async def test_run_remotive_ingestion_rerun_dedups_across_runs(
 async def test_run_remotive_ingestion_excludes_non_configured_categories(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # BUG45: this scope used to be (unintentionally) unenforced, because Remotive's
-    # `category` query param is a no-op live -- Sales/Marketing/Medical jobs had been
-    # silently reaching the DB despite `categories` only listing software-development. The
+    # This scope used to be (unintentionally) unenforced, because Remotive's `category`
+    # query param is a no-op live -- Sales/Marketing/Medical jobs had been silently
+    # reaching the DB despite `categories` only listing software-development. The
     # client-side filter added in `fetch_page` is what actually makes this scope real.
     source = await _create_source(db_session)
     source.config_json = {"categories": ["software-development"]}

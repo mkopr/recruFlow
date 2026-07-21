@@ -79,12 +79,12 @@ def _pick_salary(job: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
 
 
 class BulldogjobConnector(SitemapDetailPageConnector):
-    """Bulldogjob has no offset/cursor-paginated endpoint (US38's Domain Decision): its real
-    "next page" affordance is a client-side call not observable from a plain request (see
+    """Bulldogjob has no offset/cursor-paginated endpoint: its real "next page" affordance is
+    a client-side call not observable from a plain request (see
     `docs/adr/0023-bulldogjob-sitemap-and-embedded-next-data-investigation.md`). This connector
     instead enumerates every live job URL from Bulldogjob's own sitemap, then live-fetches each
     URL's HTML and parses its embedded `__NEXT_DATA__` JSON, via the shared
-    `SitemapDetailPageConnector` base (US46, see also `RocketJobsConnector`).
+    `SitemapDetailPageConnector` base (see also `RocketJobsConnector`).
     """
 
     name = "Bulldogjob"

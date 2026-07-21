@@ -2,10 +2,10 @@
 
 [Architecture index](../../ARCHITECTURE.md)
 
-### Offer schema and dedup strategy (P1US1)
+### Offer schema and dedup strategy
 
 - **`app/schemas/offer.py`** — `Offer(BaseModel)`, the canonical, source-agnostic shape every
-  connector (P1US2–US4: SOLID.Jobs, JustJoin.it, NoFluffJobs) maps its source-specific payload
+  connector (SOLID.Jobs, JustJoin.it, NoFluffJobs) maps its source-specific payload
   into before persistence. Fields mirror every `offers` column except `id`, `dedup_hash`,
   `raw_payload`, `created_at`, `updated_at` — those are ingestion-pipeline concerns, not
   connector-mapping concerns: the persistence layer computes `dedup_hash`, attaches
@@ -41,10 +41,10 @@
     can keep processing the rest of a page after one bad record.
   - `persist_offer(session, offer, raw_payload) -> tuple[OfferModel, bool]` — computes
     `dedup_hash`, then `INSERT ... ON CONFLICT (dedup_hash) DO NOTHING ... RETURNING id`
-    (the same idempotent-upsert idiom `seed.py` already used pre-P1US1), followed by a re-`SELECT`
+    (the same idempotent-upsert idiom `seed.py` already used previously), followed by a re-`SELECT`
     by `dedup_hash` since `RETURNING` doesn't surface the pre-existing row's `id` on conflict. The
     returned `bool` is `True` only when a row was actually inserted, so a caller batching many
-    offers (P1US5's scheduler) can report new-vs-seen counts. Deliberately out of scope: a
+    offers (the scheduler, described below) can report new-vs-seen counts. Deliberately out of scope: a
     re-ingested offer's fields are never refreshed (`DO NOTHING`, not `DO UPDATE`) — the first
     snapshot ingested is kept forever until a later story adds field-refresh-on-reingest; this
     matches the acceptance criteria's literal "does not create a duplicate row" and avoids the
@@ -56,12 +56,12 @@
     record (already logged inside `normalize_and_validate` — never logged twice), otherwise
     `persist_offer`'s `(row, created)` tuple.
 
-### Cross-connector schema consistency (P1US5)
+### Cross-connector schema consistency
 
-- **Purpose**: P1US2–US4 built each connector in isolation; each one's own test file said so
-  explicitly ("no cross-source vocabulary unification happens here — that is US14's job"). This
-  story is the integration checkpoint — all three connectors were run and their output compared
-  field by field before the scheduler (P1US6) and ingestion API (P1US7) start depending on them
+- **Purpose**: the three connectors were originally built in isolation, each one's own test file
+  saying explicitly that no cross-source vocabulary unification happened there yet. This
+  effort was the integration checkpoint — all three connectors were run and their output compared
+  field by field before the scheduler and ingestion API (described below) started depending on them
   producing genuinely comparable `Offer` rows.
 - **`app/ingestion/normalize.py`** — new shared module, mirroring `app/ingestion/dedup.py`'s style
   (small pure functions, a module logger, no I/O). Owns: seniority-vocabulary mapping,
@@ -146,17 +146,17 @@
     stays silent), a `WARNING` is logged naming the source and figures; recruFlow performs no
     net-to-gross conversion and stores the figures unchanged.
 
-### Scheduler (P1US6)
+### Scheduler
 
-- **Purpose**: all three connectors (P1US2–US4) exist and produce comparable `Offer` rows
-  (P1US5), but nothing yet calls them automatically or on a schedule, and nothing reports on what
-  happened when they ran. This story wires `APScheduler` into the FastAPI lifespan, gives each
-  source its own configurable schedule, and adds a manual trigger endpoint plus a status endpoint.
-  P1US7 (ingestion API endpoints, not part of this story) will add its own `POST /ingest/{source}`
-  reusing this story's dispatch seam (see "Registry/dispatch design" below) — do not confuse this
-  story's per-source ingestion scheduler with the later, separate P6US2 Digest job, and do not
-  confuse this story's single-run zero-result warning with P6US1's later two-consecutive-run
-  escalation and dedicated `/health/sources` endpoint — both are explicitly out of scope here.
+- **Purpose**: all three connectors exist and produce comparable `Offer` rows, but nothing yet
+  calls them automatically or on a schedule, and nothing reports on what happened when they ran.
+  This effort wires `APScheduler` into the FastAPI lifespan, gives each source its own
+  configurable schedule, and adds a manual trigger endpoint plus a status endpoint. The ingestion
+  API endpoints (described below) add their own `POST /ingest/{source}` reusing this dispatch seam
+  (see "Registry/dispatch design" below) — this per-source ingestion scheduler is distinct from
+  the later, separate Digest job, and this single-run zero-result warning is distinct from a later
+  two-consecutive-run escalation and dedicated `/health/sources` endpoint planned for the
+  hardening phase — both are explicitly out of scope here.
 
 - **Lifecycle within the FastAPI lifespan** (`app/main.py`): `app/main.py` gained a `lifespan`
   context manager — the first time this file has had one. On startup it builds its own long-lived
@@ -169,14 +169,14 @@
   explicitly to document intent; it does not risk hanging indefinitely because every connector
   already enforces its own request timeout (all three connectors' `httpx.get` calls pass an
   explicit `timeout`), so an in-flight job always finishes or times out within a bounded window.
-- **Real behavioral change, documented deliberately**: before this story, FastAPI could start even
-  with the DB down (only `/health/db` would fail per request). After this story, startup itself
+- **Real behavioral change, documented deliberately**: before this, FastAPI could start even
+  with the DB down (only `/health/db` would fail per request). After this, startup itself
   calls `ensure_sources_exist`/`register_jobs`, so the app now fails to start if the DB is
   unreachable or unmigrated. `docker-compose.yml`'s `api` service `depends_on: db: condition:
   service_healthy` only guarantees Postgres itself is up, not that `alembic upgrade head` has
   already run — `make up` alone does not run migrations; `make migrate` must be run once against a
-  fresh database before the `api` container will start cleanly. This is a real, new coupling
-  introduced by this story, not a defect to silently work around.
+  fresh database before the `api` container will start cleanly. This is a real, new coupling,
+  not a defect to silently work around.
 
 - **`sources.connector` vs. `sources.name`**: a new nullable `String(50)` column,
   `sources.connector`, holds one of the three connector identity constants
@@ -206,15 +206,15 @@
   block other sources' jobs from registering. The three built-in sources' shipped defaults
   (`app.scheduler.service.DEFAULT_SOURCE_CONFIGS`): `solid_jobs` — interval, 3600s (1h); `justjoinit`
   — interval, 1800s (30m); `nofluffjobs` — cron, `"0 */2 * * *"` (every 2 hours on the hour).
-  **Superseded by P3US28**: all three built-in connectors now default to a uniform interval
+  **Superseded later**: all three built-in connectors now default to a uniform interval
   schedule of 300s (5 minutes) instead of the mixed values above, and every source's interval is
-  user-editable at runtime via `PUT /scheduler/sources/{source}/interval` — see the P3US28 notes
-  below.
+  user-editable at runtime via `PUT /scheduler/sources/{source}/interval` — see the "Configurable
+  auto-fetch cadence" notes below.
 
 - **`scheduler_runs` table, not `sources.last_run_*` columns**: a new table rather than columns on
   `sources`, matching the project's existing ELT/audit-trail instinct (raw payloads are always kept,
   not overwritten) — this keeps `GET /scheduler/status` queryable by "latest row per source" cheaply
-  via the `(source_id, started_at)` index, and leaves headroom for P6US1's later two-consecutive-run
+  via the `(source_id, started_at)` index, and leaves headroom for a later two-consecutive-run
   escalation without a further migration. Columns: `id`, `source_id` (FK), `trigger_type`
   (`"automatic"`/`"manual"`), `status` (`"running"`/`"ok"`/`"error"`, unconstrained string, no DB
   enum — same convention as `applications.status`), `fetched_count`/`created_count` (nullable
@@ -227,7 +227,7 @@
   `SELECT`. None of `runs.py`'s functions commit — same transaction-boundary convention as
   `app.ingestion.persist`.
 
-- **`Source.last_fetched_at` (BUG02) is not a violation of the "no `sources.last_run_*` columns"
+- **`Source.last_fetched_at` is not a violation of the "no `sources.last_run_*` columns"
   choice above** — it serves a different consumer. `scheduler_runs` remains the full, append-only
   audit trail (every run, including errors, warnings, and per-run counts) queried by `GET
   /scheduler/status`. `Source.last_fetched_at` is a single narrow checkpoint a connector reads back
@@ -240,7 +240,7 @@
   `docs/adr/0009-justjoinit-incremental-pagination-strategy.md`.
 
 - **Registry/dispatch design** (`app/ingestion/registry.py`, moved from `app/scheduler/registry.py`
-  by BUG04 — the ingestion package now owns the dispatch seam its name always promised, and
+  so the ingestion package now owns the dispatch seam its name always promised, and
   `app/scheduler` is left with only APScheduler job registration and run-tracking, per ADR 0006) —
   the seam every "run a connector" flow reuses, not reimplements: `CONNECTOR_REGISTRY: dict[str,
   Connector]` maps each connector constant to a private adapter (`_dispatch_solid_jobs`/
@@ -261,15 +261,15 @@
   `resolve_source_by_connector` + `dispatch_ingestion` directly rather than duplicating
   connector-selection logic.
 
-- **`force_refresh` is now genuinely threaded through every connector, not just `solid_jobs`
-  (BUG06)** — `_dispatch_justjoinit`/`_dispatch_nofluffjobs` used to accept `force_refresh` (to
+- **`force_refresh` is now genuinely threaded through every connector, not just `solid_jobs`** —
+  `_dispatch_justjoinit`/`_dispatch_nofluffjobs` used to accept `force_refresh` (to
   satisfy the shared `Connector` protocol) and then silently drop it, so the interface promised
   uniform behavior none of the connectors but `solid_jobs` actually had. Fixed per-connector, not
   by dropping the parameter, since JustJoin.it turned out to have real meaning to give it:
-  `run_justjoinit_ingestion(..., force_refresh=True)` now bypasses the BUG02/ADR0009 early-stop
-  checkpoint, walking pagination all the way to `max_pages` regardless of the
-  consecutive-already-seen streak — see `docs/adr/0010-force-refresh-threaded-through-all-connectors.md`.
-  NoFluffJobs has no equivalent checkpoint to bypass (no pagination loop at all, per BUG02/ADR0009
+  `run_justjoinit_ingestion(..., force_refresh=True)` now bypasses the incremental-pagination
+  early-stop checkpoint (see ADR 0009), walking pagination all the way to `max_pages` regardless of
+  the consecutive-already-seen streak — see `docs/adr/0010-force-refresh-threaded-through-all-connectors.md`.
+  NoFluffJobs has no equivalent checkpoint to bypass (no pagination loop at all, per ADR 0009
   above), so `run_nofluffjobs_ingestion` accepts `force_refresh` for interface parity and documents
   in-line why it's a deliberate no-op rather than continuing to swallow it silently one layer down.
 
@@ -278,7 +278,8 @@
   here. `AsyncIOScheduler` shares uvicorn's single event loop and only offloads a job to its thread
   pool when the registered callable is a plain function — an `async def` job runs directly on the
   main loop instead. None of the three connectors are actually non-blocking on their own (all
-  three call synchronous `httpx.get`, since BUG10 removed SOLID.Jobs' subprocess call), so an
+  three call synchronous `httpx.get`, since SOLID.Jobs' subprocess call was later removed in
+  favor of a direct HTTP call), so an
   `async def` scheduler job would block the *entire* API for the duration of every run.
   `app.scheduler.service.run_source_sync` is therefore a plain `def`: it builds its own throwaway
   `AsyncEngine`/sessionmaker (via `get_engine()`/`get_sessionmaker()` — never the request-scoped,
@@ -304,8 +305,8 @@
   condition is hit, a `WARNING` is logged via the module logger `app.scheduler.service` naming the
   connector, and `GET /scheduler/status`'s `last_run_warning` reflects it. Note that a connector's
   own internally-handled failure (e.g. an HTTP transport error, malformed JSON) already
-  returns `IngestionResult(ok=False, fetched=0, ...)` rather than raising (established connector
-  convention from P1US2–US4) — from the scheduler's perspective this is indistinguishable from a
+  returns `IngestionResult(ok=False, fetched=0, ...)` rather than raising (an established
+  connector convention) — from the scheduler's perspective this is indistinguishable from a
   "genuinely zero offers available" run: both surface as `status="ok"`, `warning=True`.
   `SchedulerRun.status="error"` is reserved for an actual Python exception escaping
   `dispatch_ingestion` (verified via a mocked `RuntimeError` in
@@ -329,22 +330,22 @@
   NULL`, calls `get_latest_run_by_source` once per source (an intentional N+1-per-source query
   pattern — acceptable given only three sources exist; not worth a window-function query), and
   defaults every `last_run_*` field to `None`/`False` when a source has never run.
-  `SourceStatus.last_fetched_at` (BUG02) is read straight off `Source.last_fetched_at` (see above)
+  `SourceStatus.last_fetched_at` is read straight off `Source.last_fetched_at` (see above)
   rather than derived from the joined `SchedulerRun` — it is `None` for a source that has never
   completed a run.
 
-### Ingestion API endpoints (P1US7)
+### Ingestion API endpoints
 
-- **Purpose**: all three connectors now run automatically on a schedule (P1US6) and produce
+- **Purpose**: all three connectors now run automatically on a schedule and produce
   comparable, deduplicated, persisted `Offer` rows, but nothing yet lets a job seeker force an
   out-of-band fetch through a dedicated ingestion-facing endpoint, or browse/inspect what has
-  actually been stored. This story adds `POST /ingest/{source}`, `GET /offers`, and
-  `GET /offers/{offer_id}` to close that gap. It is the direct dependency for P1US8 (offer list
-  page, frontend), which builds a table against `GET /offers` and wires a "Fetch now" button per
-  source to `POST /ingest/{source}`.
+  actually been stored. This adds `POST /ingest/{source}`, `GET /offers`, and
+  `GET /offers/{offer_id}` to close that gap. It is the direct dependency for the offer list
+  page (frontend, described below), which builds a table against `GET /offers` and wires a
+  "Fetch now" button per source to `POST /ingest/{source}`.
 
 - **`POST /ingest/{source}`** (`app/api/routes/ingestion.py` + `app/ingestion/service.py`) reuses
-  P1US6's dispatch seam directly — `resolve_source_by_connector` + `dispatch_ingestion`
+  the scheduler's dispatch seam directly — `resolve_source_by_connector` + `dispatch_ingestion`
   (`app/ingestion/registry.py`) — rather than `app.scheduler.service.run_source`, and deliberately
   does **not** write to `scheduler_runs`. This is a separate, lighter-weight, job-seeker-facing
   trigger, distinct from the scheduler subsystem's own audited manual trigger at
@@ -355,19 +356,19 @@
   `run_source`/`run_source_sync`/`_run_source_async`: a throwaway `AsyncEngine`/sessionmaker via
   `get_engine()`/`get_sessionmaker()` (never the request-scoped `SessionDep`), `asyncio.run(...)`
   inside a plain (non-`async`) function, invoked via `asyncio.to_thread(...)` — the same
-  non-blocking execution model P1US6/ADR 0005 established, and for the identical reason: none of
-  the three connectors are internally non-blocking, so calling `dispatch_ingestion` directly from a
-  `SessionDep`-based route handler would block `/health` and every other route for the run's
-  duration. Verified mechanically by
+  non-blocking execution model established for the scheduler (ADR 0005), and for the identical
+  reason: none of the three connectors are internally non-blocking, so calling `dispatch_ingestion`
+  directly from a `SessionDep`-based route handler would block `/health` and every other route for
+  the run's duration. Verified mechanically by
   `tests/integration/test_ingestion_routes.py::test_health_endpoint_responds_during_ingest_run`.
-  **`_trigger_ingest_async` also sets `source.last_fetched_at` on `result.ok` (BUG02)** — this is
+  **`_trigger_ingest_async` also sets `source.last_fetched_at` on `result.ok`** — this is
   not a `scheduler_runs` write (ADR 0006's "not scheduler-audited" stance is unchanged and still
   applies to the run-history table) but a checkpoint on `Source` itself, and a job-seeker's
   on-demand "Fetch now" click is exactly the kind of successful fetch that checkpoint needs to
   reflect; leaving it scheduler-runs-only would make the Offers page's own source-status display
   go stale immediately after the button it sits next to was clicked.
 
-- **Shared engine/session/dispatch lifecycle (BUG05)**: `_trigger_ingest_async` and
+- **Shared engine/session/dispatch lifecycle**: `_trigger_ingest_async` and
   `_run_source_async` both need the throwaway-engine/sessionmaker/`resolve_source_by_connector`/
   `dispatch_ingestion`/commit/`engine.dispose()` scaffolding described above; that plumbing now
   lives in one place, `app.ingestion.lifecycle.run_with_lifecycle(connector, force_refresh=...,
@@ -400,18 +401,18 @@
   recognised connector with no provisioned `Source` row — same `SchedulerLookupError` hierarchy,
   same distinguishing detail messages, as `/scheduler/run/{source}`. There is no lock against two
   concurrent triggers for the same source (identical to `/scheduler/run/{source}`'s existing
-  behaviour) — a double-tap of a future "Fetch now" button can start two overlapping runs; dedup
+  behaviour) — a double-tap of the "Fetch now" button can start two overlapping runs; dedup
   still prevents duplicate rows, so the cost is wasted work, not data corruption. Debouncing that is
-  a frontend concern for P1US8, not this endpoint's.
+  a frontend concern, not this endpoint's.
 
-- **`force_refresh` defaults to `False` on `POST /ingest/{source}` (BUG18, reverses ADR 0008)**:
-  `_trigger_ingest_async` used to hardcode `force_refresh=True` unconditionally — a decision ADR
-  0008 made to work around SOLID.Jobs' old `sjctl sync`/`search` mode switch (fixed for BUG01).
-  Once ADR 0012 replaced `sjctl` with a direct-HTTP connector, `force_refresh`'s only remaining
-  effect for every connector (SOLID.Jobs, JustJoin.it) is bypassing the BUG02/ADR0009
-  `consecutive_already_seen` early-stop, so the hardcoded `True` silently defeated that
-  incremental checkpoint on every single "Fetch now" click — the only fetch action reachable from
-  the UI, since `FetchNowButton.tsx` has no way to pass a flag through `triggerIngest`/
+- **`force_refresh` defaults to `False` on `POST /ingest/{source}` (reverses an earlier decision,
+  ADR 0008)**: `_trigger_ingest_async` used to hardcode `force_refresh=True` unconditionally — a
+  decision ADR 0008 made to work around SOLID.Jobs' old `sjctl sync`/`search` mode switch (later
+  fixed). Once ADR 0012 replaced `sjctl` with a direct-HTTP connector, `force_refresh`'s only
+  remaining effect for every connector (SOLID.Jobs, JustJoin.it) is bypassing the incremental
+  pagination `consecutive_already_seen` early-stop (ADR 0009), so the hardcoded `True` silently
+  defeated that incremental checkpoint on every single "Fetch now" click — the only fetch action
+  reachable from the UI, since `FetchNowButton.tsx` has no way to pass a flag through `triggerIngest`/
   `POST /ingest/{source}` (`frontend/src/api/offers.ts`). `POST /ingest/{source}` now accepts an
   optional `force_refresh` query param (`app/api/routes/ingestion.py`, default `False`), threaded
   through `trigger_ingest`/`_trigger_ingest_sync`/`_trigger_ingest_async`
@@ -427,24 +428,24 @@
   anywhere in `app/db/models.py`, matching the codebase-wide convention. Two private, pure mapping
   helpers, `_offer_summary`/`_offer_detail`, are unit-tested without a database
   (`tests/test_offers_mapping.py`) since `OfferModel` instances can be constructed in memory.
-  **Paginated, ordered, and scored inline (BUG26)**: `GET /offers` originally had no pagination
+  **Paginated, ordered, and scored inline**: `GET /offers` originally had no pagination
   ("acceptable at current single-machine data volumes") and no `ORDER BY` at all — fine until the
   backlog crossed ~18k rows, at which point an unfiltered request returned every row in one
   response and Postgres's scan order had no relationship to recency or scoring progress. It now
   takes `limit` (default 50, max 200) and `offset` (default 0) and always applies
-  `ORDER BY posted_at DESC NULLS LAST, created_at DESC, id DESC` — the same ordering BUG24 already
+  `ORDER BY posted_at DESC NULLS LAST, created_at DESC, id DESC` — the same ordering already
   applied to `_fetch_unscored_offers` (`app/scoring/batch.py`), so "top of the table" and "scored
   first" are finally the same offers. The response is now an envelope,
   `{"items": [...], "total": <count ignoring limit/offset>}`, so a client can page without a
   second request. Each item also now carries `score_percent: int | null` (renamed/retyped from
-  `grade: str | null` by P3US29, see that section in matching.md) — the active profile's most
-  recent `MatchScore.score_percent` for that offer, joined in via a `ROW_NUMBER() OVER (PARTITION
-  BY offer_id ORDER BY created_at DESC)` subquery scoped to the active profile (or to a sentinel
-  `-1` profile id when there's no active profile, so the query shape never branches) — eliminating
-  the one-`GET /offers/{id}/score`-request-per-offer fan-out the frontend previously did to render
-  score badges for a loaded page.
+  `grade: str | null`, see the percentage-based match score section in matching.md) — the active
+  profile's most recent `MatchScore.score_percent` for that offer, joined in via a `ROW_NUMBER()
+  OVER (PARTITION BY offer_id ORDER BY created_at DESC)` subquery scoped to the active profile (or
+  to a sentinel `-1` profile id when there's no active profile, so the query shape never branches)
+  — eliminating the one-`GET /offers/{id}/score`-request-per-offer fan-out the frontend previously
+  did to render score badges for a loaded page.
 
-  **`order_by`/`order` (BUG31)**: BUG26's `ORDER BY` was fixed — clicking the frontend's "Score"
+  **`order_by`/`order`**: after the `ORDER BY` fix above, clicking the frontend's "Score"
   column header only re-sorted whatever 50 rows the current page already held, so "sort by score"
   never surfaced the actual best/worst-matched offers across the full (18k+) backlog, only within
   whatever page the fixed `posted_at DESC` order happened to place them on. `GET /offers` now takes
@@ -469,25 +470,26 @@
   filtered on in practice.
 
   **`seniority`**: substring match (`ILIKE '%value%'`) against the possibly comma-joined
-  `Offer.seniority` column (see `normalize_seniority`, P1US5) — `?seniority=senior` matches an offer
+  `Offer.seniority` column (see `normalize_seniority` above) — `?seniority=senior` matches an offer
   stored as `"senior, lead"`. Safe against false positives because none of the five canonical
   levels (`junior`/`mid`/`senior`/`lead`/`expert`) is a substring of another.
 
   **`min_salary`**: "meets or exceeds" semantics — matches when `salary_max >= min_salary`, or,
   when `salary_max` is unknown, falls back to `salary_min >= min_salary`.
 
-  **`grade`** (deleted by P3US29): originally an `EXISTS`-style subquery — `Offer.id IN (SELECT
-  offer_id FROM match_scores WHERE grade = :grade)` — against `match_scores`. Deliberately **not**
-  scoped to the active `Profile` (`Profile.is_active`) or to a specific `engine`, and never
-  consumed by the frontend; P3US29 removed the param outright rather than inventing a
-  percentage-equivalent "exact match" concept nobody had asked for.
+  **`grade`** (deleted later, once scoring moved to a percentage): originally an `EXISTS`-style
+  subquery — `Offer.id IN (SELECT offer_id FROM match_scores WHERE grade = :grade)` — against
+  `match_scores`. Deliberately **not** scoped to the active `Profile` (`Profile.is_active`) or to
+  a specific `engine`, and never consumed by the frontend; the param was removed outright rather
+  than inventing a percentage-equivalent "exact match" concept nobody had asked for.
 
-  **`min_score`** (renamed from `min_grade` by P3US29, int 0–100): a "minimum acceptable score"
+  **`min_score`** (renamed from `min_grade`, int 0–100): a "minimum acceptable score"
   filter — `min_score=50` keeps offers scored 50 or higher, dropping lower and not-yet-scored
   offers. Scoped to the active profile only (it reuses the same inline-score join described
   above), matching what the frontend's "Minimum score %" input conceptually means: the active
-  profile's own bar, not any profile's. Before P3US29 this was `min_grade` (BUG26), a five-value
-  `GRADE_ORDER` slice; the underlying comparison is now a plain `score_percent >= min_score`.
+  profile's own bar, not any profile's. Before the percentage-based score, this was `min_grade`, a
+  five-value `GRADE_ORDER` slice; the underlying comparison is now a plain `score_percent >=
+  min_score`.
 
   ```bash
   curl "http://localhost:8000/offers?source=justjoinit&remote=true&seniority=senior&min_salary=15000&min_score=50&limit=50&offset=0"
@@ -525,7 +527,7 @@
   `offer_id`, not `id`, to avoid shadowing the `id` builtin — this does not change the route's
   external shape.
 
-### CORS (P1US8)
+### CORS
 
 `app/main.py` gained `CORSMiddleware` (`fastapi.middleware.cors`), added immediately after
 `app.state.settings = settings`. `Settings.cors_allow_origin` (`CORS_ALLOW_ORIGIN`, default
@@ -539,16 +541,16 @@ origin is restricted. Developers must browse the frontend via `http://localhost:
 `docker-compose.yml`'s own healthcheck targets `127.0.0.1` internally; this is a deliberate
 simplicity tradeoff (single exact-match origin) rather than an allow-list.
 
-### Dead letter queues (P3US33)
+### Dead letter queues
 
-- **Purpose**: every prior story's handled, anticipated failure (a malformed scraped record, a
+- **Purpose**: every handled, anticipated failure up to this point (a malformed scraped record, a
   page that failed to fetch mid-run, a whole run's first-page fetch failing, an LLM matcher call
   raising `MatcherError`) was caught, logged at WARNING/ERROR, and silently dropped — no durable,
-  queryable trace survived a container restart. This story adds one record-and-list-and-retry
+  queryable trace survived a container restart. This adds one record-and-list-and-retry
   capability that every existing catch site now calls into. It covers all three sources
   end-to-end: SOLID.Jobs, JustJoin.it, and NoFluffJobs are all scored via the same LangChain
-  Matcher path (BUG10/P3US23), so there is no separate `sjctl evaluate` scoring path left
-  uncovered.
+  Matcher path (see "SOLID.Jobs Matcher verification" in matching.md), so there is no separate
+  `sjctl evaluate` scoring path left uncovered.
 - **`DeadLetterMixin`** (`app/db/models.py`): `id`, `dedup_key` (`String(255)`, unique per table),
   `failure_type` (`String(30)`), `error_message` (`Text`), `raw_payload` (`JSONB`, nullable),
   `status` (`String(20)`, `"open"`/`"resolved"`, plain string per this repo's no-DB-enum
@@ -579,7 +581,7 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   tuple[Sequence[Any], int]` mirrors `GET /offers`'s pagination/total-count-subquery pattern,
   ordering by `occurred_at DESC`.
 - **`app/dlq/registry.py`**: `DEAD_LETTER_REGISTRY: dict[str, DeadLetterQueueSpec]` mirrors
-  `CONNECTOR_REGISTRY`'s `dict[str, ...]` shape, but (BUG39) each spec now owns everything
+  `CONNECTOR_REGISTRY`'s `dict[str, ...]` shape, with each spec owning everything
   process-specific rather than the route branching on `process ==`: `filterable_params` (the
   query-param names — not column names — accepted for that process: `{"source", "failure_type",
   "status"}` for ingestion, `{"offer_id", "profile_id", "failure_type", "status"}` for scoring),
@@ -628,7 +630,7 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   an empty page rather than an unfiltered one or an error. `status` defaults to `"open"`
   (`"resolved"`/`"all"` also accepted) rather than showing every historical row by default. A
   filter param outside the target process's `spec.filterable_params` (e.g. `offer_id` on
-  `/failures/ingestion`) is a `400`, not silently ignored (BUG39) — `source`/`offer_id`/`profile_id`
+  `/failures/ingestion`) is a `400`, not silently ignored — `source`/`offer_id`/`profile_id`
   stay declared on the route signature for OpenAPI/Swagger discoverability, but which ones are
   legal per process is the registry's call, not the route's.
 - **`POST /failures/{process}/{failure_id}/retry`**: looks up the row by id (404 if missing),
@@ -636,7 +638,7 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   (possibly now-resolved) row.
 - **Frontend**: `frontend/src/api/failures.ts` (typed client, mirrors `api/offers.ts`),
   `frontend/src/hooks/useFailures.ts` (mirrors `useOffers.ts`'s fetch-on-change effect, minus
-  BUG17's debounce — a smaller filter set doesn't need it), `frontend/src/lib/failureColumns.tsx`
+  the offer list's debounce — a smaller filter set doesn't need it), `frontend/src/lib/failureColumns.tsx`
   (a small column-config registry mirroring `DEAD_LETTER_REGISTRY`: ingestion shows
   source/failure-type/page/occurred-at/error, scoring shows offer/profile/failure-type/occurred-at/error),
   `frontend/src/components/FailuresTable.tsx` (generic table + Prev/Next pagination footer
@@ -651,9 +653,9 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   page-reset-on-filter-change, ties the pieces together). New `/failures` route + nav link in
   `App.tsx`.
 
-### Connector fetch date range + auto-fetch toggle (P3US34)
+### Connector fetch date range + auto-fetch toggle
 
-- **Purpose**: P3US28's per-source `config_json` mechanics (live `AsyncIOScheduler` job, JSONB
+- **Purpose**: the earlier per-source `config_json` mechanics (live `AsyncIOScheduler` job, JSONB
   config, `build_job_id`, `build_source_status` mapper) already had the exact shape needed for
   two more orthogonal per-connector knobs: what `posted_at` window a run accepts (**Fetch
   Range**), and whether a connector's automatic job runs at all (**Auto-Fetch**) — see
@@ -674,7 +676,7 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   avoids an unconditional startup `UPDATE` for a one-time migration concern).
 - **`set_source_fetch_range`/`set_all_source_fetch_ranges`,
   `set_source_auto_fetch`/`set_all_source_auto_fetch`** (`app/scheduler/service.py`): structurally
-  identical to P3US28's `set_source_interval`/`set_all_source_intervals` — same
+  identical to the earlier `set_source_interval`/`set_all_source_intervals` — same
   `resolve_source_by_connector` reuse for `404` mapping, same flush-not-commit (callers commit),
   same reassign-the-whole-dict pattern (`source.config_json = {**source.config_json,
   "fetch_range": ...}`) required by `config_json` being a plain JSONB column with no SQLAlchemy
@@ -689,7 +691,7 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   scheduler.pause_job(job_id)`. Job registration itself (the `add_job` call and its kwargs) is
   untouched; only the post-registration paused state differs, per the story's own acceptance
   criteria.
-- **Four new routes** (`app/api/routes/scheduler.py`), same shape as P3US28's interval routes
+- **Four new routes** (`app/api/routes/scheduler.py`), same shape as the earlier interval routes
   (`SessionDep`, `try/except SchedulerLookupError → HTTPException(404, ...)`, commit before
   touching the live scheduler so a mid-request crash never leaves it out of sync with a
   persisted-but-uncommitted config change):
@@ -703,11 +705,11 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   - `PUT /scheduler/sources/{source}/auto-fetch` / `PUT /scheduler/sources/auto-fetch` take
     `AutoFetchUpdateRequest { enabled: bool }` and additionally call
     `scheduler.resume_job`/`scheduler.pause_job(build_job_id(connector))` — takes effect on the
-    live scheduler immediately, no restart required, mirroring P3US28's live-reschedule behavior.
+    live scheduler immediately, no restart required, mirroring the earlier live-reschedule behavior.
     `POST /scheduler/run/{source}` (manual trigger) is completely unaffected either way — turning
     Auto-Fetch off pauses the *scheduled* job only, per `docs/adr/0018`.
   - The bulk variants apply one value to every connector with a non-null `connector` in a single
-    call (same `set_all_source_*` shape as P3US28's bulk interval endpoint) — a deliberate,
+    call (same `set_all_source_*` shape as the earlier bulk interval endpoint) — a deliberate,
     silent overwrite of any prior per-connector customization, matching that precedent exactly.
 - **Range filtering — `app/ingestion/runner.py`**, implemented exactly once inside the shared
   `run_paginated_ingestion`, so every connector that calls it gets filtering for free:
@@ -765,30 +767,30 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   toggleable per the acceptance criteria. `SettingsPage.tsx` renders this between
   `FetchCadenceSection` and `NotificationsSection` — grouped there because cadence and
   range/auto-fetch all govern the same automatic scheduled job, sourced from the same `GET
-  /scheduler/status` call. (P3US36 later inserts its own `OfferCleanupSection` between this
+  /scheduler/status` call. (A later addition inserts its own `OfferCleanupSection` between this
   section and `NotificationsSection`, so this is no longer the immediate predecessor of
   Notifications — see below.)
-- **Scoring reuses Fetch Range (P3US36)**: this story's `fetch_range` concept and
-  `resolve_fetch_range` function were built for ingestion-time filtering only; P3US36 (see
-  "Batch scoring job" in matching.md) later imports `resolve_fetch_range` unchanged into
+- **Scoring reuses Fetch Range**: this `fetch_range` concept and
+  `resolve_fetch_range` function were built for ingestion-time filtering only; a later change (see
+  "Batch scoring job" in matching.md) imports `resolve_fetch_range` unchanged into
   `app/scoring/batch.py` so batch scoring stops spending LLM calls on offers the user has already
   excluded from a Source's automatic/manual fetches — no new setting, no schema change, the same
   per-Source `config_json.fetch_range` value now governs both ingestion and scoring selection.
 
-### Connector extensibility + stop/start toggle (P3US37)
+### Connector extensibility + stop/start toggle
 
-- **Purpose**: six more connectors (P3US38-44, Bulldogjob through WeWorkRemotely) were queued
-  immediately after this story, each of which would otherwise repeat the same six-file
+- **Purpose**: six more connectors (Bulldogjob through WeWorkRemotely) were queued
+  immediately after this effort, each of which would otherwise repeat the same six-file
   hand-edit (a new connector module, `normalize.py`, `registry.py`, `scheduler/service.py`,
   `llm/matcher.py`, five frontend call sites) with nothing catching an omission — the worst
   failure already seen in this project was a connector missing from `LANGCHAIN_SOURCES`:
   ingestion succeeds, the connector's offers just never get scored, silently, forever. This
-  story does two things: (1) extracts the three existing connectors' shared scaffolding into a
+  does two things: (1) extracts the three existing connectors' shared scaffolding into a
   `JobBoardConnector` Template Method base class, and (2) makes `CONNECTOR_REGISTRY` the single
   place a connector is declared to exist, with everything else (scheduler seeding, matching
   eligibility, every frontend connector list) deriving from it. It also adds a
-  Connector Stop/Start toggle (`connector_enabled`), independent of P3US34's Auto-Fetch — see
-  `CONTEXT.md` for both glossary entries.
+  Connector Stop/Start toggle (`connector_enabled`), independent of the earlier Auto-Fetch toggle
+  — see `CONTEXT.md` for both glossary entries.
 
 - **`JobBoardConnector` (`app/connectors/base.py`)** — see
   `docs/adr/0021-jobboardconnector-template-method-boundary.md` for the full rationale. Three
@@ -844,9 +846,9 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
     defaulting to sensible values) plus the existing `_default_fetch_range()`.
   - `LANGCHAIN_SOURCES` (`app/llm/matcher.py`) is now `frozenset(CONNECTOR_REGISTRY.keys())`
     instead of a hand-listed set. This bakes in "every registered connector is LangChain-scored"
-    as structural — which is not a new assumption: P3US23/US24 already retired the
+    as structural — which is not a new assumption: an earlier effort already retired the
     originally-planned second scoring engine (`sjctl evaluate`) and made LangChain cover all
-    three sources (see "SOLID.Jobs Matcher verification" in matching.md). This story just
+    three sources (see "SOLID.Jobs Matcher verification" in matching.md). This just
     removes the last traces of that abandoned plan: the dead `"sjctl"` option on the
     `MatchEngine` schema literal, and the stale "`sjctl evaluate` wrapper (SOLID.Jobs)" wording
     in CLAUDE.md's Phase 3 overview.
@@ -855,7 +857,7 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
     doesn't touch `Source` rows or APScheduler at all, just the registry.
 
 - **Connector Stop/Start (`connector_enabled`)** — the flag that actually stops a connector,
-  filling the gap P3US34's Auto-Fetch glossary entry explicitly called out ("doesn't disable the
+  filling the gap the Auto-Fetch glossary entry explicitly called out ("doesn't disable the
   connector or block manual runs"). Enforced in exactly one place: `run_with_lifecycle`
   (`app/ingestion/lifecycle.py`) checks `source.config_json.connector_enabled` immediately after
   resolving the source — before `before_dispatch` runs, so a rejected manual trigger creates no
@@ -869,8 +871,8 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   `auto_fetch_enabled` are combined with AND in exactly one shared function,
   `connector_should_auto_run(config)` (`app/scheduler/lifecycle.py`), used by `register_jobs`'s
   startup pause decision and by all four enabled/auto-fetch routes (single and bulk) — the same
-  "always register, conditionally pause" pattern P3US34 established, just gated on both flags
-  instead of one. This also fixed a latent asymmetry: the auto-fetch routes previously
+  "always register, conditionally pause" pattern established earlier for Auto-Fetch, just gated
+  on both flags instead of one. This also fixed a latent asymmetry: the auto-fetch routes previously
   paused/resumed based solely on `payload.enabled`, which would have silently resumed a
   `connector_enabled=false` connector's job the moment auto-fetch was turned back on; they now
   call `connector_should_auto_run` on the post-update config instead. Toggling
@@ -897,10 +899,10 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   "apply to all" bar (four independent controls — cadence, range, auto-fetch, stop/start) above a
   vertical stack of `ConnectorSettingsCard`s, one per `useKnownSources()` entry — a vertical card
   stack rather than a widening row-based table is what keeps the page legible as more connectors
-  are registered (P3US38-44 add six more). **Superseded by P3US45**: as the registry grew past six
+  are registered (six more were added later). **Superseded later**: as the registry grew past six
   connectors, the vertical stack was replaced by a tab strip showing exactly one
   `ConnectorSettingsCard` at a time — see "Per-connector offer counts + connector settings
-  sub-pages (P3US45)" below. `FetchCadenceSection.tsx`, `FetchRangeSection.tsx`,
+  sub-pages" below. `FetchCadenceSection.tsx`, `FetchRangeSection.tsx`,
   `useFetchCadence.ts`, and `useFetchRangeSettings.ts` (and their test files) are deleted, not
   kept alongside the new components.
 
@@ -912,13 +914,13 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   (`ensure_sources_exist`), matching eligibility (`LANGCHAIN_SOURCES`), and every frontend list
   (`useKnownSources`) pick it up automatically.
 
-### Connector architecture cleanup (US46)
+### Connector architecture cleanup
 
-A design audit of all 9 connectors against ADR 0021/0022 (P3US37/38-44) found the two ADRs'
+A design audit of all 9 connectors against ADR 0021/0022 found the two ADRs'
 promises had eroded in practice — Bulldogjob and Rocket Jobs turned out to be ~90% duplicated
 code, not two independent connectors, and a seed-config-override ladder had regrown in
 `scheduler/service.py` outside the registry, the exact anti-pattern ADR 0022 was written to
-eliminate. This story is structural only: no connector's live fetch output, dedup, or
+eliminate. This cleanup is structural only: no connector's live fetch output, dedup, or
 normalization behavior changed.
 
 - **`app/connectors/sitemap_detail.py`'s `SitemapDetailPageConnector`** is a new intermediate
@@ -928,7 +930,8 @@ normalization behavior changed.
   It captures the sitemap-cursor-persisted, rate-limited, per-URL-detail-fetch `run()` shape both
   connectors previously each carried their own copy of: reading `page_size`/`max_pages`/
   `already_seen_stop_threshold`/`rate_limit_delay_seconds` from config, resolving/persisting
-  `sitemap_cursor` via `resolve_sitemap_cursor`/`next_sitemap_cursor` (BUG41), and the
+  `sitemap_cursor` via `resolve_sitemap_cursor`/`next_sitemap_cursor` (fixed after a bug where the
+  cursor wasn't persisted, causing repeated re-fetches of page 1), and the
   rate-limited per-URL `fetch_page` closure. Each subclass now implements only 3 hooks:
   `sitemap_url()` (replaces `default_url`), `fetch_sitemap_urls(config)`, and
   `extract_detail_json(html, *, url)` (the `extract_next_data`/`extract_job_posting_json_ld`
@@ -949,7 +952,7 @@ normalization behavior changed.
 
 - **`ConnectorSpec.seed_config_overrides: dict[str, Any]`** (new field, `field(default_factory=dict)`
   on the still-frozen dataclass) replaces `scheduler/service.py`'s `_connector_config_overrides`
-  branching function. Pracuj's, RemoteOK's, and Remotive's per-connector seed defaults (P3US41/42/43)
+  branching function. Pracuj's, RemoteOK's, and Remotive's per-connector seed defaults
   now live directly on their `CONNECTOR_REGISTRY` entries; `ensure_sources_exist` reads
   `CONNECTOR_REGISTRY[connector].seed_config_overrides` instead of branching on connector identity
   — the override now travels with the connector's own registry entry rather than living in a
@@ -975,13 +978,13 @@ See `docs/adr/0021-jobboardconnector-template-method-boundary.md` and
 `docs/adr/0022-connector-registry-is-the-single-source-of-truth.md` for the follow-up notes
 recording where this story's extraction fits against each ADR's original decision.
 
-### Connector fetch scope: all offers vs filtered by hard skills (US47)
+### Connector fetch scope: all offers vs filtered by hard skills
 
 Bulldogjob and Pracuj.pl issue one live fetch per matched offer (a sitemap-enumerate-then-detail
 walk and a Playwright-driven listing-then-detail walk, respectively), so a candidate whose active
 Profile only wants a handful of skills still pays the anti-scraping exposure of the whole
-catalog. This story adds a third `config_json`-driven per-connector knob, **Fetch Scope**,
-structurally identical to Fetch Range/Auto-Fetch (P3US34) but scoped to only the connectors with
+catalog. This adds a third `config_json`-driven per-connector knob, **Fetch Scope**,
+structurally identical to Fetch Range/Auto-Fetch but scoped to only the connectors with
 a confirmed live keyword-filter mechanism — SOLID.Jobs, Bulldogjob, Pracuj.pl. The other 6
 connectors fetch their whole catalog in one or a handful of calls regardless of match count, so
 filtering them would reduce only what gets stored, not request volume, and they get no config
@@ -1006,7 +1009,7 @@ key, no UI control, no registry flag.
 
 - **`hard_skill_names(profile: Profile) -> list[str]`** (new, `app/schemas/profile.py`) is a pure
   extraction of what was previously `app/llm/matcher.py`'s private `_hard_skill_names` — the
-  matcher's score-capping logic (P3US32) now imports and calls this shared function instead of
+  matcher's score-capping logic (see "Hard skill miss cap" in matching.md) now imports and calls this shared function instead of
   keeping its own copy, since this story needed the same "which skills are starred" read from a
   module `fetch_scope.py` can import without a circular dependency (`matcher.py` imports
   `CONNECTOR_REGISTRY`, which imports every connector, which imports `fetch_scope.py`).
@@ -1020,7 +1023,7 @@ key, no UI control, no registry flag.
   `apply_fetch_scope_term`-transformed config), accumulating `fetched`/`created` across passes
   and stopping at the first term whose result is not `ok`. **No new Dead Letter Queue code**: a
   blocked or failed filtered run reaches the exact same `IngestionResult(ok=False, ...)` →
-  `record_run_fetch_failure` → `FailureType.RUN_FETCH_FAILED` pathway BUG37 already wired for
+  `record_run_fetch_failure` → `FailureType.RUN_FETCH_FAILED` pathway already wired for
   every "run a connector" caller — retried via the existing `POST
   /failures/ingestion/{id}/retry` with zero new retry-handler code.
 
@@ -1036,7 +1039,7 @@ key, no UI control, no registry flag.
   one shared sitemap. Its existing per-run body was extracted into `_run_over_urls(...,
   persist_cursor: bool = True)` first (a pure, behavior-preserving refactor) so the filtered path
   can call it with `persist_cursor=False` — a filtered run enumerates a small, fresh, per-term
-  listing each time rather than the full stable catalog, so BUG41's `sitemap_cursor`
+  listing each time rather than the full stable catalog, so the `sitemap_cursor`
   resume-where-you-left-off concern doesn't apply and the unfiltered path's cursor is left
   untouched by a filtered run. `BulldogjobConnector.fetch_filtered_sitemap_urls` is implemented
   per a dedicated live-research spike (`docs/adr/0027`): `bulldogjob.com/companies/jobs/s/skills,
@@ -1049,7 +1052,7 @@ key, no UI control, no registry flag.
 - **`PracujConnector`** (`app/connectors/pracuj.py`) resolves fetch scope immediately after
   reading `config` — before launching Playwright/Chromium, a cheap short-circuit for a run that's
   going to be blocked anyway. A non-empty `filtered_terms` list loops `_collect_offers` once per
-  term (`category_filter=term, start_page=1` always — filtered runs don't participate in BUG42's
+  term (`category_filter=term, start_page=1` always — filtered runs don't participate in the
   `listing_page_cursor` resumption, the same deliberate scope reduction as Bulldogjob's), OR-ing
   `enumeration_ok`/`mid_run_failure` conservatively across terms (the whole run is
   `enumeration_ok=False` only if every term's first page failed) and concatenating each term's

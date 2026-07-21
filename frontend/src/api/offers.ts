@@ -42,7 +42,7 @@ export async function fetchOffers(
         seniority: filters.seniority,
         min_salary: filters.minSalary,
         min_score: filters.minScore,
-        // Mirrors show_hidden's "excluded unless opted in" semantics (BUG33):
+        // Mirrors show_hidden's "excluded unless opted in" semantics:
         // unchecked -> only not-applied offers; checked -> unfiltered, not
         // "only applied", so applied never maps to `true` here.
         applied: filters.showApplied ? undefined : false,

@@ -1,7 +1,7 @@
 # JobBoardConnector's abstract/hook/fixed-method boundary
 
 **Context**: SOLID.Jobs, JustJoin.it, and NoFluffJobs each duplicated the same fetch → extract →
-paginate scaffolding across three separate modules, and six more connectors (P3US38-44) were
+paginate scaffolding across three separate modules, and six more connectors were
 queued to repeat it a fourth through ninth time with nothing catching a missed step — the worst
 failure already seen in practice was a connector never added to `LANGCHAIN_SOURCES`: ingestion
 succeeds, scoring silently never happens, forever.
@@ -27,15 +27,15 @@ quirk and JustJoin.it's rate limiting aren't expressible as pure data without st
 per-connector code somewhere; a thin Python subclass costs the same as a config schema flexible
 enough to cover those cases, but keeps type-checking and IDE navigation.
 
-**Consequences**: P3US38-44 each implement exactly one connector file, overriding the 4 abstract
+**Consequences**: each of the six later connectors implements exactly one connector file, overriding the 4 abstract
 methods and a hook only when their API genuinely needs it — no other file changes required for a
 "vanilla" connector.
 
-**Follow-up (2026-07-15, US46)**: this ADR's "no other file changes required" prediction held for
-7 of 9 connectors, but Bulldogjob (P3US38) and Rocket Jobs (P3US40) turned out to need a genuine
+**Follow-up (2026-07-15)**: this ADR's "no other file changes required" prediction held for
+7 of 9 connectors, but Bulldogjob and Rocket Jobs turned out to need a genuine
 escape hatch — no cursor-paginated endpoint exists for either, so both overrode the fixed
 `fetch_page`/`run` methods this ADR says should never be overridden, and ended up ~90%
-duplicated with each other in the process. US46 added a second inheritance tier,
+duplicated with each other in the process. A follow-up change added a second inheritance tier,
 `SitemapDetailPageConnector` (`app/connectors/sitemap_detail.py`), between `JobBoardConnector`
 and these two connectors: it re-fixes `run()` around the sitemap-enumeration/per-URL-detail-fetch
 shape those two connectors share, so the original boundary's spirit — "the parts that must stay

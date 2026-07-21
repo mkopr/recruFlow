@@ -131,8 +131,8 @@ async def test_run_persists_zero_cursor_when_sitemap_fully_walked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # A sitemap shorter than page_size is walked to completion in one page, so `fetch_page`
-    # returns a `None` next cursor -- `next_sitemap_cursor` must wrap that to 0 (BUG41), not
-    # leak `None` into `config_json["sitemap_cursor"]`.
+    # returns a `None` next cursor -- `next_sitemap_cursor` must wrap that to 0, not leak `None`
+    # into `config_json["sitemap_cursor"]`.
     monkeypatch.setattr(
         _FakeSitemapConnector, "_fetch_detail_html", lambda self, url: f"<html>{url}</html>"
     )

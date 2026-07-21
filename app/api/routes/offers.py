@@ -73,7 +73,7 @@ async def _partition_offers_for_cleanup(
 ) -> tuple[list[int], int]:
     """Split offers older than `older_than` into deletable ids and a pipeline-protected count.
 
-    Pipeline protection is permanent and global (P3US36): an offer with an Application row
+    Pipeline protection is permanent and global: an offer with an Application row
     under any Profile, in any status, is never deletable -- see CONTEXT.md's "Offer Cleanup".
     """
     candidates_stmt = select(OfferModel.id).where(

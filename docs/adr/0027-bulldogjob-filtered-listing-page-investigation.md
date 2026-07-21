@@ -1,8 +1,8 @@
 # Bulldogjob: the skills-filtered listing page reuses the same `__NEXT_DATA__` shape as the general catalog, but its pagination is client-side only, capping a plain-request filtered fetch at one page per term
 
-US47 needed to confirm, before writing `BulldogjobConnector.fetch_filtered_sitemap_urls`, whether
-`bulldogjob.com/companies/jobs/s/skills,<Term>` (the one comparative `totalCount` curl check the
-story's own research had already done) is a real, walkable listing or just a `totalCount` preview
+Before writing `BulldogjobConnector.fetch_filtered_sitemap_urls`, it needed confirming whether
+`bulldogjob.com/companies/jobs/s/skills,<Term>` (the one comparative `totalCount` curl check
+already done) is a real, walkable listing or just a `totalCount` preview
 with no further plain-request affordance — continuing the same "confirm every candidate against
 the live site with `curl` before trusting it" discipline `docs/adr/0023` established for this
 connector's sitemap approach.
@@ -31,9 +31,9 @@ conclusion as ADR 0023, now confirmed for the filtered path specifically too.
 the first page — up to 50 job summaries — per hard-skill term, regardless of `totalCount`. This
 is a deliberate, documented limitation, same category as ADR 0023's un-parsed free-text-salary
 gap: Fetch Scope's "filtered" mode exists specifically to issue *fewer* requests and accept
-*reduced recall* in exchange (US47's whole premise), so a per-term 50-offer cap is consistent with
+*reduced recall* in exchange (the whole premise of adding a filtered mode), so a per-term 50-offer cap is consistent with
 the feature's own intent rather than a defect to work around. It also means filtered runs don't
-need `SitemapDetailPageConnector`'s `sitemap_cursor` resumption machinery (BUG41) at all — there
+need `SitemapDetailPageConnector`'s `sitemap_cursor` resumption machinery at all — there
 is only ever one page to fetch, not a large stable catalog to walk incrementally — which is why
 `_run_over_urls` is called with `persist_cursor=False` from the filtered path.
 

@@ -2,12 +2,12 @@
 
 [Architecture index](../../../ARCHITECTURE.md) · [Connectors overview](../connectors.md)
 
-### Bulldogjob connector (P3US38)
+### Bulldogjob connector
 
-- **Purpose**: the first of the six connectors P3US37 queued back-to-back (P3US38-44,
-  Bulldogjob through WeWorkRemotely), and the first real test of whether P3US37's "adding a
-  connector, end to end" checklist holds for a source that doesn't fit the cursor-pagination
-  template. It didn't, cleanly — see the Domain Decision below.
+- **Purpose**: the first of six connectors added back-to-back after Phase 3 (Bulldogjob through
+  We Work Remotely), and the first real test of whether the earlier "adding a connector, end to
+  end" checklist holds for a source that doesn't fit the cursor-pagination template. It didn't,
+  cleanly — see the Domain Decision below.
 
 - **Why the obvious approaches don't work** (investigated live 2026-07-13, see
   `docs/adr/0023-bulldogjob-sitemap-and-embedded-next-data-investigation.md` for the full
@@ -34,7 +34,7 @@
   granularity of one sitemap-URL chunk (a chunk fully seen stops the next chunk from being
   fetched at all, not just from being persisted).
 
-- **Sitemap filtering, a live finding not anticipated by the story**: `jobs.xml.gz` mixes real
+- **Sitemap filtering, a live finding not anticipated ahead of time**: `jobs.xml.gz` mixes real
   job detail URLs (`/companies/jobs/<numeric-id>-<slug>`) with filter/tag listing pages
   (`/companies/jobs/s/skills,Java`, `/companies/jobs/s/role,qa`, ...) — confirmed live,
   ~5% of sitemap entries. `fetch_sitemap_urls` filters to the numeric-id pattern before
@@ -78,15 +78,14 @@
 
 - **Registered in `CONNECTOR_REGISTRY`** (`app/ingestion/registry.py`) as `BULLDOGJOB =
   "bulldogjob"`, constructed once at import time like the other three — no scheduler,
-  matcher, or frontend edit was needed, confirming P3US37's "adding a connector" checklist
+  matcher, or frontend edit was needed, confirming the "adding a connector" checklist
   holds even for this structurally different source.
 
-- **Supports Fetch Scope (US47)**: `fetch_filtered_sitemap_urls(config, term)` fetches
+- **Supports Fetch Scope**: `fetch_filtered_sitemap_urls(config, term)` fetches
   `bulldogjob.com/companies/jobs/s/skills,<Term>`, whose embedded `__NEXT_DATA__` carries job
   summaries under `props.pageProps.jobs` (each `id` already the full `<numeric-id>-<slug>`
   string, so detail URLs are built directly with no separate slug lookup). Pagination on this
   page is client-side only (`?page=`/`?perPage=` are silently ignored server-side), so a filtered
   fetch is capped at one page — up to 50 offers — per hard-skill term; see `docs/adr/0027` for
   the full live-research findings and
-  [Ingestion pipeline: Connector fetch scope](../ingestion.md#connector-fetch-scope-all-offers-vs-filtered-by-hard-skills-us47).
-
+  [Ingestion pipeline: Connector fetch scope](../ingestion.md#connector-fetch-scope-all-offers-vs-filtered-by-hard-skills).

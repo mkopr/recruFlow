@@ -356,12 +356,12 @@ async def test_collect_offers_returns_not_ok_when_first_listing_fetch_fails() ->
 async def test_collect_offers_skips_a_single_failed_detail_fetch_and_keeps_going(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # BUG43 follow-up: a failed detail fetch used to abort the whole page (see git history for
-    # the pre-fix version of this test) -- that made sense back when this connector shared one
-    # browser context for the entire run and a single failure really did mean Cloudflare had
-    # blocked everything after it. Now that `run` opens a fresh context per fetch, one failed
-    # detail fetch is just a skip, like Bulldogjob/Rocket Jobs's per-URL `continue` -- it must
-    # not throw away every other candidate already enumerated on this page.
+    # A failed detail fetch used to abort the whole page (see git history for the pre-fix version
+    # of this test) -- that made sense back when this connector shared one browser context for
+    # the entire run and a single failure really did mean Cloudflare had blocked everything after
+    # it. Now that `run` opens a fresh context per fetch, one failed detail fetch is just a skip,
+    # like Bulldogjob/Rocket Jobs's per-URL `continue` -- it must not throw away every other
+    # candidate already enumerated on this page.
     monkeypatch.setattr(asyncio, "sleep", _fake_sleep())
     listing_url = "https://www.pracuj.pl/praca/it;kw?pn=1&rop=10"
     ok_url = "https://www.pracuj.pl/praca/ok,oferta,1"
@@ -403,8 +403,8 @@ async def test_collect_offers_skips_a_single_failed_detail_fetch_and_keeps_going
 
 @pytest.mark.asyncio
 async def test_collect_offers_resumes_enumeration_from_start_page() -> None:
-    # BUG42 regression: enumeration must resume from a persisted `start_page`, not always
-    # restart at page 1 -- mirrors BUG41's Rocket Jobs/Bulldogjob sitemap cursor.
+    # Enumeration must resume from a persisted `start_page`, not always restart at page 1 --
+    # mirrors Rocket Jobs/Bulldogjob's sitemap cursor persistence.
     detail_url = _HOURLY_ONLY_DETAIL_RECORD["attributes"]["offerAbsoluteUrl"]
     requested_urls: list[str] = []
 
@@ -696,7 +696,7 @@ async def test_pracuj_run_filtered_mode_loops_collect_offers_once_per_hard_skill
     # call's own return value, not a per-term sum.
     assert result == IngestionResult(ok=True, fetched=1, created=1)
     assert captured["fetch_page"](0, 10) == ([{"id": "Python"}, {"id": "Go"}], None)
-    # filtered runs must not touch listing_page_cursor (BUG42 resumption is unfiltered-only)
+    # Filtered runs must not touch listing_page_cursor (page-resumption is unfiltered-only).
     assert source.config_json["listing_page_cursor"] == 5
 
 

@@ -11,7 +11,7 @@ DEFAULT_CATEGORIES: tuple[str, ...] = ("software-development", "devops", "qa", "
 
 # Maps the slugs `categories` config selects on to the exact display-name string Remotive
 # stamps on each job's own `category` field (confirmed live via
-# https://remotive.com/api/remote-jobs/categories, 2026-07-15, BUG45) -- used for *client-side*
+# https://remotive.com/api/remote-jobs/categories, 2026-07-15) -- used for *client-side*
 # filtering post-fetch, since the API's `category` query param turned out to be a no-op (see
 # `fetch_page`).
 CATEGORY_SLUG_TO_NAME: dict[str, str] = {
@@ -45,15 +45,15 @@ def _normalize_posted_at(value: Any) -> str | None:
 class RemotiveConnector(JobBoardConnector):
     """Remotive's public `/api/remote-jobs` endpoint documents a `category` query param, but
     it's a no-op on the free tier this connector uses: every category value returns the
-    identical ~38-job snapshot, confirmed live 2026-07-15 (BUG45) -- including jobs from
-    categories never in `DEFAULT_CATEGORIES` (Sales, Marketing, Medical, ...), which had been
-    silently reaching the DB ever since P3US43 despite the config's documented intent to scope
-    to IT-relevant categories only. Querying per-category anyway (as this connector used to)
-    means N identical requests every run for nothing -- against Remotive's own stated terms
-    ("max. 4 times a day ... excessive requests will be blocked"), that's a real risk of losing
-    API access entirely. `fetch_page` now fetches once and filters by category client-side
-    instead, which both fixes the request volume and makes the category scope actually work
-    for the first time.
+    identical ~38-job snapshot, confirmed live 2026-07-15 -- including jobs from categories
+    never in `DEFAULT_CATEGORIES` (Sales, Marketing, Medical, ...), which had been silently
+    reaching the DB since this connector's initial implementation despite the config's
+    documented intent to scope to IT-relevant categories only. Querying per-category anyway
+    (as this connector used to) means N identical requests every run for nothing -- against
+    Remotive's own stated terms ("max. 4 times a day ... excessive requests will be blocked"),
+    that's a real risk of losing API access entirely. `fetch_page` now fetches once and
+    filters by category client-side instead, which both fixes the request volume and makes
+    the category scope actually work for the first time.
     """
 
     name = "Remotive"

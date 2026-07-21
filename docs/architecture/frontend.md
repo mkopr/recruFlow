@@ -2,13 +2,13 @@
 
 [Architecture index](../../ARCHITECTURE.md)
 
-### Offer list page (P1US8)
+### Offer list page
 
 - **Purpose**: closes Phase 1 end-to-end — ingest -> normalise -> store -> browse -> manually
   refresh, all reachable from a browser. Consumes `GET /offers` and `POST /ingest/{source}`
-  (P1US7) with no backend changes to either route.
+  (see ingestion.md) with no backend changes to either route.
 - **`frontend/src/api/offers.ts`**: the sole module calling `/offers`/`/ingest/{source}` through
-  the shared `apiClient` (`client.ts`, P0US7). Re-exports `OfferSummary`/`IngestResponse` as type
+  the shared `apiClient` (`client.ts`, described below). Re-exports `OfferSummary`/`IngestResponse` as type
   aliases off `components['schemas']` rather than redeclaring shapes by hand, so a schema
   regeneration (`make generate-types`) surfaces any drift as a TypeScript error here first.
   `fetchOffers`/`triggerIngest` both collapse `openapi-fetch`'s `{data, error}` result into a
@@ -16,19 +16,20 @@
   at each call site.
 - **`frontend/src/hooks/useOffers.ts`**: owns `offers`/`total`/`loading`/`error` state and
   re-fetches when `source`/`remote`/`seniority`/`minSalary`/`minGrade` **or** the page
-  (`{limit, offset}`, BUG26) change. Structured around `react-hooks/set-state-in-effect` (part of
-  `eslint-plugin-react-hooks`'s `recommended` config, already wired up since P0US7) — this rule
+  (`{limit, offset}`) change. Structured around `react-hooks/set-state-in-effect` (part of
+  `eslint-plugin-react-hooks`'s `recommended` config, already wired up early on) — this rule
   statically rejects an effect calling any hoisted (e.g. `useCallback`) function that eventually
   calls a state setter, even past an `await`, so the automatic fetch-on-filter-change effect
   defines and invokes its own async function *inline*, duplicating (rather than delegating to)
   `refetch`'s fetch-and-setState logic. `refetch` itself is safe as a `useCallback` because it's
   only ever invoked from an event handler (`FetchNowButton`'s click) or `OfferListPage`'s
-  scoring-finished effect, never from within an effect. **BUG26**: page changes share the same
-  300ms debounce as filter changes (`OfferListPage` owns `page` state, resets it to `0` on any
-  filter/minGrade change, and passes `{limit: PAGE_SIZE, offset: page * PAGE_SIZE}` down) —
-  deliberately not special-cased to skip the debounce, since a Prev/Next click is a single
-  low-frequency event where a 300ms delay is imperceptible, and one code path is simpler than two.
-- **`frontend/src/hooks/useOfferScoreDetail.ts`** (BUG26, replaces `useOfferScores.ts`): fetches
+  scoring-finished effect, never from within an effect. Once pagination was added, page changes
+  were made to share the same 300ms debounce as filter changes (`OfferListPage` owns `page` state,
+  resets it to `0` on any filter/minGrade change, and passes `{limit: PAGE_SIZE, offset: page *
+  PAGE_SIZE}` down) — deliberately not special-cased to skip the debounce, since a Prev/Next click
+  is a single low-frequency event where a 300ms delay is imperceptible, and one code path is
+  simpler than two.
+- **`frontend/src/hooks/useOfferScoreDetail.ts`** (replaces `useOfferScores.ts`): fetches
   one offer's full score breakdown (rationale, dimensions) on demand — only when the score drawer
   opens for that specific offer id — rather than the old `useOfferScores`, which fired
   `GET /offers/{id}/score` once per *currently loaded* offer via `Promise.allSettled`. At the
@@ -52,33 +53,33 @@
   `created` were already computed by the API and otherwise discarded, and a `0`-new-offers outcome
   is otherwise invisible in the table.
 - **`frontend/src/components/OfferTable.tsx`**: originally sorted client-side by `posted_at`
-  descending (nulls last) because `GET /offers` (P1US7) had no `ORDER BY` at all; the backend now
-  always applies that exact ordering server-side (BUG26), but the client-side
+  descending (nulls last) because `GET /offers` had no `ORDER BY` at all; the backend now
+  always applies that exact ordering server-side, but the client-side
   `sortByPostedDateDesc` default stayed — it's now a no-op re-sort of an already-ordered page
   rather than the sole source of order, kept because the "click Grade header to sort" behavior
   (`sortByGrade`) already needed client-side re-sorting infrastructure regardless. Both sort
-  helpers now read `offer.grade` directly (inline field, BUG26) instead of a separate `scores`
-  lookup map. Salary formatting distinguishes a floor from a ceiling rather than collapsing both
-  to the same string: `"20,000+ PLN"` (min only), `"up to 25,000 PLN"` (max only),
+  helpers now read `offer.grade` directly (an inline field on the offer response) instead of a
+  separate `scores` lookup map. Salary formatting distinguishes a floor from a ceiling rather than
+  collapsing both to the same string: `"20,000+ PLN"` (min only), `"up to 25,000 PLN"` (max only),
   `"15,000-25,000 PLN"` (both), `"-"` (neither); a `null` `salary_currency` on an offer with a
   known salary defaults to display `"PLN"` (matching the DB column's own `server_default`, see
   "Database schema" above), never left blank. Empty state (`offers.length === 0 && !loading`)
   renders a message instead of an empty `<table>` — a minimum-grade-filtered empty result gets its
-  own message (`FilteredEmptyState`) naming the active `minGrade`, simplified by BUG26 to drop the
+  own message (`FilteredEmptyState`) naming the active `minGrade`, later simplified to drop the
   old "N of M loaded offers haven't been scored yet" wording: that messaging existed only because
   minGrade filtering used to run against a partially-loaded, in-flight `scores` map client-side, an
   incompleteness that can't happen anymore now that `min_grade` filters server-side against a
   complete page. A bounded-height (`max-h-[70vh]`), `overflow-y-auto` wrapper keeps a rendered page
   scrollable; the table itself no longer needs to scroll through the *entire* backlog because
-  `OfferListPage` now pages through it (BUG26) rather than loading everything at once.
+  `OfferListPage` now pages through it rather than loading everything at once.
 - **`frontend/src/pages/OfferListPage.tsx`**: the page shell — holds `filters`, `minGrade`, and
   `page` state, renders the three `FetchNowButton`s, `OfferFilters`, `GradeFilter`, an inline error
-  banner when `useOffers().error` is set, `OfferTable`, and (BUG26) a Prev/Next pagination footer
+  banner when `useOffers().error` is set, `OfferTable`, and a Prev/Next pagination footer
   driven by `useOffers().total`. Changing any filter or `minGrade` resets `page` to `0` (an
   in-range page for the old filters can be out of range for new ones); paging itself does not
-  reset filters. The scoring-finished-triggers-a-refetch effect (BUG16) now calls `useOffers()`'s
+  reset filters. The scoring-finished-triggers-a-refetch effect now calls `useOffers()`'s
   own `refetch` directly instead of a separate scores hook, since grades arrive inline with the
-  page (BUG26) — there is no longer a second, scores-only fetch to re-trigger.
+  page — there is no longer a second, scores-only fetch to re-trigger.
 - **Routing**: `react-router-dom` was added even though this story ships only one route
   (`App.tsx`'s `<BrowserRouter><Routes><Route path="/" element={<OfferListPage />} /></Routes></BrowserRouter>`)
   — CLAUDE.md's own phase roadmap already documents further pages landing in Phase 2+ (profile,
@@ -91,12 +92,12 @@
   page-local styles" acceptance criterion. `App.tsx`'s outer wrapper now reads
   `bg-[var(--color-bg)] text-[var(--color-text)]` instead of the previous hardcoded
   `bg-slate-900 text-white`.
-- **Frontend testing (vitest, new in this story)** — see
+- **Frontend testing (vitest, introduced here)** — see
   `docs/adr/0007-vitest-introduced-but-not-wired-into-make-ci.md`: this is the first frontend
-  story with real interactive behaviour (filters, async fetch, loading states) rather than static
+  page with real interactive behaviour (filters, async fetch, loading states) rather than static
   content, so `vitest` + `@testing-library/react` + `@testing-library/user-event` + `jsdom` were
   added, superseding the `tests/test_frontend_api_client.py`-style Python content-assertion
-  approach for this story's components. `frontend/src/test/setup.ts` explicitly wires
+  approach for these components. `frontend/src/test/setup.ts` explicitly wires
   `@testing-library/jest-dom/vitest` matchers and an `afterEach(cleanup)` — required because
   `globals: true` is deliberately **not** set in `vite.config.ts`'s `test` block (tests import
   `describe`/`it`/`expect` explicitly from `vitest` rather than relying on ambient globals), and
@@ -105,21 +106,21 @@
   `make test`/`make ci`/the GitHub Actions workflow — a deliberate, temporary gap recorded in ADR
   0007, not an oversight.
 
-### Offer list with scores (P3US26)
+### Offer list with scores
 
-- **Purpose**: purely additive on the existing US17 offer list page — zero backend changes.
+- **Purpose**: purely additive on the existing offer list page — zero backend changes.
   Every piece a frontend score display needs (`MatchScoreResponse` schema, the per-offer
   `GET /offers/{offer_id}/score` read endpoint, an engine that populates rows, and an automatic
-  post-ingestion trigger that keeps populating them) already existed as of P3US21-P3US25; this
-  story only surfaces it.
+  post-ingestion trigger that keeps populating them) already existed by this point (see
+  matching.md); this addition only surfaces it.
 - **`frontend/src/api/schema.d.ts` regeneration**: the file was stale relative to the backend —
-  no story since P3US21 had regenerated it, so it predated the score endpoint/type entirely. This
-  story ran `make generate-types` against a live API before writing any code that imports
-  `MatchScoreResponse` or calls the score endpoint.
-- **`frontend/src/lib/grade.ts`** (deleted by P3US29, see below): originally a pure, React-free
+  nothing had regenerated it since the Match Score schema was added, so it predated the score
+  endpoint/type entirely. This work ran `make generate-types` against a live API before writing
+  any code that imports `MatchScoreResponse` or calls the score endpoint.
+- **`frontend/src/lib/grade.ts`** (later deleted, see below): originally a pure, React-free
   single source of truth for grade ordering/colour, shared by `GradeBadge`/`OfferTable`/
-  `GradeFilter`. Its replacement, `frontend/src/lib/scoreColor.ts`, is described in the P3US29
-  section below.
+  `GradeFilter`. Its replacement, `frontend/src/lib/scoreColor.ts`, is described in the
+  "Percentage-based match score" section below.
 - **`frontend/src/api/offerScore.ts`**: mirrors `offers.ts`'s shape exactly —
   `fetchOfferScore(offerId): Promise<MatchScoreResponse | null>` collapses `openapi-fetch`'s
   `{data, error}` into throw-on-error, but a `null` body (no active Profile, or no MatchScore yet)
@@ -131,13 +132,13 @@
   `Promise.allSettled`, not `Promise.all` — mirrors `score_offers_with_langchain`'s own "one
   failure never aborts the batch" convention — so one offer's rejected fetch degrades that offer
   to `null` (the same neutral "not yet scored" state `GradeBadge` already renders for a missing
-  score) without discarding any other offer's already-resolved score. `refetch` (BUG16) exists
+  score) without discarding any other offer's already-resolved score. `refetch` exists
   because the effect above only re-runs when the *offer-id list itself* changes, never just
   because a score for one of those same offers arrived later — `OfferListPage` calls it whenever
   `useScoringStatus`'s `finished_at` changes, so a score badge can appear once background scoring
   completes without the user reloading the page.
 - **`frontend/src/api/scoring.ts`, `frontend/src/hooks/useScoringStatus.ts`,
-  `frontend/src/components/ScoringStatusBanner.tsx` (BUG16)**: `useScoringStatus` self-paces its
+  `frontend/src/components/ScoringStatusBanner.tsx`**: `useScoringStatus` self-paces its
   own polling of `GET /scoring/status` via `setTimeout` (not `setInterval`, so a slow response
   can't pile up overlapping requests) — 1.5s while a run is `running`, 5s otherwise. Failed polls
   are swallowed silently (best-effort; the offer list and Fetch Now button already surface their
@@ -146,22 +147,21 @@
   `status.finished_at` set), then either a live `processed`/`total` progress bar or the last
   run's summary (scored/failed count, remaining backlog) — this is what surfaces the
   previously-silent "no active profile" / "LLM call failed" no-ops from
-  `run_batch_scoring`/`score_offers_with_langchain` as something a user can actually see, per
-  this bug's suggested fix.
-- **`frontend/src/components/GradeBadge.tsx`** (replaced by `ScoreBadge.tsx`, see the P3US29
-  section below): originally rendered the neutral "Not yet scored" state for
+  `run_batch_scoring`/`score_offers_with_langchain` as something a user can actually see.
+- **`frontend/src/components/GradeBadge.tsx`** (replaced by `ScoreBadge.tsx`, see the
+  "Percentage-based match score" section below): originally rendered the neutral "Not yet scored" state for
   `null`/`undefined`/any string that failed `isGrade`, otherwise a coloured badge — a `<button>`
   when the caller passes `onClick` (a scored offer), a non-interactive `<span>` otherwise (used
   standalone inside `ScoreDrawer`).
 - **`frontend/src/components/ScoreDrawer.tsx`**: the first drawer/modal in this codebase, built
   with no new npm dependency — a fixed backdrop (click closes) plus a right-anchored `.card`
   panel (`role="dialog" aria-modal="true"`), an `Escape`-key listener via a `window` `keydown`
-  effect, the offer title, a non-clickable score badge (`ScoreBadge` as of P3US29), the rationale
-  text (falling back to `"No rationale recorded."` when `null`, since the backend schema allows
-  it), and a per-dimension breakdown formatted as a percentage — unaffected by P3US29, since
-  per-dimension scores stayed 0–1 floats throughout.
-- **`frontend/src/components/GradeFilter.tsx`** (replaced by `ScoreFilter.tsx`, see the P3US29
-  section below): originally the minimum-grade control, deliberately a separate component from
+  effect, the offer title, a non-clickable score badge (`ScoreBadge` after the percentage-based
+  rework), the rationale text (falling back to `"No rationale recorded."` when `null`, since the
+  backend schema allows it), and a per-dimension breakdown formatted as a percentage — unaffected
+  by that rework, since per-dimension scores stayed 0–1 floats throughout.
+- **`frontend/src/components/GradeFilter.tsx`** (replaced by `ScoreFilter.tsx`, see the
+  "Percentage-based match score" section below): originally the minimum-grade control, deliberately a separate component from
   `OfferFilters`/`OfferListFilters` rather than a new field on either.
 - **`frontend/src/components/OfferTable.tsx`**: gained `scores`/`minGrade` props plus two new
   pure helpers. `filterByMinGrade` ran first, then either `sortByGrade` (if the Grade column
@@ -170,12 +170,13 @@
   direction, mirroring `sortByPostedDateDesc`'s existing nulls-last convention; the Grade header
   was a two-state ascending/descending toggle (never back to "no sort"). Clicking a scored badge
   sets `selectedOfferId`, rendering a `ScoreDrawer` alongside the table — this part is unchanged by
-  P3US29, only the badge/sort helper underneath it (see below).
-- **Client-side filter/sort, not a backend change**: mirrors US17's own "sort `GET /offers`
-  client-side rather than add an `ORDER BY`" precedent. `GET /offers` already had an incidental
-  exact-match `grade` query parameter from P3US21, but it was unrelated to this story's
-  minimum-grade filter (exact-match vs. minimum-grade are different semantics) and was
-  deliberately not reused; P3US29 later deleted the exact-match param outright (see below).
+  the later percentage-based rework, only the badge/sort helper underneath it (see below).
+- **Client-side filter/sort, not a backend change**: mirrors the earlier offer list page's own
+  "sort `GET /offers` client-side rather than add an `ORDER BY`" precedent. `GET /offers` already
+  had an incidental exact-match `grade` query parameter from the Match Score schema work, but it
+  was unrelated to this minimum-grade filter (exact-match vs. minimum-grade are different
+  semantics) and was deliberately not reused; the exact-match param was later deleted outright
+  (see below).
 - **`frontend/src/pages/OfferListPage.tsx`**: now owns `minGrade` state alongside `filters`,
   calls `useOfferScores(offers.map(o => o.id))`, and renders `GradeFilter` next to `OfferFilters`.
   The hook's own `loading` flag is intentionally not surfaced as a separate page-level loading
@@ -183,22 +184,24 @@
 - **Theme (`frontend/src/index.css`)**: new `--color-grade-a`/`-b`/`-c`/`-d`/`-f`/`-none` custom
   properties (A reuses the existing accent green, F reuses the existing danger red) plus a
   `.badge` base class and `.badge-grade-*` variants in the existing `@layer components` block —
-  no one-off Tailwind colour utilities, per this story's own acceptance criterion. P3US29 later
-  replaced the five fixed variants with a single continuous colour function (see below).
-- **Superseded by BUG26**: the "client-side filter/sort, not a backend change" design above (`grade`
-  vs. minimum-grade being "different semantics" so `GradeFilter`/`minGrade` deliberately stayed
-  client-only) held only while `GET /offers` returned every offer unpaginated. Once the backlog
-  reached 18k+ rows, an unfiltered client-side `minGrade` filter over `useOfferScores`'s
-  still-arriving, per-offer-fetch `scores` map meant "10 shown" could mean "10 of thousands
-  resolved so far" — not "10 actually meeting the filter" (the exact bug this table's stale
-  comments predicted was possible: partial data masquerading as complete). BUG26 added a real,
-  server-side `min_grade` query param (scoped to the active profile, distinct from the pre-existing
-  exact-match `grade` param, which is unchanged) and moved grade data onto `GET /offers` itself, so
-  `GradeFilter`/`minGrade` now drove a real API filter instead of a client-side derived one, and
-  `OfferTable` no longer took `scores`/ran `filterByMinGrade` at all. **Superseded again by
-  P3US29**: `min_grade` became `min_score`, and the exact-match `grade` param was deleted outright
-  (no percentage-equivalent "exact match" concept was ever requested) — see the P3US29 section
-  below for the current shape.
+  no one-off Tailwind colour utilities, per this story's own acceptance criterion. The later
+  percentage-based rework replaced the five fixed variants with a single continuous colour
+  function (see below).
+- **Superseded once the backlog grew**: the "client-side filter/sort, not a backend change" design
+  above (`grade` vs. minimum-grade being "different semantics" so `GradeFilter`/`minGrade`
+  deliberately stayed client-only) held only while `GET /offers` returned every offer unpaginated.
+  Once the backlog reached 18k+ rows, an unfiltered client-side `minGrade` filter over
+  `useOfferScores`'s still-arriving, per-offer-fetch `scores` map meant "10 shown" could mean "10
+  of thousands resolved so far" — not "10 actually meeting the filter" (the exact failure mode
+  this table's stale comments predicted was possible: partial data masquerading as complete). The
+  fix added a real, server-side `min_grade` query param (scoped to the active profile, distinct
+  from the pre-existing exact-match `grade` param, which is unchanged) and moved grade data onto
+  `GET /offers` itself, so `GradeFilter`/`minGrade` now drove a real API filter instead of a
+  client-side derived one, and `OfferTable` no longer took `scores`/ran `filterByMinGrade` at all.
+  **Superseded again** once scores became percentages: `min_grade` became `min_score`, and the
+  exact-match `grade` param was deleted outright (no percentage-equivalent "exact match" concept
+  was ever requested) — see the "Percentage-based match score" section below for the current
+  shape.
 
 React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
 
@@ -218,21 +221,22 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
 - **Prettier** (`.prettierrc.json`): `printWidth: 100` to mirror the Python side's
   `ruff` line-length 100.
 - `pnpm-lock.yaml` is committed, same reproducible-install precedent as `uv.lock`.
-- **`src/api/` directory (P0US7)**: `schema.d.ts` is generated by `make generate-types` from the
+- **`src/api/` directory**: `schema.d.ts` is generated by `make generate-types` from the
   live `/openapi.json` and committed to source control, since CI has no running API to regenerate
   it from. `client.ts` is the shared `openapi-fetch` client (`apiClient`), typed against
   `schema.d.ts`'s `paths` export — every future frontend feature reuses this single client rather
   than hand-rolling `fetch()` calls with hand-written response types.
 
-### Configurable auto-fetch cadence + Grade A sound alert (P3US28)
+### Configurable auto-fetch cadence + Grade A sound alert
 
-- **Purpose**: two independent additions bundled into one story — (1) each connector's fetch
-  interval (P1US6) becomes user-editable at runtime instead of a hardcoded per-source default, and
-  (2) a live, in-browser sound alert fires the moment a new offer is scored Grade A, so the user
-  doesn't have to keep the offer list open to notice a strong match. (2) is also this app's first
-  SSE endpoint, and per `CLAUDE.md`'s OD-8 ("SSE, not WebSocket, for push-style updates") it
-  establishes the `sse-starlette` + in-process broadcaster pattern the future swarm-progress story
-  (Phase 5) is expected to reuse rather than inventing its own.
+- **Purpose**: two independent additions bundled together — (1) each connector's fetch
+  interval (see ingestion.md) becomes user-editable at runtime instead of a hardcoded per-source
+  default, and (2) a live, in-browser sound alert fires the moment a new offer is scored Grade A,
+  so the user doesn't have to keep the offer list open to notice a strong match. (2) is also this
+  app's first SSE endpoint, and per the project's decision to use SSE rather than WebSocket for
+  push-style updates (see CLAUDE.md's architecture constraints) it establishes the
+  `sse-starlette` + in-process broadcaster pattern the future swarm-progress work (Phase 5) is
+  expected to reuse rather than inventing its own.
 
 - **Fetch cadence — `PUT /scheduler/sources/{source}/interval` / `PUT /scheduler/sources/interval`**
   (`app/api/routes/scheduler.py`): both take `IntervalUpdateRequest { seconds: int }`
@@ -250,13 +254,13 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
 - **Live rescheduling, not just a persisted config change**: both routes call
   `request.app.state.scheduler.reschedule_job(build_job_id(connector), trigger=IntervalTrigger
   (seconds=...))` immediately after committing, reusing `app/scheduler/lifecycle.py`'s existing
-  `build_job_id` — the same live `AsyncIOScheduler` instance P1US6 already stashed on
-  `app.state.scheduler`. The new interval therefore takes effect on that job's very next tick, not
-  only after an app restart.
+  `build_job_id` — the same live `AsyncIOScheduler` instance already stashed on
+  `app.state.scheduler` by the scheduler (see ingestion.md). The new interval therefore takes
+  effect on that job's very next tick, not only after an app restart.
 - **New uniform default**: `DEFAULT_SOURCE_CONFIGS` (`app/scheduler/service.py`) now seeds all three
   built-in connectors at a 300-second (5 minute) interval schedule, replacing the mixed
-  interval/cron defaults P1US6 originally shipped (see the "Superseded by P3US28" note on that
-  section above).
+  interval/cron defaults originally shipped with the scheduler (see the "Superseded later" note
+  in ingestion.md's Scheduler section).
 - **Frontend**: `frontend/src/api/scheduler.ts` gained `updateSourceInterval`/
   `updateAllSourceIntervals` (same throw-on-error shape as the existing `fetchSchedulerStatus`).
   `frontend/src/hooks/useFetchCadence.ts` wraps the existing `useSchedulerStatus()` (reused, not
@@ -272,23 +276,25 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
   scoring config"` purely to keep it distinguishable from each cadence row's own "Save" button in
   tests, with no visible UI change.
 
-- **Grade A sound alert — `app/scoring/events.py`** (new module; renamed/generalised by P3US29,
-  see below): the in-process Grade A broadcaster, and the reference implementation for OD-8's
-  SSE-not-WebSocket seam. A module-level `_subscribers: set[asyncio.Queue[GradeAEvent]]`,
+- **Grade A sound alert — `app/scoring/events.py`** (new module; renamed/generalised later,
+  see below): the in-process Grade A broadcaster, and the reference implementation for the
+  project's SSE-not-WebSocket seam (see CLAUDE.md's architecture constraints). A module-level
+  `_subscribers: set[asyncio.Queue[GradeAEvent]]`,
   `subscribe()`/`unsubscribe()`/`publish_grade_a()` — deliberately a plain global, the same "local
   single-user tool, one API process" justification `app/scoring/batch.py`'s `ScoringProgress`
   singleton already uses. `publish_grade_a` used `put_nowait` on an unbounded `asyncio.Queue`, so
   it never blocked and never raised — a slow/stalled SSE client could never stall the scoring
-  pipeline that publishes to it. P3US29 kept this exact mechanism and only renamed the
-  dataclass/functions and added a field — see below.
+  pipeline that publishes to it. The later percentage-based rework kept this exact mechanism and
+  only renamed the dataclass/functions and added a field — see below.
 - **Publish call sites**: `BatchScoringSummary` (`app/scoring/batch.py`) gained a fifth field,
-  `grade_a_events: tuple[GradeAEvent, ...] = ()`, following the exact precedent BUG16 set when it
-  added `remaining: int = 0` to this same frozen dataclass. `run_batch_scoring` computed it after
-  scoring completes, via an explicit `await session.flush()` (required: `score_offers_with_langchain`
-  only `session.add()`s each new `MatchScore`, never flushes, so `row.id` is `None` until something
-  forces a flush). The two places that already call `run_batch_scoring` and commit —
-  `POST /score/batch` and the dedicated backlog-draining job's `_run_scoring_job_async` (BUG24) —
-  both looped over `summary.grade_a_events` and called `publish_grade_a`. P3US29 renamed the field
+  `grade_a_events: tuple[GradeAEvent, ...] = ()`, following the exact precedent set earlier
+  when `remaining: int = 0` was added to this same frozen dataclass. `run_batch_scoring` computed
+  it after scoring completes, via an explicit `await session.flush()` (required:
+  `score_offers_with_langchain` only `session.add()`s each new `MatchScore`, never flushes, so
+  `row.id` is `None` until something forces a flush). The two places that already call
+  `run_batch_scoring` and commit — `POST /score/batch` and the dedicated backlog-draining job's
+  `_run_scoring_job_async` (see matching.md) — both looped over `summary.grade_a_events` and
+  called `publish_grade_a`. The later percentage-based rework renamed the field
   to `score_events` and dropped the Grade-A-only filter — see below.
 - **`GET /scoring/events`** (`app/api/routes/scoring.py`): an `EventSourceResponse`
   (`sse-starlette`) whose generator `subscribe()`s on connect, loops on
@@ -297,38 +303,38 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
   genuinely published event, since `queue.get()` returns immediately once something is enqueued),
   and `unsubscribe()`s in a `finally` so a disconnected client's queue is always removed. This SSE
   mechanism, the "no replay/catch-up/baseline" delivery guarantee, and the timeout/disconnect
-  handling are all unchanged by P3US29 — only the event's name and payload shape changed (see
-  below).
+  handling are all unchanged by the later rework — only the event's name and payload shape changed
+  (see below).
 - **Frontend**: `frontend/src/api/client.ts`'s `baseUrl` constant is now exported (the only change
   to that file) since `EventSource` cannot go through `openapi-fetch` and needs the same base URL
   `apiClient` already uses. `frontend/src/hooks/useGradeAAlerts.ts` (replaced by `useScoreAlerts.ts`
-  in P3US29, see below) opened exactly one `new EventSource(`${baseUrl}/scoring/events`)` in a
+  later, see below) opened exactly one `new EventSource(`${baseUrl}/scoring/events`)` in a
   `useEffect` with an empty dependency array, called once from `App.tsx` above the `<Routes>`
   switch — so exactly one connection exists per browser tab regardless of which page is active, and
-  it closes on unmount. This connection-lifecycle shape is unchanged by P3US29.
+  it closes on unmount. This connection-lifecycle shape is unchanged by the later rework.
 - **`frontend/src/lib/sound.ts`**: a small, dependency-free Web Audio synth (not a literal port of
   ZzFX, which optimizes for byte count over readability) — `playAlertSound(sound, volume)`
   constructs a `new AudioContext()`, schedules 1–3 short square/triangle-wave oscillator notes via a
   `GainNode` set from `volume`, and closes the context once the last note's envelope ends; `volume
   <= 0` is a no-op guard (belt-and-braces alongside the caller's own mute gate) that never
-  constructs an `AudioContext` at all. Completely untouched by P3US29 — only its caller changed
-  what gates the call.
-- **`frontend/src/lib/gradeAlertPrefs.ts`** (replaced by `scoreAlertPrefs.ts` in P3US29, see
+  constructs an `AudioContext` at all. Completely untouched by the later rework — only its caller
+  changed what gates the call.
+- **`frontend/src/lib/gradeAlertPrefs.ts`** (replaced by `scoreAlertPrefs.ts` later, see
   below): pure, React-free `localStorage` read/write, mirroring the precedent set by
   `grade.ts`/`scoringConfigValidation.ts`. Sound choice, volume, and mute lived under a single JSON
   blob at `localStorage["recruflow.gradeAlertPrefs"]` — **client-only UX preference, not
   server-side domain state** — there was deliberately no backend table or endpoint for these three
-  fields, a design P3US29 kept and extended.
+  fields, a design the later rework kept and extended.
 - **`frontend/src/components/NotificationsSection.tsx`**: a sound dropdown (`ALERT_SOUNDS`), a
   volume slider, a mute checkbox, and a "Test sound" button that calls `playAlertSound` directly —
   bypassing the SSE stream entirely, since it's a local preview, not a simulated event. Every change
   handler updates local state and persists immediately; unlike the scoring-config and cadence
-  sections, there is no separate explicit Save step for this section. P3US29 added a fourth control
-  (minimum score for alert) to this same pattern — see below.
+  sections, there is no separate explicit Save step for this section. A later addition added a
+  fourth control (minimum score for alert) to this same pattern — see below.
 
-### Offer applied/hide/notes fields (P3US31)
+### Offer applied/hide/notes fields
 
-- **Purpose**: the first story to give `Offer` fields that are purely user-owned — `applied`,
+- **Purpose**: the first piece of work to give `Offer` fields that are purely user-owned — `applied`,
   `hide`, `notes` — rather than connector-sourced (title, company, salary, ...) or computed
   (`score_percent`). It's consequently the first partial-update write path anywhere in the API:
   every prior write endpoint (`PUT /profile`) is a full upsert; `PATCH /offers/{offer_id}` updates
@@ -368,7 +374,7 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
   gets sensible defaults.
 - **Frontend**: `frontend/src/hooks/useOffers.ts` gains `updateOffer(updated: OfferSummary): void`
   — patches a single row into local state without a full list re-fetch (mirroring the "ride along
-  on `OfferSummary`, no extra per-row request" pattern BUG26 established for `score_percent`). When
+  on `OfferSummary`, no extra per-row request" pattern established earlier for `score_percent`). When
   `showHidden` is false and the updated offer's `hide` is true, `updateOffer` removes it from local
   state instead of replacing it in place — this is what makes hiding a row disappear immediately
   without a manual refresh. **Known, accepted trade-off**: `total` is deliberately left unchanged
@@ -385,14 +391,14 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
   — the filter row uses `items-end` alignment, so a differently-shaped control breaks the row's
   visual alignment against the select/input fields next to it.
 
-### Offer new-offer highlight until opened (P3US35)
+### Offer new-offer highlight until opened
 
 - **Purpose**: closes the last gap in "make the best-matching offers impossible to miss"
-  (P3US28 added a one-shot sound alert on new high scores, P3US29 made its threshold
-  user-configurable via `scoreAlertPrefs.minScorePercent`) — missing the sound (stepped away,
-  muted, tab not focused) previously meant a great match could sit unnoticed in the list forever.
-  This story adds a fourth user-owned `Offer` field, `link_opened_at`, following P3US31's exact
-  migration → model → schema → endpoint → frontend pattern.
+  (an earlier addition put a one-shot sound alert on new high scores, and a later one made its
+  threshold user-configurable via `scoreAlertPrefs.minScorePercent`) — missing the sound (stepped
+  away, muted, tab not focused) previously meant a great match could sit unnoticed in the list
+  forever. This adds a fourth user-owned `Offer` field, `link_opened_at`, following the applied/
+  hide/notes work's exact migration → model → schema → endpoint → frontend pattern.
 - **Schema/DB**: one Alembic migration (`95644bfde2a0_offer_link_opened_at`, mirroring
   `bef7908f5330_offer_applied_hide_notes`'s shape) adds `link_opened_at TIMESTAMPTZ NULL` to
   `offers`, defaulting to null. Included in `OfferSummary`/`OfferDetail` (`app/schemas/offer.py`)
@@ -422,7 +428,7 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
   accent-tinted `color-mix` border/background treatment already established for other
   accent-styled cards, applied at the `<tr>` level, so the highlight reads as part of the
   existing dark theme rather than a new bolted-on banner color.
-- **Click-to-open wiring** (`OfferTable.tsx`'s title `<a>`, the same anchor P3US26 already
+- **Click-to-open wiring** (`OfferTable.tsx`'s title `<a>`, the same anchor already
   rendered when `canonical_url` is set): `onClick={() => handleOpenLink(offer)}` does not call
   `preventDefault`, so the existing `target="_blank"` navigation is untouched and never blocked
   or delayed. `handleOpenLink` (a) no-ops if `link_opened_at` is already set (avoids a redundant
@@ -430,24 +436,25 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
   new Date().toISOString() })` synchronously so the row's highlight visibly clears the instant
   it's clicked, without waiting on the network, then (c) fires `void patchOffer(offer.id,
   { link_opened: true }).catch(() => {})` — fire-and-forget, with a bare `.catch` added (beyond
-  the original story plan) specifically to swallow the rejection `patchOffer` throws on a failed
+  the original plan) specifically to swallow the rejection `patchOffer` throws on a failed
   request; without it, an offline/erroring PATCH would surface as an unhandled promise rejection
   (noisy in the browser console, and can fail a Vitest run outright via other, unrelated tests).
   No retry or error toast is added — the optimistic local state is treated as sufficient for this
-  session, matching the existing "no client-side snapshot" acceptance criterion's spirit.
-- **Reingestion protection is free, for the same reason P3US31's fields got it**: `link_opened_at`
-  is never part of the ingestion `Offer` schema, so `persist_offer`'s
+  session, matching the existing "no client-side snapshot" design's spirit.
+- **Reingestion protection is free, for the same reason the applied/hide/notes fields got it**:
+  `link_opened_at` is never part of the ingestion `Offer` schema, so `persist_offer`'s
   `on_conflict_do_nothing(index_elements=[OfferModel.dedup_hash])` already leaves it untouched on
   a duplicate `dedup_hash` — no ingestion-path code changes were needed, only a regression test
   (`test_reingest_does_not_reset_link_opened_at`).
 
-### Per-connector offer counts + connector settings sub-pages (P3US45)
+### Per-connector offer counts + connector settings sub-pages
 
 - **Purpose**: the main page's connector cards and Settings' connector configuration both scale
   poorly once a registry grows past a handful of entries — the main page gives no sense of how
   many offers each connector has actually produced or how much of the active profile's backlog
-  is scored, and Settings' vertical `ConnectorSettingsCard` stack (P3US37) keeps growing taller
-  with every new connector (six real connectors already; P3US42-44 queue three more). This story
+  is scored, and Settings' vertical `ConnectorSettingsCard` stack (see "Connector extensibility"
+  in ingestion.md) keeps growing taller with every new connector (six real connectors already,
+  with three more queued). This
   adds counts to the former and a tab/sub-page navigation to the latter, without touching either
   component's actual content.
 
@@ -492,14 +499,14 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
   scoring counts read better as bare numbers here).
 
 - **Settings connector sub-pages**: `ConnectorSettingsSection.tsx`'s vertical
-  `ConnectorSettingsCard` stack (P3US37) is replaced by a `role="tablist"`/`role="tab"` strip
+  `ConnectorSettingsCard` stack (see ingestion.md) is replaced by a `role="tablist"`/`role="tab"` strip
   sourced directly from `useKnownSources()`, rendering exactly one active connector's
   `ConnectorSettingsCard` below it — the "Apply to all" bar above the tab strip is untouched and
   stays visible and functional regardless of which tab is selected (it was already
   connector-agnostic, calling the same `*All` bulk endpoints). The active tab is plain
   component state, not derived from routing, so adding a new `CONNECTOR_REGISTRY` entry makes it
   appear as a new tab with zero changes to `ConnectorSettingsSection.tsx` itself — the same
-  zero-frontend-change extensibility P3US37 established for the old card stack. The tab strip's
+  zero-frontend-change extensibility established earlier for the old card stack. The tab strip's
   container reuses the same `flex flex-wrap` pattern the "Apply to all" bar already uses, so it
   wraps onto additional rows rather than overflowing at both the real 6-connector count and a
   9-10-connector fixture-mocked stretch test, at both mobile and desktop widths (manually
@@ -507,14 +514,14 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
   horizontal overflow on the tab strip itself either way).
 
 - **`frontend/src/lib/connectorSettingsTabPrefs.ts` (new)** persists the selected tab id to
-  `localStorage` under `recruflow.connectorSettingsTab`, mirroring BUG33's
+  `localStorage` under `recruflow.connectorSettingsTab`, mirroring the earlier
   `offerListPrefs.ts` precedent (bare `load.../save...` functions, no wrapper hook) but simplified
   — the module only stores a string id; "is this still a known connector" is checked by the
   consuming component against the live `useKnownSources()` list, since the prefs module itself has
   no way to know the registry. A persisted id pointing at a since-removed connector (or nothing
   persisted yet) falls back to the registry's first entry rather than rendering no tab as active.
 
-### Fetch Scope row in connector settings (US47)
+### Fetch Scope row in connector settings
 
 `ConnectorSettingsCard.tsx` gains a `FetchScopeRow` sub-component, rendered only when
 `ConnectorOption.supports_fetch_scope` is `true` — a mode `<select>` (All offers / Filtered by
@@ -524,7 +531,7 @@ void-returning one), since a `"filtered"` save can be rejected with HTTP 400 on 
 connector and the UI needs to know. No "apply to all" bulk variant exists for this control,
 mirroring the backend's deliberate lack of a bulk fetch-scope route (see [Ingestion pipeline:
 Connector fetch
-scope](ingestion.md#connector-fetch-scope-all-offers-vs-filtered-by-hard-skills-us47)). The row
+scope](ingestion.md#connector-fetch-scope-all-offers-vs-filtered-by-hard-skills)). The row
 was extracted into its own component (rather than inlined like the cadence/fetch-range rows)
 purely to keep `ConnectorSettingsCard`'s cyclomatic complexity under this repo's ESLint
 `complexity: 10` ceiling.

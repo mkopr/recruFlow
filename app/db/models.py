@@ -161,7 +161,7 @@ class SchedulerRun(Base):
 
 
 class DeadLetterMixin:
-    """Common columns for a pipeline failure table (P3US33).
+    """Common columns for a pipeline failure table.
 
     One row per failing *resource* (a job posting, a source's ingestion, an
     offer x profile pair), not one row per occurrence: `dedup_key` is unique per

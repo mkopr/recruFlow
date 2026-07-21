@@ -1,6 +1,6 @@
 # Scheduler job callables must be plain `def`, not `async def`
 
-The scheduler (US15) uses APScheduler's `AsyncIOScheduler`, which shares FastAPI/uvicorn's single
+The scheduler uses APScheduler's `AsyncIOScheduler`, which shares FastAPI/uvicorn's single
 asyncio event loop rather than running a separate thread or process. `AsyncIOScheduler`'s default
 executor only offloads a job to its thread pool when the registered callable is a plain (non-`async
 def`) function; an `async def` callable is instead scheduled directly on the main event loop via

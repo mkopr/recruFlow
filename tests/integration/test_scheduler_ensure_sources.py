@@ -53,7 +53,7 @@ async def test_ensure_sources_exist_seeds_pracuj_with_conservative_defaults(
 
     source = await db_session.scalar(select(Source).where(Source.connector == PRACUJ))
     assert source is not None
-    # Pracuj.pl gets a longer interval than the shared 300s default (P3US41, browser-driven
+    # Pracuj.pl gets a longer interval than the shared 300s default (browser-driven
     # fetching is far more expensive) and a non-empty category_filter so a freshly seeded
     # source doesn't immediately ingest every industry Pracuj.pl lists, not just IT.
     assert source.config_json["schedule"]["seconds"] == 3600
@@ -65,8 +65,8 @@ async def test_ensure_sources_exist_seeds_pracuj_with_conservative_defaults(
 async def test_ensure_sources_exist_seeds_remoteok_with_shorter_interval(
     db_session: AsyncSession,
 ) -> None:
-    # RemoteOK is a single lightweight GET with no pagination cost (P3US42), so it gets a
-    # shorter interval than the shared 300s default -- the opposite direction from Pracuj.pl's
+    # RemoteOK is a single lightweight GET with no pagination cost, so it gets a shorter
+    # interval than the shared 300s default -- the opposite direction from Pracuj.pl's
     # browser-driven-fetching-is-expensive override above.
     await db_session.execute(delete(Source).where(Source.connector == REMOTEOK))
     await db_session.commit()
@@ -84,10 +84,10 @@ async def test_ensure_sources_exist_seeds_remoteok_with_shorter_interval(
 async def test_ensure_sources_exist_seeds_remotive_with_default_categories_and_tos_interval(
     db_session: AsyncSession,
 ) -> None:
-    # Remotive scopes ingestion to IT-relevant categories by default (P3US43) -- a freshly
-    # seeded source should not silently ingest every Remotive category (sales, marketing, ...).
-    # The 21600s (6h) interval is a ToS-compliance floor, not a throughput choice (BUG45):
-    # Remotive's API states usage should not exceed "max. 4 times a day".
+    # Remotive scopes ingestion to IT-relevant categories by default -- a freshly seeded
+    # source should not silently ingest every Remotive category (sales, marketing, ...).
+    # The 21600s (6h) interval is a ToS-compliance floor, not a throughput choice: Remotive's
+    # API states usage should not exceed "max. 4 times a day".
     await db_session.execute(delete(Source).where(Source.connector == REMOTIVE))
     await db_session.commit()
 

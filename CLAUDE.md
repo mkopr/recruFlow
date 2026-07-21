@@ -59,9 +59,9 @@ Key architectural constraints:
 - **ELT pattern**: raw API payload always stored before normalisation
 - **Dedup**: hash on canonical URL; fallback hash on title + company + location
 - **No auto-send**: Applications are never created or sent without explicit user approval
-- **Unified MatchScore**: every connector is scored by the same LangChain Matcher into one schema/table; the `engine` field is kept for schema stability but is only ever `"langchain"` today — the originally-planned second engine (`sjctl evaluate`, SOLID.Jobs-only) was abandoned before P3US23 shipped (see `docs/architecture/matching.md`'s P3US23 section and `docs/adr/0022-connector-registry-is-the-single-source-of-truth.md`)
-- **SSE for swarm progress**: not WebSocket (OD-8)
-- **Send queue**: rate-limited, daily cap enforced as a hard block (OD-5)
+- **Unified MatchScore**: every connector is scored by the same LangChain Matcher into one schema/table; the `engine` field is kept for schema stability but is only ever `"langchain"` today — the originally-planned second engine (`sjctl evaluate`, SOLID.Jobs-only) was abandoned before matching went live (see `docs/architecture/matching.md` and `docs/adr/0022-connector-registry-is-the-single-source-of-truth.md`)
+- **SSE for swarm progress**: not WebSocket
+- **Send queue**: rate-limited, daily cap enforced as a hard block
 
 ## Domain Glossary
 

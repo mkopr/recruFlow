@@ -1,17 +1,19 @@
 # SOLID.Jobs connector calls its direct public HTTP API, not the sjctl subprocess
 
-BUG10: the vendor confirmed `sjctl` is itself a thin wrapper over a public, key-less HTTP
+The vendor confirmed `sjctl` is itself a thin wrapper over a public, key-less HTTP
 endpoint — `GET https://solid.jobs/public-api/offers/{division}`, `division` a URL path segment
 (`IT`/`Engineering`/`Marketing`/`Sales`/`HR`/`Logistics`/`Finances`/`Other`). Once that's true,
-SOLID.Jobs is no longer "genuinely different" from JustJoin.it/NoFluffJobs (BUG07's stated reason
-for leaving it alone) — it's the third source that calls `fetch_json` like its two siblings.
+SOLID.Jobs is no longer "genuinely different" from JustJoin.it/NoFluffJobs (the stated reason
+for leaving it alone previously) — it's the third source that calls `fetch_json` like its two siblings.
 `app/connectors/solid_jobs.py` now does exactly that: `build_offer_url`/`build_offer_params`
 replace `build_search_args`/`build_sync_args`, `_fetch_solid_jobs_json` replaces `_run_sjctl`, and
 `_extract_offers` collapses to a single envelope shape instead of the sync/search split. This
-closes the loop BUG07 started: all three connectors now share one transport, one failure-handling
-shape, and one test style. The subprocess boundary, the sjctl watch state-management problem that
-caused BUG01, the Docker image's `curl | bash` sjctl installer (signature verification disabled),
-and ADR 0001/ADR 0002's sync/search distinction are all removed, not just relocated.
+closes the loop that earlier work started: all three connectors now share one transport, one
+failure-handling shape, and one test style. The subprocess boundary, the sjctl watch
+state-management problem that caused the original "Fetch now" bug (see
+[ADR 0008](0008-manual-fetch-forces-refresh-scheduled-run-does-not.md)), the Docker image's
+`curl | bash` sjctl installer (signature verification disabled), and ADR 0001/ADR 0002's
+sync/search distinction are all removed, not just relocated.
 
 **Query-param contract**, confirmed 2026-07-05 by live requests against the production endpoint
 (not just vendor docs): `campaign` (required, same value as the old `Settings.sjctl_campaign`,

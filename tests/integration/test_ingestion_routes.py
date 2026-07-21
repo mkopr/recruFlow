@@ -105,8 +105,8 @@ async def test_ingest_persists_offers_end_to_end_visible_in_db(
 async def test_ingest_defaults_to_force_refresh_false_to_keep_incremental_early_stop(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # BUG18: the "Fetch now" button (the only caller of POST /ingest/{source} reachable from
-    # the UI) must not silently disable BUG02/ADR0009's incremental early-stop by hardcoding
+    # The "Fetch now" button (the only caller of POST /ingest/{source} reachable from the UI)
+    # must not silently disable ADR0009's incremental early-stop by hardcoding
     # force_refresh=True. Default behavior has to match POST /scheduler/run/{source}.
     captured: dict[str, bool] = {}
 
@@ -128,7 +128,7 @@ async def test_ingest_accepts_explicit_force_refresh_query_param_opt_in(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # A genuine full re-sync is still reachable, but only via an explicit opt-in query param
-    # rather than being the button's unconditional default (BUG18 suggested fix #2).
+    # rather than being the button's unconditional default.
     captured: dict[str, bool] = {}
 
     async def _fake(session: AsyncSession, source: Source, force_refresh: bool) -> IngestionResult:
@@ -294,9 +294,9 @@ async def test_health_endpoint_responds_during_ingest_run(
 async def test_ingest_does_not_trigger_batch_scoring_for_newly_persisted_offer(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # BUG29: POST /ingest/{source} used to trigger a scoring run of its own (BUG16), which
-    # raced the dedicated `scoring:backlog` job (BUG24) and produced duplicate MatchScore rows
-    # for the same offer/profile pair. Ingestion now only persists offers; draining the
+    # POST /ingest/{source} used to trigger a scoring run of its own, which raced the
+    # dedicated `scoring:backlog` job and produced duplicate MatchScore rows for the same
+    # offer/profile pair. Ingestion now only persists offers; draining the
     # unscored backlog is the backlog job's job alone. A fake connector name is registered
     # against the real justjoinit dispatcher, mirroring
     # test_ingest_known_connector_without_configured_source_returns_404's own pattern, so this
@@ -371,8 +371,8 @@ async def test_ingest_does_not_trigger_batch_scoring_for_newly_persisted_offer(
 async def test_ingest_route_second_call_stops_early_instead_of_re_walking_full_catalog(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # BUG18 regression: POST /ingest/{source} -- the only endpoint FetchNowButton.tsx calls --
-    # must benefit from the same already_seen early-stop as POST /scheduler/run/{source}
+    # POST /ingest/{source} -- the only endpoint FetchNowButton.tsx calls -- must benefit
+    # from the same already_seen early-stop as POST /scheduler/run/{source}
     # instead of re-walking the full catalog on every click. A fake connector name is
     # registered against the real justjoinit dispatcher (mirroring
     # test_ingest_triggers_batch_scoring_for_newly_persisted_offer's pattern above) so this

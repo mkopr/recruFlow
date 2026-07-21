@@ -5,7 +5,7 @@ tables (e.g. `UPDATE profiles SET is_active = false` with no `WHERE` clause — 
 `test_get_active_profile_returns_none_when_none_active` can assert on a globally-empty state).
 Before this ADR, integration tests connected to the same long-lived Postgres instance `make up`
 uses, so any `make test`/`make test-integration`/`make ci` run silently deactivated whatever
-Profile a developer had marked active for real use, with no restore step anywhere (BUG28).
+Profile a developer had marked active for real use, with no restore step anywhere.
 
 The fix is a second, ephemeral `db_test` Compose service (`docker-compose.yml`, port 5433,
 `recruflow_test` database, no named volume) that `make test`/`make test-integration` bring up via

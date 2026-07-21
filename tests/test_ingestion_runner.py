@@ -327,7 +327,7 @@ async def test_run_paginated_ingestion_sorted_by_recency_false_keeps_paging_past
     monkeypatch.setattr(runner_module, "ingest_offer", _fake_ingest_offer)
 
     # Same shape as the "stops early" test above, but this feed (like Rocket Jobs/Bulldogjob's
-    # sitemap enumeration, BUG41) isn't sorted newest-first -- page 1 being wholly older than
+    # sitemap enumeration) isn't sorted newest-first -- page 1 being wholly older than
     # `since` must not be trusted as proof the rest of the feed is too.
     page1_offers = [
         {"title": "old-1", "posted_at": "2026-01-01T00:00:00Z"},
@@ -368,7 +368,7 @@ async def test_run_paginated_ingestion_sorted_by_recency_false_keeps_paging_past
 @pytest.mark.asyncio
 async def test_run_paginated_ingestion_does_not_block_the_event_loop_during_fetch_page() -> None:
     # A blocking `time.sleep` inside `fetch_page` -- exactly what Rocket Jobs/Bulldogjob's
-    # per-URL fetch loop plus BUG42-followup's rate-limit throttle does -- must not freeze the
+    # per-URL fetch loop plus a rate-limit throttle does -- must not freeze the
     # whole server for its duration. Confirmed live 2026-07-14: a single slow connector run made
     # the API stop responding to *everything*, including `/health`, because `fetch_page` was
     # called directly on the event loop's own thread rather than offloaded.

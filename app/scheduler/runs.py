@@ -38,7 +38,7 @@ async def finish_run_error(session: AsyncSession, run: SchedulerRun, *, error_me
 
 
 async def reconcile_stale_running_runs(session: AsyncSession) -> int:
-    """Sweep every `SchedulerRun` still at `status='running'` into `error` (BUG45 finding #4).
+    """Sweep every `SchedulerRun` still at `status='running'` into `error`.
 
     `_run_source_async` only ever reaches `finish_run_ok`/`finish_run_error` from inside the
     same coroutine `start_run` began; if the process stops mid-run (crash, hot-reload,

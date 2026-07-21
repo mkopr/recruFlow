@@ -1,13 +1,13 @@
 # force_refresh: given real meaning for JustJoin.it, an honest documented no-op for NoFluffJobs
 
-BUG06: `_dispatch_justjoinit`/`_dispatch_nofluffjobs` accepted `force_refresh: bool` (required by
+`_dispatch_justjoinit`/`_dispatch_nofluffjobs` accepted `force_refresh: bool` (required by
 the shared `Connector` protocol) and then never referenced it — `run_justjoinit_ingestion`/
 `run_nofluffjobs_ingestion` didn't even accept the parameter. Only `_dispatch_solid_jobs` actually
 threaded it through (per [ADR 0001](0001-solid-jobs-sync-vs-search-cache-strategy.md)). The
 interface promised uniform behavior it didn't have.
 
-We rejected dropping `force_refresh` from the two connectors' signatures (the bug report's other
-suggested fix) because, since [BUG02](0009-justjoinit-incremental-pagination-strategy.md),
+We rejected dropping `force_refresh` from the two connectors' signatures (the other fix
+considered) because, since [ADR 0009](0009-justjoinit-incremental-pagination-strategy.md),
 JustJoin.it actually has an incremental checkpoint `force_refresh` can meaningfully bypass: the
 early-stop-on-consecutive-already-seen pagination logic. `run_justjoinit_ingestion(...,
 force_refresh=True)` now skips that check, walking pagination all the way to `max_pages`

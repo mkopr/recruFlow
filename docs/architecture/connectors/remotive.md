@@ -2,7 +2,7 @@
 
 [Architecture index](../../../ARCHITECTURE.md) · [Connectors overview](../connectors.md)
 
-### Remotive connector (P3US43)
+### Remotive connector
 
 - **Purpose**: a genuine, confirmed, public, unauthenticated JSON API at
   `GET https://remotive.com/api/remote-jobs`, no signup/key, no offset/cursor pagination — the
@@ -66,8 +66,9 @@
   passed this string straight through, which crashed every real run of
   `run_paginated_ingestion`'s fetch-range filter (`app/ingestion/runner.py`) with
   `TypeError: can't compare offset-naive and offset-aware datetimes` the moment a `since`/
-  `until` bound was set — which every freshly-seeded source has by default (US34's 7-day
-  fetch-range seed). A private `_normalize_posted_at` helper in `app/connectors/remotive.py`
+  `until` bound was set — which every freshly-seeded source has by default (the 7-day
+  fetch-range seed introduced alongside the scheduler on/off toggle). A private
+  `_normalize_posted_at` helper in `app/connectors/remotive.py`
   parses the raw string and attaches `UTC` when the parsed value is naive, confirmed live after
   the fix (`fetched: 156, created: 18` on first real run across the four default categories,
   `created: 0` on an immediate rerun against the same window). Every mocked unit/integration
@@ -88,4 +89,3 @@
 - **Market-scope callout** (same note RemoteOK's own section makes): Remotive, like RemoteOK, is
   a global remote-first board, not Poland-specific — this and RemoteOK are recruFlow's first two
   connectors extending ingestion beyond the project's original Poland-only framing.
-

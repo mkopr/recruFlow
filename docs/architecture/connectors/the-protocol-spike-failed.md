@@ -2,10 +2,10 @@
 
 [Architecture index](../../../ARCHITECTURE.md) · [Connectors overview](../connectors.md)
 
-### The Protocol connector — spike failed, not implemented (P3US39)
+### The Protocol connector — spike failed, not implemented
 
-- **Status**: P3US39 is a hard two-phase gate — Phase 1 (feasibility spike) before any
-  connector code. The spike failed; Phase 2 (`app/connectors/the_protocol.py`, a
+- **Status**: this connector followed a hard two-phase gate — Phase 1 (feasibility spike) before
+  any connector code. The spike failed; Phase 2 (`app/connectors/the_protocol.py`, a
   `THE_PROTOCOL` `normalize.py` constant, a `CONNECTOR_REGISTRY` entry) was never started.
   There is no Protocol connector in this codebase. This section exists only to record why, so
   a future attempt doesn't re-spend the investigation from scratch.
@@ -26,14 +26,13 @@
   empty body) that never self-cleared, even after waiting in place on the challenge page. This
   reads as Cloudflare escalating its classification of the client after the first visit
   (automation fingerprinting inherent to a stock headless session), not a simple request-rate
-  throttle a rate-limit delay could work around. Headed mode — the story's suggested fallback —
-  could not even be evaluated in the sandbox this spike ran in (`chromium.launch(headless=False)`
+  throttle a rate-limit delay could work around. Headed mode — a suggested fallback — could not
+  even be evaluated in the sandbox this spike ran in (`chromium.launch(headless=False)`
   hung trying to reach a display/D-Bus session that wasn't actually available), so it remains
   untested, not confirmed-working.
 
-- **No stealth or CAPTCHA-solving tooling was used or considered** — out of scope per the
-  story's own Domain Decision, and using one to force a pass would count as a fail for this
-  story's purposes regardless of outcome.
+- **No stealth or CAPTCHA-solving tooling was used or considered** — out of scope by design, and
+  using one to force a pass would count as a fail for this spike's purposes regardless of outcome.
 
 - **Revisit conditions**: re-run the Phase 1 spike (same method — one fresh Playwright
   navigation, then repeated navigations over realistic elapsed time, checking `cf-mitigated`
@@ -41,4 +40,3 @@
   if a legitimate non-browser API access path turns up. Until then, The Protocol is not one of
   recruFlow's connectors — `CONNECTOR_REGISTRY` has no entry for it, and `playwright` is not a
   dependency of this repository.
-

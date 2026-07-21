@@ -2,9 +2,9 @@
 
 [Architecture index](../../../ARCHITECTURE.md) · [Connectors overview](../connectors.md)
 
-### We Work Remotely connector (P3US44)
+### We Work Remotely connector
 
-- **Purpose**: the last of the six connectors queued after P3US37, and a deliberate "does the
+- **Purpose**: the last of the six connectors in the post-Phase-3 batch, and a deliberate "does the
   extensibility investment hold in the opposite direction" test case from its five siblings —
   every other connector in this batch found some JSON path (an API, or an embedded
   `__NEXT_DATA__`/JSON-LD blob); We Work Remotely's only confirmed public source is
@@ -19,10 +19,10 @@
   it doesn't fit that Template Method's shape. `app/connectors/we_work_remotely.py` instead
   exports a bare async function, `run_we_work_remotely_ingestion`, registered directly as a
   `ConnectorSpec.dispatch` — the same "plain function satisfies the `Connector` Protocol" shape
-  every connector had before P3US37 introduced the class hierarchy. This is this batch's one
+  every connector had before the class hierarchy was introduced. This is this batch's one
   deliberate exception, called out both in the module's own docstring and with an inline comment
   on its `CONNECTOR_REGISTRY` entry, so a future reader doesn't mistake the asymmetry for
-  something P3US37 simply forgot to convert.
+  something the class-hierarchy migration simply forgot to convert.
 
 - **New `fetch_xml` primitive** (`app/connectors/http.py`), the RSS/XML sibling of `fetch_json`:
   same signature shape (`url`, `source_name`, `logger`, `params=None`, `headers=None`,
@@ -37,7 +37,7 @@
   `JobBoardConnector.fetch_page`'s own "unexpected JSON shape" log already establishes relative to
   `extract_offers`.
 
-- **Company name comes from `<title>`, not `<description>`, overriding the story's original
+- **Company name comes from `<title>`, not `<description>`, overriding the original
   assumption**: live sampling of the real feed 2026-07-15 (100/100 items checked) showed every
   `<title>` is formatted `"Company Name: Job Title"`, with zero exceptions, while `<description>`
   carries no company-identifying line at all — its only consistently structured content is a
@@ -63,9 +63,9 @@
 - **Canonical URL: `link`, confirmed to currently equal `guid`**: two live polls of the real feed
   a few minutes apart on 2026-07-15 showed `<link>` and `<guid>` byte-identical for all 100 common
   items across both polls — unlike Remotive's separate numeric `id` vs. `url` fields, this feed's
-  two candidate identifiers currently carry the same value. A true multi-hour stability diff (the
-  story's own suggested cadence) was not performed within this implementation session; `link` is
-  used per the Domain Decision's stated baseline, and since it's presently identical to `guid`,
+  two candidate identifiers currently carry the same value. A true multi-hour stability diff (a
+  suggested cadence for future re-verification) was not performed within this implementation
+  session; `link` is used as the stated baseline, and since it's presently identical to `guid`,
   either choice yields the same dedup behavior today. If a future observation shows the two
   fields diverging, this section and `map_offer`'s `canonical_url` line should be revisited
   together.
@@ -88,8 +88,7 @@
   uses. No scheduler, matcher, or frontend edit beyond the registry entry was needed —
   automatically scoring-eligible via `LANGCHAIN_SOURCES` and automatically visible to the
   frontend via `useKnownSources()`'s `GET /connectors` call, with zero `frontend/src/` edit — the
-  same "adding a connector" outcome P3US37 was built to guarantee.
+  same "adding a connector" outcome the connector extensibility work was built to guarantee.
 
 - **Market-scope callout** (same note RemoteOK's and Remotive's own sections make): We Work
   Remotely, like RemoteOK and Remotive, is a global remote-first board, not Poland-specific.
-

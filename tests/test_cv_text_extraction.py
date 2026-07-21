@@ -25,7 +25,7 @@ def _draw_char_by_char(c: canvas.Canvas, x: float, y: float, text: str, size: in
     """Draw each glyph as its own positioned text-show operator.
 
     Reproduces the per-glyph text-positioning some CV-builder exports use, which is
-    what caused pypdf's extract_text() to shred real CVs into single letters (BUG08).
+    what caused pypdf's extract_text() to shred real CVs into single letters.
     """
     cursor = x
     for ch in text:

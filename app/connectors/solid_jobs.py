@@ -83,8 +83,8 @@ class SolidJobsConnector(JobBoardConnector):
 
     def apply_fetch_scope_term(self, config: dict[str, Any], term: str) -> dict[str, Any]:
         # Routes a single hard-skill term into `build_offer_params`'s existing
-        # `search.searchTerm` path (US47) -- confirmed live to be a real, working param that
-        # was simply never populated from anywhere upstream before this story.
+        # `search.searchTerm` path -- confirmed live to be a real, working param that
+        # was simply never populated from anywhere upstream before now.
         return {**config, "terms": [term]}
 
     def map_offer(self, source_id: int, raw: dict[str, Any]) -> dict[str, Any]:

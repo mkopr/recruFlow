@@ -20,7 +20,7 @@ OnError = Callable[[AsyncSession, Source, Exception], Awaitable[None]]
 
 
 class ConnectorDisabledError(Exception):
-    """Raised when a Connector's `connector_enabled` flag is `False` (P3US37). Distinct from
+    """Raised when a Connector's `connector_enabled` flag is `False`. Distinct from
     `SchedulerLookupError` (registry.py) -- that family means "this connector doesn't exist,"
     this means "it exists but is stopped" -- so callers can map the two to different HTTP
     statuses (404 vs 409) without a type check inside a shared except block.
@@ -35,7 +35,7 @@ async def record_run_fetch_failure(
     scheduler_run_id: int | None = None,
 ) -> None:
     """The shared `on_success` failure-recording shape every "run a connector" caller needs
-    when `dispatch_ingestion` returns a failed (not raised) result (BUG37). `scheduler_run_id`
+    when `dispatch_ingestion` returns a failed (not raised) result. `scheduler_run_id`
     is the only axis callers vary on -- the audited `/scheduler/run/{source}` path threads its
     `SchedulerRun.id` through, the unaudited `/ingest/{source}` path leaves it unset.
     """
@@ -70,9 +70,9 @@ async def run_with_lifecycle(
     here rather than duplicated per caller. `on_error` owns rollback/commit itself since
     callers disagree on which — nothing is committed on its behalf.
 
-    Does not trigger batch scoring itself (BUG29): the dedicated `scoring:backlog` job
+    Does not trigger batch scoring itself: the dedicated `scoring:backlog` job
     (`app/scheduler/service.py`) already drains the unscored backlog on its own interval,
-    independent of any source's ingestion schedule (BUG24). Having ingestion also trigger
+    independent of any source's ingestion schedule. Having ingestion also trigger
     a scoring run let the two race and rescore the same offers twice.
     """
     engine = get_engine()

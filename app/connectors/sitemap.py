@@ -13,7 +13,7 @@ def parse_sitemap_locs(xml_text: str, tag: str) -> list[str]:
 
 
 def resolve_sitemap_cursor(config: dict[str, Any], url_count: int) -> int:
-    """Read a sitemap-enumeration connector's persisted `sitemap_cursor` (BUG41), resetting
+    """Read a sitemap-enumeration connector's persisted `sitemap_cursor`, resetting
     to 0 when it's out of range -- the sitemap shrank, or a previous run walked all the way
     to the end -- so a run always makes forward progress instead of returning an empty page.
     """
@@ -23,6 +23,6 @@ def resolve_sitemap_cursor(config: dict[str, Any], url_count: int) -> int:
 
 def next_sitemap_cursor(final_cursor: int | None) -> int:
     """`None` means the run walked to the end of the sitemap -- wrap back to 0 so the next
-    run starts a fresh pass instead of resuming past the end forever (BUG41).
+    run starts a fresh pass instead of resuming past the end forever.
     """
     return final_cursor if final_cursor is not None else 0

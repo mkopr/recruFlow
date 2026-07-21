@@ -38,9 +38,9 @@ class _FakeResponse:
 async def _create_source(
     session: AsyncSession, config_json: dict[str, Any] | None = None
 ) -> Source:
-    # `rate_limit_delay_seconds: 0` keeps this suite fast -- BUG42-followup's per-URL throttle
-    # (added after cursor persistence let a run walk far more detail pages than before) would
-    # otherwise make every multi-URL test in this file sleep for real between fetches.
+    # `rate_limit_delay_seconds: 0` keeps this suite fast -- the per-URL throttle (added after
+    # cursor persistence let a run walk far more detail pages than before) would otherwise make
+    # every multi-URL test in this file sleep for real between fetches.
     source = Source(
         name=f"bulldogjob-{uuid4()}",
         config_json={"rate_limit_delay_seconds": 0, **(config_json or {})},
@@ -363,10 +363,10 @@ async def test_run_bulldogjob_ingestion_range_mode_skips_offers_outside_since_un
 async def test_run_bulldogjob_ingestion_resumes_from_persisted_cursor_across_runs(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # BUG41 regression: `max_pages=1` forces a single run to only cover the sitemap's first
-    # `page_size` URLs, mirroring the real Bulldogjob config (~1000-URL sitemap needing many
-    # scheduled runs to fully walk). Before the fix, every run restarted at cursor 0 and never
-    # made it past this same first slice.
+    # `max_pages=1` forces a single run to only cover the sitemap's first `page_size` URLs,
+    # mirroring the real Bulldogjob config (~1000-URL sitemap needing many scheduled runs to
+    # fully walk). Without cursor persistence, every run would restart at cursor 0 and never
+    # make it past this same first slice.
     source = await _create_source(db_session, config_json={"page_size": 5, "max_pages": 1})
     ids = [_unique_job_id(f"job{i}") for i in range(10)]
     urls = [_job_url(job_id) for job_id in ids]
@@ -415,9 +415,9 @@ async def test_run_bulldogjob_ingestion_resumes_from_persisted_cursor_across_run
 async def test_run_bulldogjob_ingestion_since_cutoff_does_not_stop_pagination_early(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # BUG41's exact Bulldogjob failure mode: sitemap order isn't recency-sorted, so an old
-    # listing landing on page 1 (page_size=1 forces separate pages) must not be mistaken for
-    # "the rest of the catalog is old too" and truncate pagination before page 2 is fetched.
+    # Bulldogjob's sitemap order isn't recency-sorted, so an old listing landing on page 1
+    # (page_size=1 forces separate pages) must not be mistaken for "the rest of the catalog is
+    # old too" and truncate pagination before page 2 is fetched.
     source = await _create_source(
         db_session,
         config_json={
@@ -459,9 +459,9 @@ async def test_run_bulldogjob_ingestion_since_cutoff_does_not_stop_pagination_ea
 async def test_run_bulldogjob_ingestion_throttles_between_detail_fetches(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # BUG42-followup: BUG41's cursor persistence let a run walk far more detail pages than
-    # before, and doing that with zero delay got Bulldogjob rate-limited (429) on the real dev
-    # stack -- confirm the configured per-URL throttle is actually applied.
+    # Cursor persistence lets a run walk far more detail pages than before, and doing that with
+    # zero delay got Bulldogjob rate-limited (429) on the real dev stack -- confirm the
+    # configured per-URL throttle is actually applied.
     sleep_calls: list[float] = []
     monkeypatch.setattr(time, "sleep", lambda delay: sleep_calls.append(delay))
 

@@ -2,11 +2,11 @@
 
 [Architecture index](../../../ARCHITECTURE.md) · [Connectors overview](../connectors.md)
 
-### Pracuj.pl connector (P3US41)
+### Pracuj.pl connector
 
-- **Purpose**: the direct sequel to P3US39 (The Protocol) — same operator (Grupa Pracuj), same
-  Cloudflare Managed Challenge blocker independently confirmed on Pracuj.pl, but here the Phase
-  1 feasibility spike passed, so Phase 2 (this connector) shipped where The Protocol's did not.
+- **Purpose**: the direct sequel to The Protocol spike — same operator (Grupa Pracuj), same
+  Cloudflare Managed Challenge blocker independently confirmed on Pracuj.pl, but here the
+  feasibility spike passed, so a real connector shipped where The Protocol's did not.
 
 - **Why this connector uses Playwright unlike the other nine**: every plain-HTTP path into
   pracuj.pl — homepage, its own robots.txt-listed sitemap
@@ -48,7 +48,7 @@
   are launched once per `run()` call and reused for every listing and detail fetch in that run,
   not relaunched per page. A deliberate `rate_limit_delay_seconds` (default `4.0`, vs. every
   other connector's `1.0`) is applied via `asyncio.sleep` before every fetch, given the added
-  cost of browser-based fetching the story calls out. Because `JobBoardConnector`'s inherited
+  cost of browser-based fetching. Because `JobBoardConnector`'s inherited
   `fetch_page` closure contract (used by `run_paginated_ingestion`) is a *synchronous* callable —
   fine for every other connector's blocking `httpx.get`, but incompatible with Playwright's
   async-only API inside a running event loop — `PracujConnector.run` does all Playwright-driven
@@ -56,12 +56,12 @@
   list of already-fetched offer-detail dicts (capped at `page_size * max_pages`), then hands
   `run_paginated_ingestion` a trivial synchronous closure that slices that list — the same
   "pre-fetch then slice" shape Bulldogjob/Rocket Jobs use for their sitemap-derived URL list, just
-  with the *content* pre-fetched too, not only the URLs. One real consequence: `already_seen_stop
-  _threshold`'s early-stop optimization (BUG02/ADR0009) no longer reduces *live browser-fetch*
-  cost for this connector the way it does for the httpx-based ones, since all fetches must
-  complete before that check can run — the `page_size`/`max_pages` cap is this connector's primary
-  cost control instead, deliberately smaller than the other connectors' defaults
-  (`page_size=10`, `max_pages=5`, vs. Bulldogjob/Rocket Jobs's `20`/`50`).
+  with the *content* pre-fetched too, not only the URLs. One real consequence: the
+  already-seen-stop-threshold early-stop optimization (see ADR 0009) no longer reduces *live
+  browser-fetch* cost for this connector the way it does for the httpx-based ones, since all
+  fetches must complete before that check can run — the `page_size`/`max_pages` cap is this
+  connector's primary cost control instead, deliberately smaller than the other connectors'
+  defaults (`page_size=10`, `max_pages=5`, vs. Bulldogjob/Rocket Jobs's `20`/`50`).
 
 - **Monthly vs. hourly salary — a Pracuj.pl-specific wrinkle no prior connector had**: a
   `typesOfContracts[].salary` block carries a `timeUnit.id` (`0` = monthly, non-zero = hourly,
@@ -93,7 +93,7 @@
   mid-run — stops collection (rather than continuing to burn rate-limited attempts against a
   likely-blocked session, per ADR 0024/0026's escalation finding) and records one
   `IngestionFailure` row (`FailureType.PAGE_FETCH_FAILED`) via the same `record_failure` path
-  every other connector's dead-letter queue uses (P3US33), with whatever offers were already
+  every other connector's dead-letter queue uses, with whatever offers were already
   collected still persisted rather than discarded.
 
 - **Registered in `CONNECTOR_REGISTRY`** (`app/ingestion/registry.py`) as `PRACUJ = "pracuj"`.
@@ -103,14 +103,14 @@
   site warrants a much longer cadence, the same rationale ADR 0024/0026 established) and a
   non-empty `category_filter: "it"` default, so a freshly seeded source never floods the offer
   list with every industry Pracuj.pl lists. No scheduler, matcher, or frontend edit beyond that
-  was needed — the same P3US37 "adding a connector" checklist outcome every connector since
+  was needed — the same "adding a connector" checklist outcome every connector since
   Bulldogjob has confirmed.
 
 - **`Dockerfile` bakes in the Chromium browser, not just the `playwright` pip package**: `uv
   sync --frozen --all-groups` installs the Python package, but the actual browser binary
   Playwright drives is a separate download (`playwright install --with-deps chromium`) that
   does not come from `uv sync` at all. Discovered live 2026-07-14 — the `api` container's image
-  predated this story and could not even start (`ModuleNotFoundError: No module named
+  predated this change and could not even start (`ModuleNotFoundError: No module named
   'playwright'` at `CONNECTOR_REGISTRY` import time, since `app/main.py` imports every
   registered connector eagerly), and after rebuilding, a manual `docker exec ... playwright
   install` into the *running* container's writable layer silently stopped working the next time
@@ -120,11 +120,10 @@
   recreation the same way the `.venv` copied from the builder stage does — this is the only
   connector with a Dockerfile footprint beyond the shared `uv sync`.
 
-- **Supports Fetch Scope (US47)**: fetch scope is resolved before Chromium is even launched (a
+- **Supports Fetch Scope**: fetch scope is resolved before Chromium is even launched (a
   cheap short-circuit for a run that's going to be blocked anyway). A `"filtered"` resolution
   loops `_collect_offers` once per starred hard skill (`category_filter=term, start_page=1`
-  always — filtered runs don't participate in BUG42's `listing_page_cursor` resumption),
-  concatenating offers across terms; `listing_page_cursor` is only persisted on the unfiltered
-  path. See
-  [Ingestion pipeline: Connector fetch scope](../ingestion.md#connector-fetch-scope-all-offers-vs-filtered-by-hard-skills-us47).
-
+  always — filtered runs don't participate in the persisted `listing_page_cursor`'s resumption
+  behavior), concatenating offers across terms; `listing_page_cursor` is only persisted on the
+  unfiltered path. See
+  [Ingestion pipeline: Connector fetch scope](../ingestion.md#connector-fetch-scope-all-offers-vs-filtered-by-hard-skills).

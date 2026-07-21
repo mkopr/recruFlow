@@ -21,7 +21,7 @@ RetryHandler = Callable[[AsyncSession, Any], Awaitable[bool]]
 
 class UnknownFailureTypeError(LookupError):
     """Raised when a dead letter row's `failure_type` doesn't match any `FailureType`
-    member (BUG38) -- e.g. stale data from before a type was renamed, or a row written
+    member -- e.g. stale data from before a type was renamed, or a row written
     directly against the DB rather than through `record_failure`. Replaces a bare
     `KeyError` so this failure mode is named and easy to catch, rather than looking like
     an accidental dict typo at the call site.
@@ -105,7 +105,7 @@ RETRY_HANDLERS: dict[FailureType, RetryHandler] = {
 
 # Fails at import time (and in CI) if a new FailureType member is ever added without a
 # matching handler here -- the closest thing to a compile-time exhaustiveness check a
-# plain dict literal can get (BUG38).
+# plain dict literal can get.
 assert set(RETRY_HANDLERS) == set(FailureType), "RETRY_HANDLERS must cover every FailureType"
 
 

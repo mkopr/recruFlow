@@ -1,6 +1,6 @@
 # Rocket Jobs: no usable public API (robots.txt-disallowed), but its own sitemap plus embedded schema.org JSON-LD gives a complete, robots.txt-sanctioned offer feed
 
-P3US40 needed to resolve Rocket Jobs's equivalent of OD-4, continuing the investigation
+Resolving Rocket Jobs's equivalent of OD-4 meant continuing the investigation
 discipline `docs/adr/0003-justjoinit-json-endpoint-investigation.md`,
 `docs/adr/0004-nofluffjobs-json-endpoint-investigation.md`, and
 `docs/adr/0023-bulldogjob-sitemap-and-embedded-next-data-investigation.md` established: guess

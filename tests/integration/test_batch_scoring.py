@@ -62,8 +62,8 @@ def _fake_connector(label: str = "fake") -> str:
 
 
 def _isolate_langchain_sources(monkeypatch: pytest.MonkeyPatch, *connectors: str) -> None:
-    # BUG40: run_batch_scoring/count_unscored_backlog/select_scoring_candidates all take
-    # an explicit `connectors` parameter now, so most tests scope themselves by passing it
+    # run_batch_scoring/count_unscored_backlog/select_scoring_candidates all take an
+    # explicit `connectors` parameter, so most tests scope themselves by passing it
     # directly instead of monkeypatching. The exception is tests that only reach the
     # selection logic through the HTTP surface (/score/batch, /scoring/status) -- those
     # routes have no request field for injecting a connector scope (nor should they, since
@@ -229,8 +229,8 @@ async def test_run_batch_scoring_does_not_rescore_already_scored_pairs(
 async def test_run_batch_scoring_serializes_concurrent_callers_to_prevent_duplicate_scores(
     db_engine: AsyncEngine,
 ) -> None:
-    # BUG29: two independent callers (e.g. the scheduled backlog job and a manual
-    # /score/batch request) used to be able to run run_batch_scoring at the same time, each
+    # Two independent callers (e.g. the scheduled backlog job and a manual /score/batch
+    # request) used to be able to run run_batch_scoring at the same time, each
     # opening its own session and fetching the same "unscored" offer before either committed,
     # producing two MatchScore rows for the same offer/profile pair. run_batch_scoring now
     # serializes on a module-level lock, so the second caller's own selection query only
@@ -429,9 +429,9 @@ async def test_run_batch_scoring_partial_failure_does_not_abort_batch(
             .all()
         )
         assert len(rows) == 1
-        # BUG24: scoring now works newest-first, so offer_2 (created later, no
-        # posted_at) is processed first and gets the failing chain; offer_1 is
-        # processed second and succeeds.
+        # Scoring works newest-first, so offer_2 (created later, no posted_at) is
+        # processed first and gets the failing chain; offer_1 is processed second
+        # and succeeds.
         assert rows[0].offer_id == offer_1_id
         assert offer_2_id != rows[0].offer_id
     finally:
@@ -477,9 +477,9 @@ async def test_run_batch_scoring_logs_per_run_summary(
 async def test_post_scheduler_run_does_not_trigger_batch_scoring_on_success(
     scheduled_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # BUG29: ingestion used to unconditionally trigger a scoring run of its own, racing the
-    # dedicated `scoring:backlog` job (BUG24) and producing duplicate MatchScore rows for the
-    # same offer/profile pair. The backlog job now owns draining unscored offers exclusively.
+    # Ingestion used to unconditionally trigger a scoring run of its own, racing the dedicated
+    # `scoring:backlog` job and producing duplicate MatchScore rows for the same offer/profile
+    # pair. The backlog job now owns draining unscored offers exclusively.
     async def _fake(session: AsyncSession, source: Source, force_refresh: bool) -> IngestionResult:
         return IngestionResult(ok=True, fetched=1, created=1)
 
@@ -529,9 +529,9 @@ async def test_post_scheduler_run_does_not_trigger_batch_scoring_when_connector_
 async def test_run_batch_scoring_caps_work_per_run_and_reports_remaining_backlog(
     db_session: AsyncSession,
 ) -> None:
-    # BUG16: a single trigger (manual /ingest, manual /scheduler/run, or an automatic
-    # APScheduler job) must not block on an unbounded unscored-offer backlog, so
-    # run_batch_scoring caps how much it scores per call and reports how much is left.
+    # A single trigger (manual /ingest, manual /scheduler/run, or an automatic APScheduler
+    # job) must not block on an unbounded unscored-offer backlog, so run_batch_scoring caps
+    # how much it scores per call and reports how much is left.
     connector = _fake_connector()
 
     await _deactivate_all_profiles(db_session)
@@ -562,10 +562,10 @@ async def test_run_batch_scoring_caps_work_per_run_and_reports_remaining_backlog
 async def test_run_batch_scoring_prefers_newest_offers_first(
     db_session: AsyncSession,
 ) -> None:
-    # BUG24: scoring must work newest-to-oldest (by posted_at, falling back to
-    # created_at for offers with no posted_at) so a capped run scores what the user
-    # is actually looking at (the offer list's default sort is newest-first), not
-    # whatever happens to have the lowest DB id.
+    # Scoring must work newest-to-oldest (by posted_at, falling back to created_at for
+    # offers with no posted_at) so a capped run scores what the user is actually looking
+    # at (the offer list's default sort is newest-first), not whatever happens to have
+    # the lowest DB id.
     connector = _fake_connector()
 
     await _deactivate_all_profiles(db_session)
@@ -650,9 +650,9 @@ async def test_count_unscored_backlog_returns_zero_when_no_active_profile(
 async def test_count_unscored_backlog_reflects_live_state_before_any_run(
     db_session: AsyncSession,
 ) -> None:
-    # BUG24: the backlog must be visible before a run ever completes -- a brand-new
-    # active profile has never been scored against, so this must equal the full
-    # eligible offer count, not 0.
+    # The backlog must be visible before a run ever completes -- a brand-new active
+    # profile has never been scored against, so this must equal the full eligible
+    # offer count, not 0.
     connector = _fake_connector()
 
     await _deactivate_all_profiles(db_session)

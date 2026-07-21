@@ -2,14 +2,13 @@
 
 [Architecture index](../../../ARCHITECTURE.md) · [Connectors overview](../connectors.md)
 
-### Rocket Jobs connector (P3US40)
+### Rocket Jobs connector
 
-- **Purpose**: the third of the six connectors P3US37 queued back-to-back
-  (P3US38-44, Bulldogjob through WeWorkRemotely), and the next one after P3US38 to reuse its
-  "sitemap enumeration + per-URL embedded-structured-data" two-phase-fetch pattern rather than
-  the base class's cursor loop — P3US39 (The Protocol) sits between the two in the queue but
-  stopped at a feasibility spike (Cloudflare Managed Challenge), so no connector code exists
-  for it.
+- **Purpose**: the third of six connectors added back-to-back after Phase 3 (Bulldogjob through
+  We Work Remotely), and the next one after Bulldogjob to reuse its "sitemap enumeration + per-URL
+  embedded-structured-data" two-phase-fetch pattern rather than the base class's cursor loop — The
+  Protocol sits between the two in that batch but stopped at a feasibility spike (Cloudflare
+  Managed Challenge), so no connector code exists for it.
 
 - **Shared-platform relationship with JustJoin.it**: Rocket Jobs's homepage config exposes
   `baseVtApiUrl: https://tracker.justjoin.it` for analytics, and its own sitemap URL redirects
@@ -21,8 +20,8 @@
   2026-07-13, see
   `docs/adr/0025-rocket-jobs-sitemap-and-json-ld-investigation.md` for the full trail): the
   homepage is a client-rendered SPA with no embedded data in the initial HTML, backed by a real
-  API at `https://api.rocketjobs.pl`. Unlike the JustJoin.it/NoFluffJobs precedent (OD-4),
-  `api.rocketjobs.pl`'s own `robots.txt` explicitly disallows `/` for all user-agents (bar a
+  API at `https://api.rocketjobs.pl`. Unlike the JustJoin.it/NoFluffJobs precedent (Open Decision
+  OD-4), `api.rocketjobs.pl`'s own `robots.txt` explicitly disallows `/` for all user-agents (bar a
   short marketing-page allowlist that excludes the offers endpoint) — a real operator "don't
   crawl this" signal, not just an unmapped guess. `RocketJobsConnector` never calls this host;
   its class docstring names it explicitly so a future contributor doesn't casually "simplify"
@@ -53,10 +52,10 @@
   `<urlset>` directly (today's observed shape, after following the redirect through
   `public.justjoin.com`) or a `<sitemapindex>` requiring a second hop per `<sitemap><loc>` entry
   (handled defensively in case the site later splits the sitemap into multiple parts, per the
-  story's own acceptance criteria) — URLs from every part are deduplicated before being
-  returned. Fetching uses a new `fetch_text` (`app/connectors/http.py`), the plain-text sibling
-  to `fetch_gzip_xml` (Rocket Jobs's sitemap, unlike Bulldogjob's, is not gzip-compressed), with
-  `follow_redirects=True` explicit since httpx defaults to not following redirects and the
+  connector's own design goal of tolerating that) — URLs from every part are deduplicated before
+  being returned. Fetching uses a new `fetch_text` (`app/connectors/http.py`), the plain-text
+  sibling to `fetch_gzip_xml` (Rocket Jobs's sitemap, unlike Bulldogjob's, is not gzip-compressed),
+  with `follow_redirects=True` explicit since httpx defaults to not following redirects and the
   sitemap URL itself is a redirect chain. `_fetch_detail_html` also passes
   `follow_redirects=True` for the same reason — a live scheduler run during manual verification
   (2026-07-14) found some sitemap-listed detail URLs 308-redirect to a canonicalized path, which
@@ -74,14 +73,14 @@
 
 - **Raw payload = the parsed `JobPosting` JSON-LD dict plus one provenance key, not the HTML**:
   a live sample of six real detail pages during implementation (2026-07-14) found the JSON-LD
-  block never carries a `url` key at all — contradicting the story's own Background, which
-  listed `url` alongside `title`/`description`/etc. as if it were a normal field. Since
-  schema.org `JobPosting` also has no separate id field (unlike Bulldogjob's `job.id`),
-  `fetch_page`'s closure sets a `_source_url` key on the parsed dict (the exact URL the page was
-  fetched from) before appending it to the offers list — additive provenance metadata, not a
-  fabricated value, and persisted as part of `raw_payload` alongside the untouched JSON-LD
-  fields, the same "store what was fetched" posture Bulldogjob's `raw_payload` has, just with
-  one field added to make `canonical_url` possible at all. See
+  block never carries a `url` key at all — contradicting the connector's original design
+  assumption, which expected `url` alongside `title`/`description`/etc. as if it were a normal
+  field. Since schema.org `JobPosting` also has no separate id field (unlike Bulldogjob's
+  `job.id`), `fetch_page`'s closure sets a `_source_url` key on the parsed dict (the exact URL
+  the page was fetched from) before appending it to the offers list — additive provenance
+  metadata, not a fabricated value, and persisted as part of `raw_payload` alongside the
+  untouched JSON-LD fields, the same "store what was fetched" posture Bulldogjob's `raw_payload`
+  has, just with one field added to make `canonical_url` possible at all. See
   `docs/adr/0025-rocket-jobs-sitemap-and-json-ld-investigation.md`.
 
 - **`map_offer` field mapping** (`app/connectors/rocket_jobs.py`): `title` ← `title`, `company`
@@ -99,11 +98,10 @@
   page — per the project's missing-field conservatism, neither is guessed: `seniority`/salary
   are still fed through `normalize_seniority`/`normalize_salary` exactly as the other four
   connectors are, but `normalize.py` gets no `_SENIORITY_VOCAB[ROCKET_JOBS]` entry, since no
-  real observed value exists yet to build one from — the story's own Testing table calls out a
-  ~30-page manual field-presence survey as a follow-up, not solved by this story.
+  real observed value exists yet to build one from — a ~30-page manual field-presence survey
+  remains a natural follow-up, not solved here.
 
 - **Registered in `CONNECTOR_REGISTRY`** (`app/ingestion/registry.py`) as `ROCKET_JOBS =
   "rocket_jobs"`, constructed once at import time like the other four — no scheduler, matcher,
-  or frontend edit was needed, the same P3US37 "adding a connector" checklist outcome Bulldogjob
+  or frontend edit was needed, the same "adding a connector" checklist outcome Bulldogjob
   already confirmed.
-

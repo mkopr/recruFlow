@@ -14,24 +14,24 @@ from app.ingestion.fetch_scope import FETCH_SCOPE_FILTERED, resolve_fetch_scope_
 from app.ingestion.runner import resolve_fetch_range, run_paginated_ingestion
 from app.ingestion.types import IngestionResult
 
-# BUG42-followup: BUG41's cursor-persistence fix let a run actually walk hundreds of detail
-# pages in a row for the first time (previously every run restarted at cursor 0 and never got
-# far past page 1) -- doing that with zero delay between requests got bulldogjob.com's own
-# per-IP rate limiter to return real 429s mid-run, confirmed live 2026-07-14. This default is
-# a starting throttle, not tuned against a documented limit.
+# The cursor-persistence fix let a run actually walk hundreds of detail pages in a row for
+# the first time (previously every run restarted at cursor 0 and never got far past page 1)
+# -- doing that with zero delay between requests got bulldogjob.com's own per-IP rate limiter
+# to return real 429s mid-run, confirmed live 2026-07-14. This default is a starting throttle,
+# not tuned against a documented limit.
 DEFAULT_RATE_LIMIT_DELAY_SECONDS = 0.5
 
 logger = logging.getLogger(__name__)
 
 
 class SitemapDetailPageConnector(JobBoardConnector, ABC):
-    """Shared base for connectors with no cursor-paginated endpoint (US38's Domain Decision):
-    their real "next page" affordance is a client-side call not observable from a plain
-    request. These connectors instead enumerate every live job URL from the job board's own
-    sitemap, then live-fetch each URL's HTML and parse an embedded per-page JSON blob -- so
-    they need this dedicated `run()` shape rather than the inherited cursor-pagination loop
-    (US46, extracted from `BulldogjobConnector` and `RocketJobsConnector`, ~90% duplicated
-    prior to this extraction).
+    """Shared base for connectors with no cursor-paginated endpoint: their real "next page"
+    affordance is a client-side call not observable from a plain request. These connectors
+    instead enumerate every live job URL from the job board's own sitemap, then live-fetch
+    each URL's HTML and parse an embedded per-page JSON blob -- so they need this dedicated
+    `run()` shape rather than the inherited cursor-pagination loop (extracted from
+    `BulldogjobConnector` and `RocketJobsConnector`, which were ~90% duplicated prior to this
+    extraction).
     """
 
     @abstractmethod
@@ -99,7 +99,7 @@ class SitemapDetailPageConnector(JobBoardConnector, ABC):
             config.get("rate_limit_delay_seconds", DEFAULT_RATE_LIMIT_DELAY_SECONDS)
         )
 
-        # BUG41: sitemap order is stable but not recency-sorted, so restarting at cursor 0
+        # The sitemap order is stable but not recency-sorted, so restarting at cursor 0
         # every run just re-walks the same already-ingested prefix forever. `sitemap_cursor`
         # persists where the previous run left off; `last_cursor` tracks this run's true end
         # (including "reached the end", i.e. `None`) so it can be written back below.
@@ -147,7 +147,7 @@ class SitemapDetailPageConnector(JobBoardConnector, ABC):
             until=until,
             # The sitemap isn't sorted newest-first (see ADR 0017) -- a sitemap-order page
             # being wholly older than `since` says nothing about the rest of the catalog, so
-            # that early-stop must not apply here (BUG41).
+            # that early-stop must not apply here.
             sorted_by_recency=False,
         )
         if persist_cursor:
@@ -189,7 +189,7 @@ class SitemapDetailPageConnector(JobBoardConnector, ABC):
                         since=since,
                         until=until,
                         # Filtered runs enumerate a fresh, per-term, typically-small filtered
-                        # listing each time rather than the full stable catalog, so BUG41's
+                        # listing each time rather than the full stable catalog, so the
                         # "resume where the last run left off" concern doesn't apply here.
                         persist_cursor=False,
                     )

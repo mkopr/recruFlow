@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 def _default_config_template() -> dict[str, Any]:
-    """The one config shape every registered Connector is seeded with (P3US37, see
+    """The one config shape every registered Connector is seeded with (see
     `docs/adr/0022-connector-registry-is-the-single-source-of-truth.md`) -- replaces the
     three near-duplicated `DEFAULT_SOURCE_CONFIGS` entries this used to be. No per-connector
     overrides exist today; a future connector needing a different default schedule would add
@@ -38,7 +38,7 @@ def _default_config_template() -> dict[str, Any]:
 def _default_fetch_range() -> dict[str, Any]:
     """Computed fresh per call (not baked into `DEFAULT_SOURCE_CONFIGS`, a module-level
     constant evaluated once at import time) so "seed time minus 7 days" reflects the
-    actual moment a source is first inserted, not process start (US34).
+    actual moment a source is first inserted, not process start.
     """
     return {
         "mode": "range",
@@ -137,7 +137,7 @@ async def _run_scoring_job_async() -> batch.BatchScoringSummary:
     """One tick of the dedicated backlog-draining job (own engine/session, like
     `_run_source_async`). Runs on a fixed interval independent of any source's own
     ingestion cadence, so the active profile's backlog keeps draining even when no
-    connector happens to fire -- see BUG24.
+    connector happens to fire.
     """
     engine = get_engine()
     try:

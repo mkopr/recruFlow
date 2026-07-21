@@ -34,12 +34,11 @@ async def _reset_test_profiles(session: AsyncSession) -> None:
 async def test_reset_test_profiles_succeeds_when_a_match_score_references_the_default_name(
     db_session: AsyncSession,
 ) -> None:
-    """BUG15: DEFAULT_PROFILE_NAME ("active-profile") is
-    not test-exclusive -- it's the same literal name upsert_active_profile assigns in
-    real usage. `_reset_test_profiles`'s "deactivate all, then delete by fixed name"
-    strategy assumes it always owns every profile carrying that name, but a real
-    MatchScore (written by the batch-scoring job, P3US25) can reference a
-    default-named profile it does not own, and the delete then raises
+    """DEFAULT_PROFILE_NAME ("active-profile") is not test-exclusive -- it's the same
+    literal name upsert_active_profile assigns in real usage. `_reset_test_profiles`'s
+    "deactivate all, then delete by fixed name" strategy assumes it always owns every
+    profile carrying that name, but a real MatchScore (written by the batch-scoring job)
+    can reference a default-named profile it does not own, and the delete then raises
     ForeignKeyViolationError instead of the clean slate every test in this file
     depends on `_reset_test_profiles` to produce as its first line.
     """
@@ -62,7 +61,7 @@ async def test_reset_test_profiles_succeeds_when_a_match_score_references_the_de
 
     # Reuse a profile already carrying this name if one exists (this repo's
     # long-lived dev database already has one, permanently stuck for this
-    # exact reason -- see BUG15), otherwise create one, so this test reproduces
+    # exact reason), otherwise create one, so this test reproduces
     # the bug both on a fresh database and on this contaminated one.
     existing = (
         await db_session.execute(
@@ -328,7 +327,7 @@ async def test_get_profile_by_id_returns_none_for_unknown_id(db_session: AsyncSe
 
 async def _scored_offer(db_session: AsyncSession, profile_id: int) -> int:
     """Ingests a throwaway Offer and writes one MatchScore row against it for
-    profile_id, mirroring BUG15's test fixture pattern above."""
+    profile_id, mirroring the test fixture pattern above."""
     source = Source(name=f"test-source-{uuid4()}", connector=None, config_json={})
     db_session.add(source)
     await db_session.flush()
@@ -365,8 +364,8 @@ async def _scored_offer(db_session: AsyncSession, profile_id: int) -> int:
 async def test_upsert_active_profile_editing_active_profile_deletes_its_match_scores(
     db_session: AsyncSession,
 ) -> None:
-    # BUG30: an edit to the active profile's content must not leave stale MatchScore
-    # rows behind, or batch scoring's "no existing MatchScore row" query never revisits
+    # An edit to the active profile's content must not leave stale MatchScore rows
+    # behind, or batch scoring's "no existing MatchScore row" query never revisits
     # those offers again.
     await _reset_test_profiles(db_session)
     first = await upsert_active_profile(db_session, Profile(skills=[Skill(name="Python")]))

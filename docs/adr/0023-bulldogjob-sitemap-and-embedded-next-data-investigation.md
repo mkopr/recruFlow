@@ -1,7 +1,7 @@
 # Bulldogjob: no public API, but its own sitemap plus embedded `__NEXT_DATA__` JSON gives a complete, unauthenticated offer feed
 
-P3US38 needed to resolve Bulldogjob's equivalent of OD-4 (does a JSON endpoint exist behind the
-SPA, or does ingestion require a Playwright scraper?), continuing the investigation discipline
+Resolving Bulldogjob's equivalent of OD-4 (does a JSON endpoint exist behind the
+SPA, or does ingestion require a Playwright scraper?) meant continuing the investigation discipline
 `docs/adr/0003-justjoinit-json-endpoint-investigation.md` and
 `docs/adr/0004-nofluffjobs-json-endpoint-investigation.md` established: guess candidate URLs from
 the site's own served bundle/config, then confirm every candidate against the live site with

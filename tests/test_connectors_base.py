@@ -127,7 +127,7 @@ async def test_a_fourth_connector_needs_only_four_methods(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # A connector implementing only the 4 abstract methods (no hook overrides) must still
-    # ingest end-to-end -- this is the story's own extensibility guarantee (P3US37).
+    # ingest end-to-end -- this is the base class's own extensibility guarantee.
     class _MinimalConnector(base.JobBoardConnector):
         name = "Minimal"
         envelope_key = "items"

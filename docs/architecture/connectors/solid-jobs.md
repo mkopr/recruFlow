@@ -2,11 +2,11 @@
 
 [Architecture index](../../../ARCHITECTURE.md) · [Connectors overview](../connectors.md)
 
-### SOLID.Jobs connector (P1US2, direct API since BUG10)
+### SOLID.Jobs connector (direct API, replacing an earlier `sjctl` subprocess wrapper)
 
 - **`app/connectors/solid_jobs.py`** — the first of three sibling connectors
-  (P1US2–US4: SOLID.Jobs, JustJoin.it, NoFluffJobs). Originally a subprocess wrapper around the
-  `sjctl` CLI; rewritten (BUG10, see
+  (SOLID.Jobs, JustJoin.it, NoFluffJobs, shipped together). Originally a subprocess wrapper around the
+  `sjctl` CLI; rewritten (see
   `docs/adr/0012-solid-jobs-direct-api-replaces-sjctl-subprocess.md`) to call SOLID.Jobs' own
   public HTTP endpoint directly, once the vendor confirmed `sjctl` itself was just a thin wrapper
   over that same endpoint. Exposes
@@ -30,12 +30,12 @@
   limitation** (see ADR 0012): `search.experiences` only accepts a single value in practice —
   multi-value input (comma-joined or repeated) returns `400` from the live API — even though
   `build_offer_params` will still comma-join more than one configured `experience_levels` entry;
-  fixing this is an open follow-up, not part of this story.
-- **Response envelope, confirmed live 2026-07-05** (see ADR 0012, resolving what was an open
-  question before this ticket had live access): `{"jobs": [...], "pageIndex", "pageSize",
-  "totalCount", "totalPages"}` — the same `"jobs"` key sjctl's own `search --json` used. `salary:
-  {from, to, currency, employmentType}`, `locations: string[]`, `isRemote`/`isHybrid`,
-  `experienceLevel`, `validFrom`, `description` all match the pre-BUG10 field shape almost
+  fixing this is an open follow-up, not implemented yet.
+- **Response envelope, confirmed live 2026-07-05** (see ADR 0012, resolving what had until then
+  been an open question, before this connector had live access): `{"jobs": [...], "pageIndex",
+  "pageSize", "totalCount", "totalPages"}` — the same `"jobs"` key sjctl's own `search --json` used.
+  `salary: {from, to, currency, employmentType}`, `locations: string[]`, `isRemote`/`isHybrid`,
+  `experienceLevel`, `validFrom`, `description` all match the pre-rewrite field shape almost
   field-for-field.
   - `_extract_offers(payload)` — single-arg now (no `list_key`/`item_key`; that was purely an
     artifact of the old sync-vs-search envelope split, which no longer exists). Reads a bare list
@@ -51,7 +51,7 @@
     glossary entries in `CLAUDE.md`). `description` is stored as the raw HTML the API returns,
     unstripped — HTML-to-text is deferred to whichever later phase actually needs plain text (CV
     tailoring).
-- **Pagination and `force_refresh`, JustJoin.it's model, not NoFluffJobs' no-op** (BUG10): every
+- **Pagination and `force_refresh`, JustJoin.it's model, not NoFluffJobs' no-op**: every
   request sets `sortActive=validFrom&sortDirection=desc`, giving the same newest-first
   precondition JustJoin.it's endpoint relies on (ADR 0009). `run_solid_jobs_ingestion` interleaves
   fetch-then-persist per page (`pageIndex`/`pageSize`, no cursor field — "fewer offers returned
@@ -71,8 +71,7 @@
   first page; a later-page failure logs a warning and returns whatever was already fetched, same
   as JustJoin.it.
 
-- **Supports Fetch Scope (US47)**: `SolidJobsConnector.apply_fetch_scope_term` injects a
+- **Supports Fetch Scope**: `SolidJobsConnector.apply_fetch_scope_term` injects a
   single-element `terms` list into `config`, routing one hard-skill term at a time into
   `build_offer_params`'s existing (previously unpopulated) `search.searchTerm` param — see
-  [Ingestion pipeline: Connector fetch scope](../ingestion.md#connector-fetch-scope-all-offers-vs-filtered-by-hard-skills-us47).
-
+  [Ingestion pipeline: Connector fetch scope](../ingestion.md#connector-fetch-scope-all-offers-vs-filtered-by-hard-skills).

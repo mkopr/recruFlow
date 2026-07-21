@@ -174,7 +174,7 @@ describe('OfferTable', () => {
     expect(screen.getByText('-')).toBeInTheDocument();
   });
 
-  it('renders offers in the order given by the server, without re-sorting client-side (BUG31)', () => {
+  it('renders offers in the order given by the server, without re-sorting client-side', () => {
     // The server owns ordering now; a low-scored offer appearing first here (as
     // it would under a score-desc sort) must not get client-side-reshuffled by
     // posted_at, or "page 2 of a score sort" would silently break again.

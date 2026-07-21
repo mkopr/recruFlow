@@ -95,10 +95,10 @@ class RocketJobsConnector(SitemapDetailPageConnector):
     guess. Instead this connector uses `rocketjobs.pl`'s own published sitemap, which is
     robots.txt-sanctioned and confirmed complete
     (`docs/adr/0025-rocket-jobs-sitemap-and-json-ld-investigation.md`). Like
-    `BulldogjobConnector` (P3US38), there is no cursor-paginated endpoint, so this connector
+    `BulldogjobConnector`, there is no cursor-paginated endpoint, so this connector
     enumerates every live job URL from the sitemap, then live-fetches each URL's HTML and
     parses its embedded schema.org `JobPosting` JSON-LD block, via the shared
-    `SitemapDetailPageConnector` base (US46).
+    `SitemapDetailPageConnector` base.
     """
 
     name = "Rocket Jobs"

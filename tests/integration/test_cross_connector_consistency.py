@@ -104,8 +104,8 @@ async def _rows_for_source(session: AsyncSession, source_id: int) -> list[OfferM
     return list(result.scalars().all())
 
 
-# US46 finding #7: this file intentionally covers only the original 3 cursor-paginated JSON
-# connectors (SOLID.Jobs, JustJoin.it, NoFluffJobs) because they share one mocking shape
+# This file intentionally covers only the original 3 cursor-paginated JSON connectors
+# (SOLID.Jobs, JustJoin.it, NoFluffJobs) because they share one mocking shape
 # (monkeypatch.setattr(httpx, "get", ...)). The 6 newer connectors' cross-cutting
 # normalization behavior (remote-flag, seniority, salary-currency) is already exercised
 # per-connector in each connector's own tests/test_<name>_connector.py map_offer tests --

@@ -2,18 +2,18 @@
 
 [Architecture index](../../ARCHITECTURE.md)
 
-### Profile data model (P2US1)
+### Profile data model
 
 - **Purpose**: the first Phase 2 story. Defines `app/schemas/profile.py`'s `Profile`, the
-  canonical, source-agnostic candidate-facts document that US19's LLM extraction, US20's frontend
-  editor, and this story's own `PUT /profile` all validate against. No new migration is needed —
-  the `profiles` table's existing `data` JSONB column (P0US5) already satisfies "profiles DB table
+  canonical, source-agnostic candidate-facts document that the CV-upload LLM extraction, the
+  frontend profile editor, and this story's own `PUT /profile` all validate against. No new migration is needed —
+  the `profiles` table's existing `data` JSONB column already satisfies "profiles DB table
   stores these fields plus an `is_active` boolean flag"; the structured fields live inside `data`,
   validated at the application layer, the same ELT-adjacent split `offers.raw_payload` already
   uses.
-- **Field list**: `skills` (`Skill`: `name`, `proficiency`, `years`, `category`, `hard` — the last
-  added by P3US32, a candidate-marked "this is a hard requirement" flag consumed by the matcher's
-  hard-skill-miss cap, see the P3US22 section in matching.md), `past_roles`
+- **Field list**: `skills` (`Skill`: `name`, `proficiency`, `years`, `category`, `hard` — a later
+  addition, a candidate-marked "this is a hard requirement" flag consumed by the matcher's
+  hard-skill-miss cap, see the hard-skill veto discussion in matching.md), `past_roles`
   (`PastRole`: `title`, `company`, `start_date`, `end_date`, `description`), `education`
   (`Education`: `institution`, `degree`, `field_of_study`, `start_date`, `end_date`),
   `certifications` (`Certification`: `name`, `issuer`, `year`), `languages` (`Language`: `name`,
@@ -23,12 +23,12 @@
   (`list[str]`), `contract_type_preference`, `salary_min`, `salary_target`,
   `location_preference`, `remote_preference`, `deal_breakers` (`list[str]`). `industry_tags` also
   exists on `Offer`/`OfferSummary` (`app/schemas/offer.py`, `offers.industry_tags` JSONB column)
-  so postings can carry the same domain tags for future matching (BUG09).
+  so postings can carry the same domain tags for future matching.
 - **Three deliberate looseness decisions**, required by the acceptance criteria's "no fixed/
   hardcoded values ... every list-type field accepts an arbitrary number of arbitrary entries":
   - `PastRole`/`Education` dates (`start_date`/`end_date`) are free-form strings (e.g. `"2019"`,
     `"Jan 2021"`, `"present"`), not a strict date type — CVs report dates in inconsistent, often
-    partial formats, and a strict date type would make US19's LLM extraction fail on any CV using
+    partial formats, and a strict date type would make the CV-upload LLM extraction fail on any CV using
     a non-ISO date phrase.
   - `Skill`/`Language` `proficiency` is a free string, not a `Literal`/enum — same reasoning, no
     fixed vocabulary is allowed for list-type field content.
@@ -45,8 +45,8 @@
   profile_id)`: two `UPDATE` statements in the caller's existing transaction — clear every other
   row's flag first, then set the target row's flag — ordered this way so a crash between the two
   statements never leaves two rows simultaneously active, only ever zero or one. This is a
-  reusable primitive, not `PUT /profile`-specific: it's the same function US19's CV-upload
-  activation flow and US20's "Set as active" button will call later.
+  reusable primitive, not `PUT /profile`-specific: it's the same function the CV-upload
+  activation flow and the profile editor's "Set as active" button will call later.
 - **`GET /profile`** returns HTTP 200 with a JSON `null` body (`ProfileResponse | None`) when no
   profile is active, not a 404 — a 404 means "you asked for something identifiable that isn't
   there", but "no active profile yet" is an expected, normal steady state for a fresh install,
@@ -57,11 +57,11 @@
   is already active, it updates that row's `data` in place. This is necessary because this story
   ships no seed profile data, so a fresh database has zero profile rows, and `PUT /profile` must
   still work with no prior setup.
-- **`profile_id`/`activate` query parameters (added in P2US3)**: `PUT /profile` gained two
+- **`profile_id`/`activate` query parameters**: `PUT /profile` gained two
   optional query parameters, `profile_id: int | None = None` and `activate: bool = True` — both
   default to the exact values that reproduce this story's original always-edit-and-activate-the-
   active-profile behavior, so every pre-existing caller and test is unaffected. They exist because
-  P2US3 (the profile editor page) needs to edit a freshly-uploaded, not-yet-active draft (a
+  the profile editor page needs to edit a freshly-uploaded, not-yet-active draft (a
   separate row from whatever is currently active) without either force-activating it or clobbering
   the real active profile — a case the original single-active-row-only upsert had no way to
   express. `app/db/profile_repo.py`'s `upsert_profile(session, profile, *, profile_id, activate)`
@@ -69,7 +69,7 @@
   `ProfileNotFoundError` — mapped to `404` in the route — if it doesn't exist) instead of looking
   up "the" active profile; `activate` gates whether `row.status`/`is_active` are touched at all.
   `activate=False` leaves every row's `is_active` flag completely untouched, which is what makes
-  "Save" a true no-side-effect-on-activation operation. `upsert_active_profile` (US18's original
+  "Save" a true no-side-effect-on-activation operation. `upsert_active_profile` (the original
   entrypoint) is now a one-line wrapper — `upsert_profile(session, profile, profile_id=None,
   activate=True)` — so its signature and behavior are unchanged for existing callers.
 - **Idempotent default-row lookup**: when `profile_id` is `None` and no profile is currently
@@ -84,9 +84,9 @@
 - **No seed/default profile data**: this story removed `app/db/seed.py`'s previous stub-profile
   seeding (`SEED_PROFILE_NAME`, `_seed_profile`) — the acceptance criteria explicitly forbid
   shipping any seed/default profile content; a profile's content must always originate from a CV
-  upload (US19) or manual entry.
+  upload or manual entry.
 
-### CV upload + LLM extraction (P2US2)
+### CV upload + LLM extraction
 
 - **Purpose**: `POST /profile/upload` turns an uploaded CV file (PDF or DOCX) directly into a
   draft `Profile`, via a local LLM, so a candidate doesn't have to hand-retype their whole work
@@ -109,11 +109,11 @@
   for those and the LLM must never be given a schema slot it could be tempted to fill with an
   inference. `extract_profile_from_cv_text` maps `CVExtraction` into a full `Profile` via
   `Profile(**extraction.model_dump())`, leaving every preference field at its own default (`None`
-  or `[]`) — `Skill.hard` (P3US32) is the one preference-like field that rides along on a
+  or `[]`) — `Skill.hard` is the one preference-like field that rides along on a
   CV-derived nested object rather than a top-level `Profile` field, so it gets its own explicit
-  force-reset-to-`False` step instead of "just don't put it in `CVExtraction`" (see the P3US22
-  section below).
-- **Three-way split LLM call (BUG09)**: `_call_llm` no longer asks the model to fill all of
+  force-reset-to-`False` step instead of "just don't put it in `CVExtraction`" (see the hard-skill
+  veto discussion in matching.md).
+- **Three-way split LLM call**: `_call_llm` no longer asks the model to fill all of
   `CVExtraction` in a single structured-output call. Manual testing against a real two-page CV
   showed that once the schema grew to cover projects/industry
   tags/contact/headline on top of the original five list fields, the local 8B model
@@ -156,8 +156,8 @@
   `name=f"draft-{uuid4()}"`, `status="draft"`, `is_active=False` — and never activates it,
   distinct from `PUT /profile`'s `upsert_active_profile`, which updates the single active row in
   place. Every CV upload gets its own independent draft (since `profiles.name` is unique) rather
-  than clobbering a prior unreviewed one; the user reviews the draft (US20) before choosing to
-  activate it.
+  than clobbering a prior unreviewed one; the user reviews the draft in the profile editor page
+  before choosing to activate it.
 - **Explicit LLM request timeout**: `ChatOllama` is constructed with
   `client_kwargs={"timeout": 120}` (seconds) — every other external call in this codebase has an
   explicit timeout (ADR 0005); 120s is generous for the 8B model ADR 0011 selected on this
@@ -166,14 +166,14 @@
   (`app/config.py`), already resolved by ADR 0011 — this story adds no model-detection/fallback
   logic and no test targeting model choice.
 
-### Profile editor page (P2US3)
+### Profile editor page
 
-- **Purpose**: closes Phase 2's CV-upload/edit loop end-to-end — until this story, US18/US19's
+- **Purpose**: closes Phase 2's CV-upload/edit loop end-to-end — until this story, the existing
   `GET`/`PUT /profile` and `POST /profile/upload` were API-only, with no way for a human to see or
   edit a profile. `frontend/src/pages/ProfileEditorPage.tsx` composes a CV upload control with a
   full `Profile`-field form (skills, past roles, education, certifications, languages,
   preferences, deal-breakers) and Save/"Set as active" actions, mirroring the
-  page/component/hook/API-wrapper layering P1US8's `OfferListPage` established.
+  page/component/hook/API-wrapper layering the offer list page established.
 - **localStorage-plus-`profile_id` draft-persistence design**: "Save" deliberately never activates
   (see the `PUT /profile` `activate` parameter above), so a saved-but-not-active draft has no
   `GET /profile`-reachable identity — a plain reload would otherwise lose track of which row was
@@ -230,9 +230,8 @@
 - **No hardcoded/placeholder form content**: every field starts from either an uploaded draft, a
   fetched active profile, or a genuinely empty value (`''`/`null`/`[]`) — there is no seed/sample
   data anywhere in the editor, satisfying this story's own acceptance criterion the same way
-  P2US1 forbade seed profile data at the API layer.
+  the profile data model story forbade seed profile data at the API layer.
 - **Routing/nav**: `App.tsx` gained a second route (`/profile` → `ProfileEditorPage`) and a small
   `<nav>` with two links ("Offers"/"Profile") — `OfferListPage` previously had no navigation
   anywhere else since it was the only page; this is the minimum needed to make two pages mutually
   reachable, not a general navigation system built ahead of need.
-

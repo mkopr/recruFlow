@@ -19,7 +19,7 @@ def build_job_id(connector: str) -> str:
 
 
 def connector_should_auto_run(config: dict[str, Any]) -> bool:
-    """Whether a Connector's *scheduled* job should be running right now (P3US37): both
+    """Whether a Connector's *scheduled* job should be running right now: both
     `connector_enabled` (Connector Stop/Start) and `auto_fetch_enabled` (Auto-Fetch) must be
     true. The two flags are otherwise independent -- this is the one place they're combined,
     so `register_jobs`'s startup pause decision and every enabled/auto-fetch route (single and
@@ -35,7 +35,7 @@ async def apply_auto_run_toggle(
 ) -> SourceStatus:
     """Apply `connector_should_auto_run`'s verdict to the live scheduler job for `source`
     (resume/pause) and rebuild its status. One seam for the toggle-application step shared
-    by both the single-source and bulk auto-fetch/enabled routes (BUG36), so a future third
+    by both the single-source and bulk auto-fetch/enabled routes, so a future third
     auto-run flag changes one place instead of four.
     """
     assert source.connector is not None
@@ -51,7 +51,7 @@ async def apply_auto_run_toggle(
 
 def register_scoring_job(scheduler: AsyncIOScheduler, *, interval_seconds: int) -> None:
     """Register the dedicated backlog-draining job, decoupled from every source's own
-    ingestion interval (BUG24) -- `max_instances=1` + `coalesce=True` means a run that
+    ingestion interval -- `max_instances=1` + `coalesce=True` means a run that
     takes longer than `interval_seconds` just chains straight into the next one instead
     of overlapping or piling up missed ticks, so the backlog drains continuously.
     """

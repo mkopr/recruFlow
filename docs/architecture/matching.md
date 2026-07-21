@@ -2,24 +2,25 @@
 
 [Architecture index](../../ARCHITECTURE.md)
 
-### Unified Match Score schema (P3US21)
+### Unified Match Score schema
 
-- **Purpose**: the foundational Phase 3 story. Every other Phase 3 story (US22's LangChain Matcher,
-  US23's `sjctl evaluate` wrapper, US24's cross-engine consistency checks, US25's batch scoring job,
-  US26's frontend score display) constructs or reads a `MatchScore` row against this schema, so the
+- **Purpose**: the foundational Phase 3 work. Every other Phase 3 piece (the LangChain Matcher,
+  the `sjctl evaluate` wrapper, cross-engine consistency checks, the batch scoring job,
+  the frontend score display) constructs or reads a `MatchScore` row against this schema, so the
   schema, the read endpoint, and the insert-never-overwrite invariant had to be locked in first. No
-  new migration is needed — `match_scores` has existed since the original P0US5 migration but was
-  never written to or read from until this story.
+  new migration is needed — `match_scores` has existed since an earlier foundational migration but
+  was never written to or read from until now.
 - **`MatchScore`/`MatchScoreResponse` split (`app/schemas/match_score.py`)**: mirrors `Offer`/
   `OfferSummary` exactly — `MatchScore` is the domain-input model an engine constructs before
   persistence (no `id`, since the DB assigns it on insert), `MatchScoreResponse`
   (`from_attributes=True`) is the plain, already-validated read model `GET /offers/{id}/score`
   returns straight off an ORM row (`engine`/`score_percent` as plain values, no re-validation on
   the way out).
-- **`score_percent: int` (`ge=0, le=100`), not a letter grade** — as of P3US29, `MatchScore`
-  reports the Matcher's rounded `weighted_total` directly rather than bucketing it into a
-  five-letter grade; see the P3US29 section below for the full rationale and the migration off the
-  original `Literal["A", "B", "C", "D", "F"]` design this bullet used to describe. `engine` is
+- **`score_percent: int` (`ge=0, le=100`), not a letter grade** — `MatchScore`
+  now reports the Matcher's rounded `weighted_total` directly rather than bucketing it into a
+  five-letter grade; see the "Percentage-based match score" section below for the full rationale
+  and the migration off the original `Literal["A", "B", "C", "D", "F"]` design this bullet used to
+  describe. `engine` is
   `Literal["langchain", "sjctl"]`, still a `Literal` for the same "let the type system reject an
   out-of-vocabulary value" reason (e.g. `Offer`'s `_check_salary_range`) — only `grade`'s
   categorical shape went away, not that general preference.
@@ -35,21 +36,21 @@
   `null` body when there is no active profile at all, or an active profile exists but this offer has
   no `MatchScore` row for it yet (mirrors `GET /profile`'s existing 200-with-null convention rather
   than treating either as an error); `200` with the row's fields otherwise.
-- **No MatchScore-writing/persistence helper exists yet** — this story is schema-plus-read-endpoint
-  only, per its own acceptance criteria; US22/US23 will each need an insert path once they exist and
-  can share one if warranted then. Introducing one now would have been speculative code with no
-  caller.
+- **No MatchScore-writing/persistence helper exists yet** — this was schema-plus-read-endpoint
+  only, per its own scope; the LangChain Matcher and the abandoned `sjctl evaluate` wrapper would
+  each need an insert path once they existed, and could share one if warranted. Introducing one
+  now would have been speculative code with no caller.
 - **No uniqueness constraint on `(offer_id, profile_id)`** — deliberately left alone; the
   acceptance criteria require multiple `MatchScore` rows per offer over time (re-scores, or scores
   against different profiles), so a new score is always inserted, never overwritten.
 
-### LangChain Matcher (P3US22)
+### LangChain Matcher
 
-- **Purpose**: built directly on P3US21's schema and read endpoint. Scores offers from all three
-  sources (SOLID.Jobs, JustJoin.it, NoFluffJobs) against the active `Profile` and writes
-  `MatchScore` rows. A second `sjctl evaluate` engine for SOLID.Jobs was originally planned but
-  abandoned before implementation — see P3US23/P3US24 below — so this is the only scoring engine;
-  US25's batch job is the entry point that will call it.
+- **Purpose**: built directly on the Match Score schema and read endpoint above. Scores offers
+  from all three sources (SOLID.Jobs, JustJoin.it, NoFluffJobs) against the active `Profile` and
+  writes `MatchScore` rows. A second `sjctl evaluate` engine for SOLID.Jobs was originally planned
+  but abandoned before implementation — see "SOLID.Jobs Matcher verification" below — so this is
+  the only scoring engine; the batch scoring job (below) is the entry point that will call it.
 - **Module**: `app/llm/matcher.py`, structured like `app/llm/cv_extraction.py` (private
   `_build_llm`/`_build_chain`, a typed `MatcherError` wrapping `httpx.HTTPError`/`OSError` plus a
   catch-all, a module logger, a `_describe(exc)` helper). Unlike `cv_extraction.py`, this chain stays
@@ -70,18 +71,19 @@
   mapping.
 - **Dimension weights** (`DIMENSION_WEIGHTS`, mirrors `sjctl`'s rubric): skill match 30%, salary fit
   25%, seniority fit 15%, work mode/location 15%, contract type 10%, red flags 5%.
-- **`score_percent = round(_weighted_total(output) * 100)`** (as of P3US29) — the Matcher's
+- **`score_percent = round(_weighted_total(output) * 100)`** — the Matcher's
   internal 0.0–1.0 weighted total is surfaced directly as a 0–100 integer, with no threshold table
   or letter-grade bucketing in between. This module originally shaped a `GradeScale` class (a
-  seam explicitly built for P3US27's later configurable grade thresholds) here; P3US29 deleted
-  both `GradeScale` and P3US27's `scoring_config` entirely once there was no letter left to
-  calibrate — see the P3US29 section below. `DIMENSION_WEIGHTS` stays a plain dict, unaffected by
-  that change — no story has ever needed configurable weights.
+  seam explicitly built for later configurable grade thresholds) here; that later percentage-based
+  rework deleted both `GradeScale` and the configurable-threshold `scoring_config` entirely once
+  there was no letter left to calibrate — see the "Percentage-based match score" section below.
+  `DIMENSION_WEIGHTS` stays a plain dict, unaffected by that change — nothing has ever needed
+  configurable weights.
 - **Deal-breaker cap, enforced in code, not left to the LLM**: any `Profile.deal_breakers` entry
   matched in the offer's text caps `score_percent` at a fixed `40` (`_cap_score_for_deal_breaker`,
-  only ever lowers, never raises — an already-low score is left unchanged). Before P3US29 this
-  capped a letter grade at `D`; the mechanism changed to a numeric ceiling but the rule itself
-  (deterministic, code-level, never LLM-judged) did not.
+  only ever lowers, never raises — an already-low score is left unchanged). Before the switch to a
+  percentage score this capped a letter grade at `D`; the mechanism changed to a numeric ceiling
+  but the rule itself (deterministic, code-level, never LLM-judged) did not.
 - **Deal-breaker detection is itself deterministic, never an LLM-judged field** — see
   `docs/adr/0014-deal-breaker-detection-deterministic-not-llm.md`. Folding detection into
   `_MatcherOutput` was considered and rejected: `Offer.description`/`title`/`company` are adversarial
@@ -91,14 +93,14 @@
   between tokens, so `"on-site only"` matches `"on-site only"`, `"onsite only"`, and `"on site only"`
   alike, while a single-token deal-breaker like `"Java"` keeps plain word-boundary anchors and so
   never matches inside `"JavaScript"`.
-- **Hard skill miss cap (P3US32)** is `deal_breakers`/`_deal_breaker_hit` inverted: a positive
+- **Hard skill miss cap** is `deal_breakers`/`_deal_breaker_hit` inverted: a positive
   "must mention at least one of these" check where `deal_breakers` is a negative "must mention
   none of these" one. Live investigation found a Java-only offer scoring 86% for a Python-only
   profile — `skill_match` (30% weight) got hedged to ~0.5 by the LLM while the other five
   dimensions scored ~1.0, and nothing let one dimension veto the total from the positive side the
   way `deal_breakers` already vetoes it from the negative side.
-  - **Modeled as a flag on existing `Skill` entries, not a parallel free-text list.** The story
-    originally shipped a separate `Profile.core_skills: list[str]` (mirroring `deal_breakers`
+  - **Modeled as a flag on existing `Skill` entries, not a parallel free-text list.** This
+    originally shipped as a separate `Profile.core_skills: list[str]` (mirroring `deal_breakers`
     exactly), but this duplicated skill names already entered in `Profile.skills` and invited
     drift (typo/edit in one list but not the other). It was revised same-session to
     `Skill.hard: bool = False` — the frontend `SkillsTable` gets a star toggle per skill instead
@@ -106,7 +108,7 @@
     `[s.name for s in profile.skills if s.hard]` as the set to check. `CoreSkillsList.tsx` was
     deleted; there is no longer a `Profile.core_skills` field.
   - **CV extraction never sets `hard=True`**: `Skill` is shared between `Profile` and
-    `CVExtraction` (the CV-upload LLM's structured-output target, see P2US2 in profile.md), so `hard`
+    `CVExtraction` (the CV-upload LLM's structured-output target, see profile.md), so `hard`
     is technically exposed in that schema too. `extract_profile_from_cv_text`
     (`app/llm/cv_extraction.py`) force-resets every extracted skill's `hard` to `False`
     regardless of what the model output, the same deterministic-override pattern as
@@ -137,10 +139,10 @@
   backstop yet — tracked as **OD-9**.
 - **Routing**: `LANGCHAIN_SOURCES = frozenset({SOLID_JOBS, JUSTJOINIT, NOFLUFFJOBS})` and the pure
   predicate `is_langchain_source(connector)` decide which offers this chain scores — all three real
-  connectors route here (see P3US23 below); only a `None`/unrecognised connector (e.g. a manually
-  seeded `Source` row with no connector identity) is excluded.
-  **`score_offers_with_langchain(session, profile_row, offers)`** is the batch entry point US25 will
-  call by name: it filters to langchain-routed offers, scores each, `session.add()`s the resulting
+  connectors route here (see "SOLID.Jobs Matcher verification" below); only a `None`/unrecognised
+  connector (e.g. a manually seeded `Source` row with no connector identity) is excluded.
+  **`score_offers_with_langchain(session, profile_row, offers)`** is the batch entry point the
+  batch scoring job (below) calls by name: it filters to langchain-routed offers, scores each, `session.add()`s the resulting
   `MatchScore` rows, and returns them — never committing (the caller controls the transaction
   boundary, matching `app.ingestion.persist` and `app.db.profile_repo`'s convention). A single
   offer's `MatcherError` is logged at WARNING and skipped; it never aborts the rest of the batch.
@@ -149,14 +151,15 @@
   a listing that tries to instruct the model to change its scoring behavior is itself scored as a
   red flag rather than obeyed.
 
-### SOLID.Jobs Matcher verification (P3US23)
+### SOLID.Jobs Matcher verification
 
 - **Purpose**: the originally-planned second scoring engine (`sjctl evaluate`, for SOLID.Jobs only)
-  was abandoned before it was ever built — P3US24 records there is only one engine, the LangChain
-  Matcher, covering all three sources. This story fixed the one place P3US22 still encoded the
-  abandoned two-engine plan: `LANGCHAIN_SOURCES` was `frozenset({JUSTJOINIT, NOFLUFFJOBS})`, so
-  `is_langchain_source("solid_jobs")` returned `False` and `score_offers_with_langchain` silently
-  skipped every SOLID.Jobs offer passed to it, with no error and no log line.
+  was abandoned before it was ever built — a follow-up confirmed there is only one engine, the
+  LangChain Matcher, covering all three sources. This fixed the one place the Matcher still
+  encoded the abandoned two-engine plan: `LANGCHAIN_SOURCES` was `frozenset({JUSTJOINIT,
+  NOFLUFFJOBS})`, so `is_langchain_source("solid_jobs")` returned `False` and
+  `score_offers_with_langchain` silently skipped every SOLID.Jobs offer passed to it, with no
+  error and no log line.
 - **Fix**: `LANGCHAIN_SOURCES` now includes `SOLID_JOBS`; no other control flow in
   `app/llm/matcher.py` changed. `score_offer_with_langchain`'s per-offer logic (deal-breaker cap,
   missing-salary conservatism, structured-output call) was already source-agnostic — it operates
@@ -167,15 +170,16 @@
   SOLID.Jobs field the Matcher reads onto the same `Offer` schema JustJoin.it/NoFluffJobs populate.
   When SOLID.Jobs omits an optional field (e.g. `salary`, `locations`, `experienceLevel`), the
   mapper already returns `None` for the corresponding `Offer` field rather than a placeholder, so
-  the existing missing-salary conservatism (P3US22) and the LLM's own "score conservatively when a
-  field is missing" instruction apply exactly as they do for the other two sources — no
+  the existing missing-salary conservatism (see the LangChain Matcher section above) and the LLM's
+  own "score conservatively when a field is missing" instruction apply exactly as they do for the
+  other two sources — no
   SOLID.Jobs-specific handling exists or is needed anywhere in the scoring path.
 
-### Batch scoring job (P3US25)
+### Batch scoring job
 
-- **Purpose**: US21-US24 left a schema, a read endpoint, and a fully working
+- **Purpose**: the work above left a schema, a read endpoint, and a fully working
   source-agnostic scoring function (`score_offers_with_langchain`), but nothing called it
-  automatically, on demand, or queried which offers actually need scoring. This story is a
+  automatically, on demand, or queried which offers actually need scoring. This is a
   pure caller/orchestration layer on top — it does not touch `app/llm/matcher.py`'s scoring
   logic at all.
 - **`app/scoring/batch.py`**: `run_batch_scoring(session) -> BatchScoringSummary` is the single
@@ -196,9 +200,9 @@
   `MatchScore.profile_id`, not a global "has this offer ever been scored" flag, switching the
   active Profile automatically makes every previously-scored Offer "unscored" again for the new
   Profile on the next run — no explicit re-scoring logic exists or is needed; it falls out of
-  the query shape. Old `MatchScore` rows against the previous Profile are never deleted (US21's
-  original "always insert, never overwrite" design).
-- **Re-scoring on in-place Profile *edit* (BUG30)**: the "Re-scoring on Profile change" bullet
+  the query shape. Old `MatchScore` rows against the previous Profile are never deleted (the
+  original "always insert, never overwrite" design described above).
+- **Re-scoring on in-place Profile *edit***: the "Re-scoring on Profile change" bullet
   above only covers `profile_id` actually changing (activating a different row). Editing the same
   active profile's content in place — a new CV upload, a changed deal-breaker, a newly-starred
   hard skill — kept `profile_id` constant, so every offer that already had a `MatchScore` row for
@@ -208,11 +212,11 @@
   previous `data` JSONB against the newly-validated `Profile.model_dump(mode="json")` before
   overwriting it, and if they differ *and* the row ends up active, calls the new
   `invalidate_scores_for_profile(session, profile_id)` — a plain `DELETE FROM match_scores WHERE
-  profile_id = :id` — before returning. This is deliberately the cheapest of BUG30's own suggested
-  fixes (full delete-and-redrain, not a `MatchScore.created_at < Profile.updated_at` staleness
+  profile_id = :id` — before returning. This is deliberately the cheapest of the fixes considered
+  for this bug (full delete-and-redrain, not a `MatchScore.created_at < Profile.updated_at` staleness
   comparison): it needs no schema change and no edit to `_fetch_unscored_offers` at all — the
   offers simply reappear in the same "no MatchScore row exists" query the backlog-draining job
-  (BUG24) already polls every `scoring_job_interval_seconds`, so a profile edit's full rescore
+  (described below) already polls every `scoring_job_interval_seconds`, so a profile edit's full rescore
   happens automatically in the background, never blocking the save request itself. The
   `data_changed` comparison is what keeps a no-op resave (e.g. re-clicking "Set as active" with no
   edits) from needlessly nuking otherwise-still-valid scores.
@@ -221,48 +225,49 @@
   — there's no per-connector routing to 404 on the way `POST /ingest/{source}` has, and
   `run_batch_scoring` never raises (mirrors `score_offers_with_langchain`'s own
   never-raise-out-of-a-batch convention).
-- **Automatic post-ingestion trigger (BUG16), removed again by BUG29**: the trigger used to live
+- **Automatic post-ingestion trigger, added then removed again**: the trigger used to live
   in `app/scheduler/service.py`, called only from `_run_source_async` — meaning
   `POST /ingest/{source}` (the *only* fetch action `FetchNowButton.tsx` actually calls) never
   scored anything, ever, since it goes through a sibling code path
-  (`app/ingestion/service.py`'s `_trigger_ingest_async`) that never called it. BUG16's fix moved
+  (`app/ingestion/service.py`'s `_trigger_ingest_async`) that never called it. The fix moved
   `_trigger_batch_scoring_after_ingestion()` into `app/ingestion/lifecycle.py`'s
   `run_with_lifecycle` — the one call site shared by manual `/ingest`, manual `/scheduler/run`,
   and automatic APScheduler jobs alike — calling it unconditionally after `dispatch_ingestion`
-  returns, on both the success and error branches. Once BUG24 added the dedicated
-  `scoring:backlog` job on its own independent interval, this made *two* unsynchronized triggers
-  race the same unscored backlog: an ingestion run and a `scoring:backlog` tick landing close
-  together could each fetch the same "unscored" offers before either committed, producing
-  duplicate `MatchScore` rows for the same offer/profile pair (BUG29, measured at ~43% wasted
-  duplicate LLM calls against the live backlog). BUG29 removes
+  returns, on both the success and error branches. Once a dedicated
+  `scoring:backlog` job was added on its own independent interval, this made *two* unsynchronized
+  triggers race the same unscored backlog: an ingestion run and a `scoring:backlog` tick landing
+  close together could each fetch the same "unscored" offers before either committed, producing
+  duplicate `MatchScore` rows for the same offer/profile pair (measured at ~43% wasted
+  duplicate LLM calls against the live backlog). The fix for that removed
   `_trigger_batch_scoring_after_ingestion()` and both call sites in `run_with_lifecycle` entirely
-  — `scoring:backlog` is now the *only* automatic trigger, exactly matching BUG24's original
+  — `scoring:backlog` is now the *only* automatic trigger, exactly matching the original
   intent of a backlog-drain "fully independent of any source's ingestion schedule." Ingestion
   itself no longer scores anything; a freshly-ingested offer is picked up on the backlog job's
   next tick (or immediately via manual `POST /score/batch`), not synchronously with the fetch.
-- **Mutual exclusion inside `run_batch_scoring` itself (BUG29)**: rather than trust every current
+- **Mutual exclusion inside `run_batch_scoring` itself**: rather than trust every current
   and future caller to never overlap, `app/scoring/batch.py` now serializes all calls on a
   module-level `asyncio.Lock` (`_scoring_lock`) — `run_batch_scoring` is a thin wrapper that
   acquires the lock and delegates to `_run_batch_scoring_locked`. This is what actually closes
   the race: the scheduled `scoring:backlog` tick and a manual `POST /score/batch` call are still
-  two independent callers, each opening its own session, so removing BUG16's trigger alone only
+  two independent callers, each opening its own session, so removing the earlier trigger alone only
   removed one of several possible overlaps. With the lock, a second caller's own
   `_fetch_unscored_offers` query runs only after the first caller's transaction has committed, so
   it never sees an offer the first call is still in the middle of scoring.
-- **No unique constraint added on `match_scores (offer_id, profile_id)`**: BUG29's own writeup
-  suggested one, but P3US21 (above) already documents a deliberate decision to allow multiple
+- **No unique constraint added on `match_scores (offer_id, profile_id)`**: this was
+  suggested as part of the race-condition fix, but the Match Score schema section above already
+  documents a deliberate decision to allow multiple
   `MatchScore` rows per offer over time (re-scores), with reads always taking the most recent row
   — `tests/integration/test_offers_routes.py`'s `test_rescoring_offer_inserts_new_row_without_overwriting_existing`
   and its two sibling "most recent score" tests exercise exactly this. A hard uniqueness
   constraint would foreclose that intentional future capability for no real benefit now that the
-  actual race is closed at the trigger and lock level. BUG29 instead ships a one-off data-only
-  migration (`134e4fa8b06d`) that deletes the accidental duplicate rows the race had already
+  actual race is closed at the trigger and lock level. Instead, a one-off data-only
+  migration (`134e4fa8b06d`) deletes the accidental duplicate rows the race had already
   produced, keeping the newest row per `(offer_id, profile_id)` pair — pure cleanup, no schema
   change.
-- **Bounded batch size and live progress (BUG16)**: with the trigger now firing on every
-  ingestion door, a single manual `/ingest` call could otherwise try to score an unbounded
-  backlog synchronously (this repo's dev database had ~15k offers ingested-but-never-scored by
-  the time this bug was fixed, since nothing had ever scored them). `run_batch_scoring` now takes
+- **Bounded batch size and live progress**: with the automatic trigger briefly firing on every
+  ingestion (before it was removed, see above), a single manual `/ingest` call could otherwise try
+  to score an unbounded backlog synchronously (this repo's dev database had ~15k offers
+  ingested-but-never-scored at one point, since nothing had ever scored them). `run_batch_scoring` now takes
   a `limit` (default `Settings.batch_scoring_limit`, `BATCH_SCORING_LIMIT` env var, 20) applied
   via `.limit()` on `_fetch_unscored_offers`'s query (now also `.order_by(OfferModel.id)` for
   determinism), and `BatchScoringSummary` gains a `remaining` count (`_count_unscored_offers`
@@ -291,10 +296,10 @@
   `import app.main` at collection time to stop that stub from being permanently baked into
   `app/api/routes/scoring.py`'s name-bound import — both existed solely to stop an
   ingestion-focused test's scheduler run from triggering a real batch-scoring pass, back when
-  ingestion itself triggered scoring (BUG16). BUG29 removed that trigger entirely (see above), so
+  ingestion itself triggered scoring, as described above. That trigger was later removed entirely, so
   neither guard has anything left to protect against and both were deleted along with it.
-- **Fetch Range-aware selection and offer cleanup (P3US36)**: `_fetch_unscored_offers` and
-  `_count_unscored_offers` now reuse `resolve_fetch_range` (`app/ingestion/runner.py`, US34) so
+- **Fetch Range-aware selection and offer cleanup**: `_fetch_unscored_offers` and
+  `_count_unscored_offers` now reuse `resolve_fetch_range` (`app/ingestion/runner.py`) so
   scoring never spends an LLM call on an offer the user has already excluded from ingestion via a
   narrowed Fetch Range — see CONTEXT.md's "Fetch Range" and "Offer Cleanup" entries, and
   `docs/adr/0020-scoring-backlog-filter-favors-simplicity-over-scan-cost.md`. The query is split
@@ -302,14 +307,14 @@
   filter, now also selecting `Source.config_json`) and a pure predicate, `_in_fetch_range(offer,
   config_json)`, applied in Python over the full candidate set rather than in SQL — deliberately
   accepting a full per-call materialize (over the DB-side `.limit()`/`func.count()` the
-  pre-US36 version used) in exchange for not duplicating `resolve_fetch_range`'s parsing/fail-open
+  earlier version used) in exchange for not duplicating `resolve_fetch_range`'s parsing/fail-open
   logic in a second, SQL-shaped form; see the ADR for the concrete cost/benefit reasoning. A
   Source with `mode: "all"` or no `fetch_range` at all is unaffected — every offer from it is
   still a candidate exactly as before. Narrowing a Source's Fetch Range never invalidates an
-  existing `MatchScore` (unlike a Profile edit, BUG30 above) — it only changes future offer
+  existing `MatchScore` (unlike a Profile edit, described above) — it only changes future offer
   selection; an offer that becomes ineligible today becomes eligible again automatically, with no
   manual intervention, the moment its Source's range widens or flips back to `"all"`.
-- **`DELETE /offers` and `GET /offers/cleanup-preview` (P3US36)**: a manually-triggered, global
+- **`DELETE /offers` and `GET /offers/cleanup-preview`**: a manually-triggered, global
   (cross-source) bulk delete for offers that have aged out, plus a paired read-only preview so the
   Settings UI can show an accurate pre-delete count before the user confirms. Both routes share
   `_partition_offers_for_cleanup(session, older_than)` (`app/api/routes/offers.py`): an Offer is a
@@ -328,31 +333,34 @@
   route already matched, not by the route's regex), so `cleanup-preview` would otherwise match
   `get_offer` first and 422 on int-conversion before ever reaching the intended handler.
   `older_than` is a required `Query(...)` param on both routes (FastAPI 422s automatically if it's
-  missing) — there is no "delete everything" default. As of this story, `Application` rows have no
+  missing) — there is no "delete everything" default. As of this writing, `Application` rows have no
   creation path anywhere in the running app (Phase 4 — CV tailoring/sending — is not yet built),
   so in real usage today `skipped` is always `0`; the check is built now against the existing
   schema so it is already correct once Phase 4 lands, and is exercised today only by tests and by
   inserting an `Application` row directly via SQL for manual verification.
 
-### Configurable grade thresholds (P3US27) — superseded by P3US29
+### Configurable grade thresholds — superseded by the percentage-based match score
 
-This story added a `scoring_config` table, `ScoringConfig` schema, `scoring_config_repo.py`, a
+This earlier effort added a `scoring_config` table, `ScoringConfig` schema, `scoring_config_repo.py`, a
 `GET`/`PUT /scoring-config` pair, `app/llm/matcher.py`'s `build_grade_scale`, and a "Grade cutoffs"
-Settings card, all in service of making US22's letter-grade thresholds user-editable. P3US29
-deleted every piece of it outright rather than migrating it: once `MatchScore` reports a plain
-0–100 percentage instead of a letter, there is no shared "what does B mean" calibration left for a
-threshold table to hold — a minimum-score filter and an alert threshold are now each just a
-number the user types in, no persisted config in between. See the P3US29 section below.
+Settings card, all in service of making the letter-grade thresholds user-editable. The
+percentage-based rework below deleted every piece of it outright rather than migrating it: once
+`MatchScore` reports a plain 0–100 percentage instead of a letter, there is no shared "what does B
+mean" calibration left for a threshold table to hold — a minimum-score filter and an alert
+threshold are now each just a number the user types in, no persisted config in between. See the
+next section.
 
-### Percentage-based match score (P3US29)
+### Percentage-based match score
 
-- **Purpose**: every prior Phase 3 story hardcoded, threaded through, or built UI around a
+- **Purpose**: every prior piece of Phase 3 hardcoded, threaded through, or built UI around a
   five-bucket letter grade, even though the Matcher already computed a continuous 0.0–1.0
-  `weighted_total` internally (P3US22) and discarded it the moment a letter was picked. This story
+  `weighted_total` internally (see the LangChain Matcher section above) and discarded it the
+  moment a letter was picked. This
   stops discarding it: `MatchScore.score_percent = round(weighted_total * 100)` is now the
-  headline field everywhere a `grade` used to be. It fully supersedes P3US27 (a plain percentage
-  needs no shared calibration table) and revises the grade-shaped acceptance criteria of
-  P3US21/P3US26/P3US28 to their percentage equivalents, without reopening any of their unrelated
+  headline field everywhere a `grade` used to be. It fully supersedes the configurable grade
+  thresholds above (a plain percentage needs no shared calibration table) and revises the
+  grade-shaped parts of the Match Score schema, offer-list scores, and auto-fetch-cadence work to
+  their percentage equivalents, without reopening any of their unrelated
   design decisions (the "200 with null body" convention, the deal-breaker-detection-is-deterministic
   ADR, the SSE broadcaster mechanism, the bounded-batch-plus-drain-job design) — those all stay
   exactly as described above.
@@ -374,8 +382,8 @@ number the user types in, no persisted config in between. See the P3US29 section
   does exactly `min(score_percent, 40)` — the old grade-D cutoff, now a plain constant
   (`_DEAL_BREAKER_SCORE_CAP`), not user-configurable.
 - **`scoring_config` deleted outright, not migrated**: the `ScoringConfig` schema,
-  `scoring_config_repo.py`, and `GET`/`PUT /scoring-config` are all removed — see the P3US27
-  section above.
+  `scoring_config_repo.py`, and `GET`/`PUT /scoring-config` are all removed — see the
+  "Configurable grade thresholds" section above.
 - **Offer list**: `app/schemas/offer.py`'s `OfferSummary.grade: str | None` is renamed/retyped to
   `score_percent: int | None` (`ge=0, le=100`); `GET /offers`'s exact-match `grade` query param is
   deleted outright (never consumed by the frontend, and no percentage-equivalent "exact match"
@@ -417,7 +425,7 @@ number the user types in, no persisted config in between. See the P3US29 section
 - **Settings page cleanup**: the entire "Grade cutoffs" card (four `grade_a`..`grade_d` inputs,
   `useScoringConfig`, `scoringConfigValidation.ts`) is removed from `SettingsPage.tsx` — there is
   nothing left to configure at the domain level once grading is gone. The page now renders only
-  Fetch cadence (P3US28, unchanged) and Notifications (this story's updated section).
+  Fetch cadence (unchanged) and Notifications (this section's updated form).
 - **Theme (`frontend/src/index.css`)**: the five `--color-grade-*` custom properties and
   `.badge-grade-*` classes are removed (colour is now computed inline via a `style` prop, not a
   CSS class); `--color-grade-none`/`.badge-grade-none` are renamed to `--color-score-none`/

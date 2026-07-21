@@ -17,7 +17,7 @@ class UnsupportedFileTypeError(Exception):
 # Multi-column CVs (e.g. a narrow skills sidebar next to a wide experience column) place
 # unrelated columns at overlapping vertical positions. pdfplumber's plain extract_text() only
 # clusters words into lines by vertical position and reads left-to-right across the full page
-# width, so it splices sidebar words into the middle of unrelated body-column sentences (BUG14).
+# width, so it splices sidebar words into the middle of unrelated body-column sentences.
 # The heuristics below detect recurring x-position gaps between words on the same line and, when
 # a gap recurs often enough to be a real column gutter (not just wide inter-word spacing), split
 # each line at that gutter and emit each column as its own contiguous block of text instead.

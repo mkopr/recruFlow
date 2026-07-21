@@ -11,7 +11,7 @@ const STORAGE_KEY = 'recruflow.offerListPrefs';
 const ORDER_BY_VALUES: OfferOrderBy[] = ['posted_at', 'score_percent'];
 const ORDER_VALUES: OfferOrder[] = ['asc', 'desc'];
 
-// Matches "Visibility"'s excluded-by-default semantics (BUG33): a first-ever
+// Matches "Visibility"'s excluded-by-default semantics: a first-ever
 // visit, with nothing in storage yet, should still open on not-applied offers.
 export function defaultOfferListPrefs(): OfferListPrefs {
   return {

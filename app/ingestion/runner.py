@@ -35,7 +35,7 @@ def resolve_fetch_range(
     """Resolve a Source's `config_json["fetch_range"]` into `(since, until)` bounds.
 
     Fails open to `(None, None)` -- "no filtering" -- for `mode: "all"`, a missing key, or
-    any malformed/unrecognised shape (US34's Fetch Range, see `docs/adr/0017`).
+    any malformed/unrecognised shape (the Fetch Range, see `docs/adr/0017`).
     """
     if not isinstance(fetch_range, dict) or fetch_range.get("mode") != "range":
         return None, None
@@ -69,7 +69,7 @@ async def run_paginated_ingestion(  # noqa: C901
     `next_cursor=None` signals there is no further page to fetch (NoFluffJobs's single-page
     feed always signals this after its one call -- see ADR 0009).
 
-    `since`/`until` (both optional) implement US34's Fetch Range: an offer whose mapped
+    `since`/`until` (both optional) implement the Fetch Range: an offer whose mapped
     `posted_at` falls outside the bounds is skipped -- never persisted, never touching
     `consecutive_already_seen` in either direction -- so a narrow range never looks like
     "we've caught up" and truncates pagination for an unrelated reason. Applies identically
@@ -78,8 +78,8 @@ async def run_paginated_ingestion(  # noqa: C901
     `sorted_by_recency` (default `True`, per ADR 0017's "pagination trusts newest-first
     order" assumption) gates the "whole page older than since cutoff" early-stop: a page
     being entirely older than `since` only proves the rest of the feed is too when the feed
-    is actually sorted newest-first. Sitemap-enumeration connectors (Rocket Jobs, Bulldogjob
-    -- BUG41) enumerate a stable, non-recency-sorted URL list and must pass `False` so a
+    is actually sorted newest-first. Sitemap-enumeration connectors (Rocket Jobs, Bulldogjob)
+    enumerate a stable, non-recency-sorted URL list and must pass `False` so a
     sitemap-order page that happens to be all-older-than-`since` doesn't wrongly truncate the
     rest of the (unsorted) catalog; per-offer range filtering above is unaffected either way.
     """
@@ -163,7 +163,7 @@ async def run_paginated_ingestion(  # noqa: C901
         if cursor is None:
             break
 
-        # force_refresh bypasses the BUG02/ADR0009 incremental checkpoint: a caller explicitly
+        # force_refresh bypasses the ADR0009 incremental checkpoint: a caller explicitly
         # asking for a fresh fetch wants the full catalog re-walked, not an early exit the moment
         # it looks like we've caught up.
         if not force_refresh and consecutive_already_seen >= already_seen_stop_threshold:

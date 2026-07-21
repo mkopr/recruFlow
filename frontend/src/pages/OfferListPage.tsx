@@ -16,7 +16,7 @@ import { loadOfferListPrefs, saveOfferListPrefs } from '../lib/offerListPrefs';
 const PAGE_SIZE = 50;
 
 export function OfferListPage() {
-  // Loaded once per mount (BUG33) — filters/minScore/sort persist across
+  // Loaded once per mount — filters/minScore/sort persist across
   // reloads and navigation instead of resetting to blank every time.
   const [initialPrefs] = useState(loadOfferListPrefs);
   const [filters, setFilters] = useState<OfferListFilters>(initialPrefs.filters);
@@ -58,7 +58,7 @@ export function OfferListPage() {
     setMinScore(next);
   };
 
-  // Sorting by score reorders the full backlog server-side (BUG31), so a click
+  // Sorting by score reorders the full backlog server-side, so a click
   // resets to page one just like a filter change rather than reshuffling
   // whatever offers happen to already be loaded.
   const handleScoreHeaderClick = () => {
@@ -79,9 +79,9 @@ export function OfferListPage() {
     );
   };
 
-  // A background scoring run can complete well after the ingest response comes back
-  // (BUG16) — this re-pulls the current page each time a run finishes, so score
-  // badges (now inline on each offer, BUG26) can appear without a manual reload.
+  // A background scoring run can complete well after the ingest response comes
+  // back — this re-pulls the current page each time a run finishes, so score
+  // badges (now inline on each offer) can appear without a manual reload.
   useEffect(() => {
     if (scoringStatus?.finished_at) {
       refetch();

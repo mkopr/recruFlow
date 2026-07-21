@@ -13,11 +13,11 @@ from app.db.session import get_engine, get_sessionmaker
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-# BUG28: defaults to the dedicated `db_test` compose service (port 5433), never the real `db`
-# service (5432) that `make up` and a developer's real data live on -- this suite blanket-resets
-# whole tables (e.g. reset_test_profiles) and must never be able to touch real state. CI
-# overrides this via its own DATABASE_URL env var pointing at its ephemeral GitHub Actions
-# postgres service, so `setdefault` is a no-op there.
+# Defaults to the dedicated `db_test` compose service (port 5433), never the real `db` service
+# (5432) that `make up` and a developer's real data live on -- this suite blanket-resets whole
+# tables (e.g. reset_test_profiles) and must never be able to touch real state. CI overrides
+# this via its own DATABASE_URL env var pointing at its ephemeral GitHub Actions postgres
+# service, so `setdefault` is a no-op there.
 os.environ.setdefault(
     "DATABASE_URL", "postgresql+asyncpg://recruflow:recruflow@localhost:5433/recruflow_test"
 )
@@ -66,12 +66,11 @@ async def reset_test_profiles(session: AsyncSession, names: list[str]) -> None:
     # tests; deleting only the caller's own fixed names avoids unique-name
     # collisions on rerun without touching rows this suite doesn't own.
     #
-    # BUG15: one of those names is `DEFAULT_PROFILE_NAME`, which is not
-    # test-exclusive -- `upsert_active_profile` assigns it in real usage too,
-    # so a real MatchScore (written by the batch-scoring job) can reference a
-    # default-named profile this suite doesn't own. Delete any MatchScore
-    # rows referencing the profiles about to be deleted first, or the profile
-    # delete raises ForeignKeyViolationError.
+    # One of those names is `DEFAULT_PROFILE_NAME`, which is not test-exclusive --
+    # `upsert_active_profile` assigns it in real usage too, so a real MatchScore
+    # (written by the batch-scoring job) can reference a default-named profile this
+    # suite doesn't own. Delete any MatchScore rows referencing the profiles about
+    # to be deleted first, or the profile delete raises ForeignKeyViolationError.
     await session.execute(update(ProfileModel).values(is_active=False))
     profile_ids = (
         (await session.execute(select(ProfileModel.id).where(ProfileModel.name.in_(names))))

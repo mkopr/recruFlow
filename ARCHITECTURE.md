@@ -19,36 +19,36 @@ change when the repo layout, dependency groups, or the core `app/` package itsel
 
 ```
 recruFlow/
-├── app/            # Python application package (P0US4 added a /health stub; P0US6 adds the rest)
-│   ├── main.py     # FastAPI app object: loads Settings, lifespan-wires the scheduler (P0US6, P1US6)
-│   ├── config.py   # Settings(BaseSettings) + get_settings(), env-driven (.env) (P0US6)
-│   ├── api/        # HTTP layer: DI dependencies and routers (P0US6)
+├── app/            # Python application package
+│   ├── main.py     # FastAPI app object: loads Settings, lifespan-wires the scheduler
+│   ├── config.py   # Settings(BaseSettings) + get_settings(), env-driven (.env)
+│   ├── api/        # HTTP layer: DI dependencies and routers
 │   │   ├── deps.py         # get_db() session dependency, SessionDep annotation
 │   │   └── routes/
 │   │       ├── health.py     # GET /health, GET /health/db
-│   │       └── scheduler.py  # POST /scheduler/run/{source}, GET /scheduler/status (P1US6)
-│   ├── cv/         # CV file parsing: extract_cv_text() (PDF/DOCX -> plain text) (P2US2)
-│   ├── llm/        # LLM invocation: extract_profile_from_cv_text() (Ollama call boundary) (P2US2)
-│   ├── db/         # SQLAlchemy models, async engine/session, Alembic-shared base (P0US5)
+│   │       └── scheduler.py  # POST /scheduler/run/{source}, GET /scheduler/status
+│   ├── cv/         # CV file parsing: extract_cv_text() (PDF/DOCX -> plain text)
+│   ├── llm/        # LLM invocation: extract_profile_from_cv_text() (Ollama call boundary)
+│   ├── db/         # SQLAlchemy models, async engine/session, Alembic-shared base
 │   │   ├── base.py     # Declarative base, shared by models.py and alembic/env.py
-│   │   ├── models.py   # v1 schema + SchedulerRun (P1US6): Source, Offer, Profile, CVVersion, MatchScore, Application, SchedulerRun
+│   │   ├── models.py   # v1 schema + SchedulerRun: Source, Offer, Profile, CVVersion, MatchScore, Application, SchedulerRun
 │   │   ├── session.py  # get_engine()/get_sessionmaker(), env-driven (DATABASE_URL)
 │   │   └── seed.py     # idempotent fixture loader (make seed)
 │   ├── schemas/
-│   │   └── scheduler.py  # ManualRunResponse, SourceStatus, SchedulerStatusResponse (P1US6)
-│   ├── ingestion/  # ELT pipeline + dispatch seam (P1US1-7, BUG04)
+│   │   └── scheduler.py  # ManualRunResponse, SourceStatus, SchedulerStatusResponse
+│   ├── ingestion/  # ELT pipeline + dispatch seam
 │   │   └── registry.py  # CONNECTOR_REGISTRY dispatch seam; dispatch_ingestion, resolve_source_by_connector
-│   └── scheduler/  # APScheduler wiring only (P1US6, BUG04)
+│   └── scheduler/  # APScheduler wiring only
 │       ├── triggers.py   # parse_schedule(): config_json["schedule"] -> APScheduler trigger, fail-soft
 │       ├── runs.py       # SchedulerRun row read/write helpers (start_run, finish_run_ok/error, get_latest_run_by_source)
 │       ├── service.py    # ensure_sources_exist, run_source_sync (plain def, see ADR 0005), run_source
 │       └── lifecycle.py  # register_jobs(): one AsyncIOScheduler job per connector-tagged Source
-├── alembic/        # Migration environment (async template) (P0US5)
-│   └── versions/   # Migration scripts; v1 schema migration creates all six tables, P1US6 adds a seventh
+├── alembic/        # Migration environment (async template)
+│   └── versions/   # Migration scripts; v1 schema migration creates all six tables, a later migration adds a seventh
 ├── alembic.ini     # Alembic config; sqlalchemy.url left unset, injected by env.py at runtime
-├── frontend/       # React + Vite + TypeScript frontend (P0US2)
+├── frontend/       # React + Vite + TypeScript frontend
 │   ├── src/        # App source (main.tsx, App.tsx, index.css, vite-env.d.ts)
-│   ├── nginx.conf  # SPA server block for the production Docker image (P0US4)
+│   ├── nginx.conf  # SPA server block for the production Docker image
 │   ├── package.json
 │   ├── pnpm-lock.yaml
 │   ├── tsconfig.json       # references-only root config
@@ -75,25 +75,25 @@ recruFlow/
 - `main` — runtime dependencies of the FastAPI application: `fastapi`, `uvicorn`, the async
   SQLAlchemy stack (`sqlalchemy[asyncio]`, `asyncpg`), `alembic`, `pydantic`,
   `pydantic-settings`, `httpx`, `apscheduler`, `langchain-ollama`, `langchain-core`, `pypdf`,
-  `python-docx`, `python-multipart` (the last five added in P2US2 for CV upload + LLM
+  `python-docx`, `python-multipart` (the last five added for CV upload + LLM
   extraction — see below). Later phases add further runtime deps here incrementally (full
-  `langchain`/`langgraph` orchestration in P3US2, `playwright` in P5US6) as the story that needs
+  `langchain`/`langgraph` orchestration in Phase 3, `playwright` in Phase 5) as the story that needs
   them lands.
 - `dev` — local developer tooling: `ruff`, `mypy`, `pre-commit`.
-- `test` — test-only dependencies: `pytest`, `pytest-asyncio`, `pytest-cov`, `reportlab` (added in
-  P2US2 solely to synthesize tiny real PDF fixtures in tests — never imported from `app/`).
+- `test` — test-only dependencies: `pytest`, `pytest-asyncio`, `pytest-cov`, `reportlab` (added
+  solely to synthesize tiny real PDF fixtures in tests — never imported from `app/`).
 
-`httpx` moved from `test`-only to `main` in P1US3 (the JustJoin.it connector): it previously only
+`httpx` moved from `test`-only to `main` when the JustJoin.it connector was added: it previously only
 backed FastAPI's `TestClient` in tests, but `app/connectors/justjoinit.py` is production code that
 imports it directly as its HTTP client.
 
-`apscheduler` (`>=3.10`, the 3.x line — 4.x is alpha-only and not used) was added to `main` in
-P1US6 for the ingestion scheduler. `apscheduler` ships no `py.typed` marker, so
+`apscheduler` (`>=3.10`, the 3.x line — 4.x is alpha-only and not used) was added to `main` for
+the ingestion scheduler. `apscheduler` ships no `py.typed` marker, so
 `[[tool.mypy.overrides]]` sets `ignore_missing_imports = true` for `apscheduler.*` — every
 `apscheduler` import elsewhere in `app/` is otherwise fully type-checked as normal, this only
 suppresses the "missing library stubs" note on the import itself.
 
-`[tool.ruff.lint]`'s `select` list adds `C90` (P0US8), enabling ruff's `mccabe`
+`[tool.ruff.lint]`'s `select` list adds `C90`, enabling ruff's `mccabe`
 cyclomatic-complexity checker, with `[tool.ruff.lint.mccabe] max-complexity = 10` — 10 is
 SonarQube's own default cyclomatic-complexity threshold, and the closest available proxy for
 "SonarQube standard" without adding a new dependency (ruff has no cognitive-complexity metric).
@@ -102,7 +102,7 @@ enforce the same threshold.
 
 ### `app/` package
 
-Exposes `__version__` (P0US1). As of P0US6, `app/main.py` is the real application entrypoint:
+Exposes `__version__`. `app/main.py` is the real application entrypoint:
 
 ```python
 settings = get_settings()
@@ -118,13 +118,13 @@ future routers can read it via `request.app.state.settings` without importing th
 singleton directly. `/docs` (Swagger UI) and `/openapi.json` require no extra configuration —
 they are FastAPI defaults, enabled automatically once the `FastAPI()` app object exists.
 
-### `app/config.py` (P0US6)
+### `app/config.py`
 
 `Settings(BaseSettings)` (Pydantic v2, `pydantic-settings`) — one field per backend-relevant key
 in `.env.example` (`database_url`, `ollama_base_url`, `ollama_model`, `smtp_*`, `solid_jobs_campaign`,
 `app_env`, `log_level`, `api_host`, `api_port`). `model_config = SettingsConfigDict(env_file=".env",
 extra="ignore")`: `extra="ignore"` because `.env` also carries frontend-only (`VITE_API_BASE_URL`)
-and P5-only (`SWARM_*`, `SEND_QUEUE_*`, `FORM_FILL_*`) keys this model doesn't represent yet — those
+and later-phase-only (`SWARM_*`, `SEND_QUEUE_*`, `FORM_FILL_*`) keys this model doesn't represent yet — those
 fields get added by the story that first needs them. `database_url`, `ollama_base_url`, and
 `ollama_model` have no default, so `Settings()` raises `pydantic.ValidationError` if they're unset,
 mirroring `get_database_url()`'s fail-loud behaviour. `get_settings()` is `functools.lru_cache`d so
@@ -135,7 +135,7 @@ cannot see Pydantic's dynamically generated `__init__` and flags every field-les
 as a missing-argument error, even though those fields are populated from the environment at
 runtime, not from constructor arguments.
 
-### `app/api/` package (P0US6)
+### `app/api/` package
 
 - `deps.py` — `get_db() -> AsyncGenerator[AsyncSession, None]`, an async-generator FastAPI
   dependency built directly on `app.db.session.get_sessionmaker()` (no independent connection
@@ -155,4 +155,3 @@ runtime, not from constructor arguments.
   SQLAlchemy wraps) and `OSError` (e.g. `ConnectionRefusedError`) — connection-establishment
   failures on the *first* use of a session are not wrapped by SQLAlchemy and propagate as the raw
   driver/socket exception, so both cases must be caught explicitly.
-

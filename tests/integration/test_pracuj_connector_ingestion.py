@@ -336,11 +336,11 @@ async def test_run_pracuj_ingestion_applies_category_filter_end_to_end(
 async def test_run_pracuj_ingestion_resumes_from_persisted_listing_page_cursor(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # BUG42 regression: enumeration must resume from the previous run's listing page instead
-    # of restarting at page 1 every time -- same class of gap BUG41 fixed for Rocket
-    # Jobs/Bulldogjob's sitemap enumeration. `page_size=1, max_pages=1` forces each run to
-    # cover exactly one listing page, so a second run only succeeds if it actually asks for
-    # page 2 -- the fixture router below only answers page 2's URL, not page 1's.
+    # Enumeration must resume from the previous run's listing page instead of restarting at
+    # page 1 every time -- same class of gap fixed for Rocket Jobs/Bulldogjob's sitemap
+    # enumeration. `page_size=1, max_pages=1` forces each run to cover exactly one listing
+    # page, so a second run only succeeds if it actually asks for page 2 -- the fixture
+    # router below only answers page 2's URL, not page 1's.
     source = await _create_source(
         db_session,
         config_json={
@@ -396,12 +396,12 @@ async def test_run_pracuj_ingestion_resumes_from_persisted_listing_page_cursor(
 async def test_pracuj_connector_skips_a_challenged_detail_page_and_keeps_the_rest(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # BUG43 follow-up: this used to assert an IngestionFailure got recorded and the whole page
-    # aborted on a single 403'd detail page -- that was true back when this connector shared one
-    # browser context for a whole run, so one challenge really did mean nothing else on the page
-    # would succeed either. Now that `run` opens a fresh context per fetch (BUG43's fix), a lone
-    # challenged detail URL is just a skip, and the real regression to guard against is the
-    # *rest* of the page silently getting thrown away with it.
+    # This used to assert an IngestionFailure got recorded and the whole page aborted on a
+    # single 403'd detail page -- that was true back when this connector shared one browser
+    # context for a whole run, so one challenge really did mean nothing else on the page would
+    # succeed either. Now that `run` opens a fresh context per fetch, a lone challenged detail
+    # URL is just a skip, and the real regression to guard against is the *rest* of the page
+    # silently getting thrown away with it.
     source = await _create_source(db_session, config_json=_FAST_IT_CONFIG)
     ok_slug, challenge_slug = _unique_slug("ok"), _unique_slug("challenge")
     ok_url, challenge_url = _job_url(ok_slug), _job_url(challenge_slug)

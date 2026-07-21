@@ -9,22 +9,22 @@
 - `lint` — `uv run ruff check .` + `uv run mypy .` + `cd frontend && pnpm lint`.
 - `typecheck` — `uv run mypy .` + `cd frontend && pnpm run typecheck` (`tsc -b`, i.e. build mode
   — plain `tsc --noEmit` is a no-op against the references-only root `tsconfig.json`, since it
-  has `files: []` and only `-b`/`--build` traverses `references`; fixed in P0US7 after discovering
+  has `files: []` and only `-b`/`--build` traverses `references`; fixed after discovering
   `pnpm run typecheck` was silently passing regardless of real type errors in `src/`).
 - `test` / `test-unit` / `test-integration` — `uv run pytest`, scoped by the `integration`
   marker. Python-only.
-- `test-frontend` (P1US8) — `cd frontend && pnpm test` (`vitest run`). Deliberately **not** part
+- `test-frontend` — `cd frontend && pnpm test` (`vitest run`). Deliberately **not** part
   of `ci`/`test` yet — see `docs/adr/0007-vitest-introduced-but-not-wired-into-make-ci.md`.
 - `ci` — runs `format lint typecheck test` in sequence; now covers both stacks since `lint`,
   `format`, and `typecheck` each fan out to the frontend toolchain.
 - `clean` — removes `__pycache__`, `.mypy_cache`, `.ruff_cache`, `.pytest_cache`, `dist`,
   `build`.
 - `up` — `docker compose up --build`; brings up all four Compose services with hot reload for
-  `api` and `frontend` (P0US4).
-- `migrate` — `docker compose exec api alembic upgrade head` (P0US5).
-- `seed` — `docker compose exec api python -m app.db.seed` (P0US5).
+  `api` and `frontend`.
+- `migrate` — `docker compose exec api alembic upgrade head`.
+- `seed` — `docker compose exec api python -m app.db.seed`.
 - `generate-types` — `cd frontend && pnpm run generate-types`, which runs `openapi-typescript`
-  against `http://localhost:8000/openapi.json` and writes `frontend/src/api/schema.d.ts` (P0US7).
+  against `http://localhost:8000/openapi.json` and writes `frontend/src/api/schema.d.ts`.
   Requires the API to already be running (`make up`). Its output is committed to source control
   — CI does not start the API, so it never regenerates this file itself — and must be re-run
   manually after any API contract change.
@@ -49,7 +49,7 @@ as committed, so `uv-lock-check` is the sole source of truth on lock/pyproject s
 are ordered so auto-fixers run before non-fixable checks, per the "auto fix before check"
 requirement.
 
-## Docker Compose services (P0US4)
+## Docker Compose services
 
 `docker-compose.yml` defines four services, brought up together by `make up`. Service names,
 ports, and credentials match `.env.example` exactly.
@@ -73,16 +73,17 @@ Notes:
   `docker compose down` (but not `docker compose down -v`).
 - The `Dockerfile` runtime stage installs `curl`/`ca-certificates` via `apt-get` — kept solely for
   the `api` healthcheck above (`CMD curl -f http://localhost:8000/health`), not for anything
-  SOLID.Jobs-related anymore (BUG10 removed the sjctl installer that used to be this block's other
-  reason to exist; removing the block entirely broke the healthcheck, since nothing else in the
-  image provides `curl` — caught by this story's own manual end-to-end test, not by `make ci`).
+  SOLID.Jobs-related anymore (the SOLID.Jobs connector rewrite removed the `sjctl` installer that
+  used to be this block's other reason to exist; removing the block entirely broke the healthcheck,
+  since nothing else in the image provides `curl` — caught by manual end-to-end testing, not by
+  `make ci`).
 - `Dockerfile.frontend` has three stages: `dev` (Vite dev server, used by `docker-compose.yml`),
   `build` (`pnpm build`, produces `frontend/dist`), and `production` (nginx serving the built
   static assets via `frontend/nginx.conf`, an SPA fallback for client-side routing added in
   later phases). Only `dev` is wired into Compose today; `production` is built but not yet
   deployed anywhere.
 
-## CI (GitHub Actions) (P0US8)
+## CI (GitHub Actions)
 
 `.github/workflows/ci.yml` defines a single workflow with a single job, triggered on every
 `pull_request` and every `push` to `main`. Rather than re-implementing `ruff check`, `mypy`,
@@ -117,13 +118,14 @@ Supporting setup, in order:
   environment variables precedence over the same key in `.env`, so the job-level `DATABASE_URL`
   (pointing at `localhost`) overrides `.env.example`'s Compose-network value (`db:5432`) without
   editing the copied file.
-- **`tsc --noEmit` vs. `tsc -b`**: the story's acceptance criteria literally says "runs ... `tsc
-  --noEmit`", but as documented above under "Makefile targets", plain `tsc --noEmit` silently
-  no-ops against this project's references-only root `tsconfig.json` (the P0US7 discovery). The
-  workflow does not invoke `tsc --noEmit` directly — it gets type-checking for free through
-  `make ci` → `typecheck` → `pnpm run typecheck` (`tsc -b`), which is the only command that
-  actually traverses `frontend/tsconfig.json`'s `references` and catches real TypeScript errors.
-  Implementing the AC literally would make the "CI fails on type error" scenario silently pass.
+- **`tsc --noEmit` vs. `tsc -b`**: an early version of the acceptance criteria literally called for
+  running `tsc --noEmit`, but as documented above under "Makefile targets", plain `tsc --noEmit`
+  silently no-ops against this project's references-only root `tsconfig.json` (discovered while
+  building out the CI workflow). The workflow does not invoke `tsc --noEmit` directly — it gets
+  type-checking for free through `make ci` → `typecheck` → `pnpm run typecheck` (`tsc -b`), which
+  is the only command that actually traverses `frontend/tsconfig.json`'s `references` and catches
+  real TypeScript errors. Implementing the literal `tsc --noEmit` call would make the "CI fails on
+  type error" scenario silently pass.
 - **README badge**: deferred — this repository has no GitHub remote configured yet (`git remote
   -v` returns nothing), so there is no `owner/repo` to build a badge URL from. README documents
   the CI workflow's behavior and notes the badge is pending a remote.

@@ -27,7 +27,7 @@ async def record_failure(
     dead letter write path must not take down the ingestion/scoring call site it's
     instrumenting.
 
-    `failure_type` is pulled out of the otherwise-generic `**fields` catch-all (BUG38) so
+    `failure_type` is pulled out of the otherwise-generic `**fields` catch-all so
     every call site is checked against `FailureType` -- the same vocabulary `app.dlq.retry`
     dispatches on -- rather than a bare string only `RETRY_HANDLERS` happens to agree with.
     """

@@ -102,8 +102,8 @@ def test_offer_rejects_title_exceeding_max_length() -> None:
 
 
 def test_offer_accepts_location_exceeding_255_chars() -> None:
-    """BUG44: joined multi-region locations (e.g. We Work Remotely) can exceed 255 chars;
-    location must not be capped or the whole offer gets dropped rather than just truncated."""
+    """Joined multi-region locations (e.g. We Work Remotely) can exceed 255 chars; location
+    must not be capped or the whole offer gets dropped rather than just truncated."""
     long_location = ", ".join(f"Country {i}" for i in range(40))
     assert len(long_location) > 255
 

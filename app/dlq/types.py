@@ -2,7 +2,7 @@ from enum import StrEnum
 
 
 class FailureType(StrEnum):
-    """The DLQ's dispatch vocabulary (BUG38).
+    """The DLQ's dispatch vocabulary.
 
     Every writer (`record_failure` call site) and reader (`app.dlq.retry.RETRY_HANDLERS`)
     must agree on these keys. Typing both ends against this enum turns a typo into a mypy

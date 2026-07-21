@@ -62,7 +62,7 @@ describe('useOffers', () => {
     await waitFor(() => expect(result.current.total).toBe(137));
   });
 
-  it('debounces rapid filter changes into a single fetch (BUG17)', async () => {
+  it('debounces rapid filter changes into a single fetch', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const { result, rerender } = renderHook(
