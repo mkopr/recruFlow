@@ -1,0 +1,1341 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>recruFlow: Detailed Infrastructure Diagrams</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --surface: #ffffff;
+    --surface-alt: #eef0f4;
+    --border: #d7dce3;
+    --text: #1b2330;
+    --text-dim: #5b6572;
+    --text-faint: #8892a0;
+    --accent: #2563eb;
+    --accent-soft: #e8effe;
+    --data: #0d9268;
+    --data-soft: #e3f5ee;
+    --ai: #7c3aed;
+    --ai-soft: #f0e9fe;
+    --ext: #b45309;
+    --ext-soft: #fbf0dd;
+    --fail: #c0341f;
+    --fail-soft: #fce9e5;
+    --planned: #7a8494;
+    --code-bg: #eef1f6;
+    --code-text: #34405a;
+    --shadow: 0 1px 2px rgba(20, 30, 50, 0.06), 0 1px 1px rgba(20, 30, 50, 0.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1320;
+      --surface: #161d2c;
+      --surface-alt: #1c2537;
+      --border: #2c3750;
+      --text: #e7ebf3;
+      --text-dim: #a3adc0;
+      --text-faint: #76829a;
+      --accent: #6f9bff;
+      --accent-soft: #1c2c4d;
+      --data: #38d9a9;
+      --data-soft: #123329;
+      --ai: #b795fb;
+      --ai-soft: #2a1f47;
+      --ext: #f0b054;
+      --ext-soft: #3a2a12;
+      --fail: #ff8a75;
+      --fail-soft: #3a1a14;
+      --planned: #7a8494;
+      --code-bg: #10182a;
+      --code-text: #c7d0e0;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 1px rgba(0, 0, 0, 0.3);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e1320; --surface: #161d2c; --surface-alt: #1c2537; --border: #2c3750;
+    --text: #e7ebf3; --text-dim: #a3adc0; --text-faint: #76829a;
+    --accent: #6f9bff; --accent-soft: #1c2c4d;
+    --data: #38d9a9; --data-soft: #123329;
+    --ai: #b795fb; --ai-soft: #2a1f47;
+    --ext: #f0b054; --ext-soft: #3a2a12;
+    --fail: #ff8a75; --fail-soft: #3a1a14;
+    --code-bg: #10182a; --code-text: #c7d0e0;
+  }
+  :root[data-theme="light"] {
+    --bg: #f5f6f8; --surface: #ffffff; --surface-alt: #eef0f4; --border: #d7dce3;
+    --text: #1b2330; --text-dim: #5b6572; --text-faint: #8892a0;
+    --accent: #2563eb; --accent-soft: #e8effe;
+    --data: #0d9268; --data-soft: #e3f5ee;
+    --ai: #7c3aed; --ai-soft: #f0e9fe;
+    --ext: #b45309; --ext-soft: #fbf0dd;
+    --fail: #c0341f; --fail-soft: #fce9e5;
+    --code-bg: #eef1f6; --code-text: #34405a;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.55;
+    font-size: 15px;
+  }
+  code, .mono { font-family: "SF Mono", SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace; }
+  code {
+    background: var(--code-bg);
+    color: var(--code-text);
+    padding: 0.1em 0.4em;
+    border-radius: 4px;
+    font-size: 0.88em;
+  }
+
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 32px 24px 80px; }
+
+  header.page-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 24px;
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 24px;
+    margin-bottom: 28px;
+  }
+  header.page-head h1 { font-size: 1.7rem; margin: 0 0 6px; letter-spacing: -0.01em; }
+  header.page-head p.sub { margin: 0; color: var(--text-dim); max-width: 62ch; }
+  .head-meta { color: var(--text-faint); font-size: 0.85rem; text-align: right; white-space: nowrap; }
+  .theme-btn {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    margin-top: 8px;
+  }
+  .theme-btn:hover { border-color: var(--accent); }
+
+  nav.toc {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 40px;
+  }
+  nav.toc a {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 0.83rem;
+  }
+  nav.toc a:hover { color: var(--accent); border-color: var(--accent); }
+
+  section { margin-bottom: 56px; scroll-margin-top: 16px; }
+  section > h2 {
+    font-size: 1.25rem;
+    margin: 0 0 4px;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  section > h2 .num { color: var(--text-faint); font-weight: 600; font-size: 0.9rem; }
+  section > p.desc { color: var(--text-dim); margin: 6px 0 20px; max-width: 92ch; }
+  h3.sub-h { font-size: 1.02rem; margin: 28px 0 10px; }
+
+  .diagram-frame {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 18px 10px;
+    box-shadow: var(--shadow);
+  }
+  .diagram-scroll { overflow-x: auto; }
+  .diagram-scroll svg { display: block; min-width: 900px; width: 100%; height: auto; }
+  .diagram-caption {
+    color: var(--text-faint);
+    font-size: 0.8rem;
+    padding: 10px 4px 4px;
+  }
+
+  /* ---- SVG node styling (shared across all diagrams) ---- */
+  svg .box { stroke-width: 1.6; }
+  svg .box.app { fill: var(--accent-soft); stroke: var(--accent); }
+  svg .box.data { fill: var(--data-soft); stroke: var(--data); }
+  svg .box.ai { fill: var(--ai-soft); stroke: var(--ai); }
+  svg .box.ext { fill: var(--ext-soft); stroke: var(--ext); }
+  svg .box.fail { fill: var(--fail-soft); stroke: var(--fail); }
+  svg .box.planned { fill: var(--surface-alt); stroke: var(--planned); stroke-dasharray: 5 4; }
+  svg .box.plain { fill: var(--surface-alt); stroke: var(--border); }
+  svg .boundary { fill: none; stroke: var(--text-faint); stroke-width: 1.4; stroke-dasharray: 6 5; }
+  svg text { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; fill: var(--text); }
+  svg .box-title { font-size: 14px; font-weight: 700; }
+  svg .box-title.small { font-size: 12.5px; }
+  svg .box-sub { font-size: 11.5px; fill: var(--text-dim); }
+  svg .box-sub.mono { font-family: "SF Mono", SFMono-Regular, Consolas, monospace; font-size: 11px; }
+  svg .lane-label { font-size: 12px; font-weight: 700; fill: var(--text-faint); text-transform: uppercase; letter-spacing: 0.04em; }
+  svg .edge { fill: none; stroke: var(--text-faint); stroke-width: 1.6; }
+  svg .edge.planned { stroke-dasharray: 5 4; stroke: var(--planned); }
+  svg .edge.fail { stroke: var(--fail); }
+  svg .edge-label {
+    font-size: 11px;
+    fill: var(--text-dim);
+    paint-order: stroke;
+    stroke: var(--surface);
+    stroke-width: 4px;
+    stroke-linejoin: round;
+  }
+  svg .edge-label.bg { fill: var(--surface); }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+    margin: 14px 4px 0;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+  }
+  .legend .item { display: flex; align-items: center; gap: 6px; }
+  .legend .swatch { width: 14px; height: 14px; border-radius: 4px; display: inline-block; border: 1.6px solid; }
+  .legend .swatch.app { background: var(--accent-soft); border-color: var(--accent); }
+  .legend .swatch.data { background: var(--data-soft); border-color: var(--data); }
+  .legend .swatch.ai { background: var(--ai-soft); border-color: var(--ai); }
+  .legend .swatch.ext { background: var(--ext-soft); border-color: var(--ext); }
+  .legend .swatch.fail { background: var(--fail-soft); border-color: var(--fail); }
+  .legend .swatch.planned { background: var(--surface-alt); border-color: var(--planned); border-style: dashed; }
+  .legend .line { width: 22px; height: 0; border-top: 1.8px solid var(--text-faint); display: inline-block; }
+  .legend .line.dashed { border-top-style: dashed; border-color: var(--planned); }
+
+  .callout {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 18px 0;
+    font-size: 0.92rem;
+    color: var(--text-dim);
+  }
+  .callout strong { color: var(--text); }
+  .callout.warn { border-left-color: var(--ext); }
+
+  table.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    font-size: 0.87rem;
+  }
+  table.data-table th, table.data-table td {
+    padding: 9px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  table.data-table th {
+    background: var(--surface-alt);
+    color: var(--text-dim);
+    font-weight: 600;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  table.data-table tr:last-child td { border-bottom: none; }
+  table.data-table tr:hover td { background: var(--surface-alt); }
+  .table-scroll { overflow-x: auto; border-radius: 10px; }
+  .table-scroll table.data-table { min-width: 720px; }
+
+  .badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 5px;
+    font-family: "SF Mono", SFMono-Regular, Consolas, monospace;
+    letter-spacing: 0.02em;
+  }
+  .badge.get { background: var(--data-soft); color: var(--data); }
+  .badge.post { background: var(--accent-soft); color: var(--accent); }
+  .badge.put { background: var(--ai-soft); color: var(--ai); }
+  .badge.delete { background: var(--fail-soft); color: var(--fail); }
+
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 16px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    box-shadow: var(--shadow);
+  }
+  .card h4 {
+    margin: 0 0 8px;
+    font-size: 0.95rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card h4 .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .card h4 .dot.data { background: var(--data); }
+  .card h4 .dot.app { background: var(--accent); }
+  .card ul { margin: 6px 0 0; padding-left: 18px; font-size: 0.85rem; color: var(--text-dim); }
+  .card ul li { margin-bottom: 3px; }
+  .card ul li b { color: var(--text); font-weight: 600; }
+  .card .fk { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); font-size: 0.8rem; color: var(--text-faint); }
+
+  .tree { font-size: 0.9rem; }
+  .tree ul { list-style: none; margin: 4px 0 4px 18px; padding-left: 14px; border-left: 1px dashed var(--border); }
+  .tree > ul { margin-left: 0; padding-left: 0; border-left: none; }
+  .tree li { margin: 5px 0; }
+  .tree .route { font-weight: 700; }
+  .tree .hint { color: var(--text-faint); font-size: 0.82rem; }
+
+  footer {
+    border-top: 1px solid var(--border);
+    margin-top: 40px;
+    padding-top: 20px;
+    color: var(--text-faint);
+    font-size: 0.82rem;
+  }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="page-head">
+    <div>
+      <h1>recruFlow: Detailed Infrastructure Diagrams</h1>
+      <p class="sub">
+        Visual reference for the local job-application automation stack: container topology, request
+        and data flow through ingestion/scoring, database schema, API surface, and the CI pipeline.
+        Companion to <a href="../ARCHITECTURE.md"><code>ARCHITECTURE.md</code></a> and
+        <a href="architecture/"><code>docs/architecture/*.md</code></a>; those files are the prose
+        source of truth; this page is the visual index.
+      </p>
+    </div>
+    <div class="head-meta">
+      <div>Generated for the recruFlow repository</div>
+      <button class="theme-btn" id="theme-toggle" type="button">Toggle light / dark</button>
+    </div>
+  </header>
+
+  <nav class="toc">
+    <a href="#context">1. System context</a>
+    <a href="#compose">2. Compose topology</a>
+    <a href="#ingestion">3. Ingestion pipeline</a>
+    <a href="#connectors">4. Connector registry</a>
+    <a href="#scoring">5. Scoring pipeline</a>
+    <a href="#dlq">6. Dead-letter &amp; retry</a>
+    <a href="#database">7. Database schema</a>
+    <a href="#api">8. API surface</a>
+    <a href="#frontend">9. Frontend map</a>
+    <a href="#cicd">10. CI / CD pipeline</a>
+    <a href="#config">11. Configuration</a>
+  </nav>
+
+  <!-- ============================================================ -->
+  <section id="context">
+    <h2><span class="num">1</span> System context</h2>
+    <p class="desc">
+      recruFlow runs entirely on one developer machine via Docker Compose. There is no cloud
+      deployment, no auth layer, and no multi-tenant concern; the diagram below is the whole
+      system: a browser talking to a local API, a local Postgres, a local Ollama LLM runtime, and
+      outbound calls to public job board sources. SMTP send (Phase 4) is drawn dashed because it is
+      designed for but not built yet.
+    </p>
+    <div class="diagram-frame">
+      <div class="diagram-scroll">
+        <svg viewBox="0 0 1260 480" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="System context diagram">
+          <defs>
+            <marker id="a1" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 Z" style="fill:var(--text-faint)"></path>
+            </marker>
+            <marker id="a1p" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 Z" style="fill:var(--planned)"></path>
+            </marker>
+          </defs>
+
+          <!-- boundary -->
+          <rect class="boundary" x="230" y="20" width="800" height="430" rx="14"></rect>
+          <text class="lane-label" x="248" y="14" style="font-size:11px">recruFlow: docker compose (one developer machine)</text>
+
+          <!-- edges (drawn first so boxes sit on top of stub ends) -->
+          <path class="edge" d="M190,235 L270,125" marker-end="url(#a1)"></path>
+          <path class="edge" d="M600,125 L640,125" marker-end="url(#a1)"></path>
+          <path class="edge" d="M700,180 L500,210" marker-end="url(#a1)"></path>
+          <path class="edge" d="M805,180 L805,210" marker-end="url(#a1)"></path>
+          <path class="edge" d="M970,125 L1060,150" marker-end="url(#a1)"></path>
+          <path class="edge planned" d="M970,160 L1005,160 L1005,410 L1060,410" marker-end="url(#a1p)"></path>
+
+          <text class="edge-label" x="200" y="175">HTTP :5173</text>
+          <text class="edge-label" x="610" y="115">fetch() JSON · CORS</text>
+          <text class="edge-label" x="540" y="188">asyncpg (async SQLAlchemy)</text>
+          <text class="edge-label" x="812" y="198">HTTP · LangChain</text>
+          <text class="edge-label" x="1015" y="112" text-anchor="middle" style="font-size:10px">scheduled +</text>
+          <text class="edge-label" x="1015" y="124" text-anchor="middle" style="font-size:10px">manual fetch</text>
+          <text class="edge-label" x="1008" y="290" transform="rotate(90 1008,290)">planned, not wired</text>
+
+          <!-- Browser actor -->
+          <rect class="box plain" x="20" y="190" width="170" height="90" rx="10"></rect>
+          <text class="box-title" x="34" y="216">Job Seeker</text>
+          <text class="box-sub" x="34" y="236">Browser (single user,</text>
+          <text class="box-sub" x="34" y="250">no auth layer)</text>
+          <text class="box-sub mono" x="34" y="268">localhost:5173</text>
+
+          <!-- Frontend -->
+          <rect class="box app" x="270" y="70" width="330" height="110" rx="10"></rect>
+          <text class="box-title" x="284" y="96">Frontend</text>
+          <text class="box-sub" x="284" y="116">React 19 + Vite + TS (strict)</text>
+          <text class="box-sub" x="284" y="132">+ Tailwind CSS · react-router-dom</text>
+          <text class="box-sub" x="284" y="148">Dockerfile.frontend target: dev</text>
+          <text class="box-sub mono" x="284" y="166">:5173 (nginx "production" target built, unused)</text>
+
+          <!-- API -->
+          <rect class="box app" x="640" y="70" width="330" height="110" rx="10"></rect>
+          <text class="box-title" x="654" y="96">API</text>
+          <text class="box-sub" x="654" y="116">FastAPI + Uvicorn --reload</text>
+          <text class="box-sub" x="654" y="132">APScheduler (in-process, UTC, lifespan-wired)</text>
+          <text class="box-sub" x="654" y="148">Dockerfile target: runtime</text>
+          <text class="box-sub mono" x="654" y="166">:8000</text>
+
+          <!-- Postgres -->
+          <rect class="box data" x="270" y="210" width="330" height="110" rx="10"></rect>
+          <text class="box-title" x="284" y="236">Postgres (db)</text>
+          <text class="box-sub" x="284" y="256">postgres:16-alpine</text>
+          <text class="box-sub mono" x="284" y="272">:5432 · volume pgdata (persists)</text>
+          <text class="box-sub" x="284" y="290">9 tables, Alembic-migrated</text>
+
+          <!-- Ollama -->
+          <rect class="box ai" x="640" y="210" width="330" height="110" rx="10"></rect>
+          <text class="box-title" x="654" y="236">Ollama</text>
+          <text class="box-sub" x="654" y="256">ollama/ollama:latest</text>
+          <text class="box-sub mono" x="654" y="272">:11434 · volume ollama_data</text>
+          <text class="box-sub" x="654" y="290">GPU reservation (nvidia) · llama3.1:8b</text>
+
+          <!-- db_test -->
+          <rect class="box data" x="270" y="350" width="330" height="90" rx="10"></rect>
+          <text class="box-title small" x="284" y="374">Postgres (db_test)</text>
+          <text class="box-sub" x="284" y="392">recruflow_test · ephemeral, no volume</text>
+          <text class="box-sub mono" x="284" y="408">host :5433 → :5432 · CI / make test-integration only</text>
+
+          <!-- planned send queue -->
+          <rect class="box planned" x="640" y="350" width="330" height="90" rx="10"></rect>
+          <text class="box-title small" x="654" y="374">Send Queue Worker</text>
+          <text class="box-sub" x="654" y="392">Phase 5, rate-limited, daily send cap</text>
+          <text class="box-sub" x="654" y="408">not implemented yet</text>
+
+          <!-- External job boards -->
+          <rect class="box ext" x="1060" y="60" width="180" height="290" rx="10"></rect>
+          <text class="box-title small" x="1074" y="84">Job Board Sources</text>
+          <text class="box-sub" x="1074" y="100">(9 live connectors)</text>
+          <text class="box-sub mono" x="1074" y="120">SOLID.Jobs</text>
+          <text class="box-sub mono" x="1074" y="138">JustJoin.it</text>
+          <text class="box-sub mono" x="1074" y="156">NoFluffJobs</text>
+          <text class="box-sub mono" x="1074" y="174">Bulldogjob</text>
+          <text class="box-sub mono" x="1074" y="192">Rocket Jobs</text>
+          <text class="box-sub mono" x="1074" y="210">Pracuj.pl (Playwright)</text>
+          <text class="box-sub mono" x="1074" y="228">RemoteOK</text>
+          <text class="box-sub mono" x="1074" y="246">Remotive</text>
+          <text class="box-sub mono" x="1074" y="264">We Work Remotely</text>
+          <text class="box-sub" x="1074" y="288" style="fill:var(--text-faint)">+ The Protocol (spike failed)</text>
+
+          <!-- SMTP -->
+          <rect class="box planned" x="1060" y="370" width="180" height="80" rx="10"></rect>
+          <text class="box-title small" x="1074" y="394">SMTP Relay</text>
+          <text class="box-sub" x="1074" y="412">Application send, Phase 4</text>
+          <text class="box-sub" x="1074" y="428">not built yet</text>
+        </svg>
+      </div>
+      <div class="legend">
+        <span class="item"><span class="swatch app"></span> recruFlow app process</span>
+        <span class="item"><span class="swatch data"></span> data store</span>
+        <span class="item"><span class="swatch ai"></span> local LLM runtime</span>
+        <span class="item"><span class="swatch ext"></span> external system</span>
+        <span class="item"><span class="swatch planned"></span> planned, not built</span>
+        <span class="item"><span class="line"></span> active call</span>
+        <span class="item"><span class="line dashed"></span> planned call</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="compose">
+    <h2><span class="num">2</span> Docker Compose topology &amp; startup gating</h2>
+    <p class="desc">
+      <code>docker-compose.yml</code> defines five services. Only one real startup dependency
+      exists: <code>api</code> waits for <code>db</code>'s healthcheck before it starts
+      (<code>condition: service_healthy</code>); <code>frontend</code>, <code>db_test</code>, and
+      <code>ollama</code> all start independently, with no <code>depends_on</code> edges at all.
+      <code>make up</code> brings up all five together with hot reload for <code>api</code> and
+      <code>frontend</code>.
+    </p>
+    <div class="diagram-frame">
+      <div class="diagram-scroll">
+        <svg viewBox="0 0 1180 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Docker Compose topology diagram">
+          <defs>
+            <marker id="a2" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 Z" style="fill:var(--text-faint)"></path>
+            </marker>
+          </defs>
+
+          <path class="edge" d="M430,130 L430,190" marker-end="url(#a2)"></path>
+          <text class="edge-label" x="440" y="165">depends_on: service_healthy</text>
+
+          <!-- Row 1: independent services -->
+          <rect class="box app" x="20" y="30" width="260" height="100" rx="10"></rect>
+          <text class="box-title small" x="34" y="52">frontend</text>
+          <text class="box-sub" x="34" y="70">Dockerfile.frontend target: dev</text>
+          <text class="box-sub mono" x="34" y="86">:5173</text>
+          <text class="box-sub" x="34" y="102">healthcheck: wget --spider /</text>
+          <text class="box-sub" x="34" y="118" style="fill:var(--text-faint)">no depends_on</text>
+
+          <rect class="box data" x="300" y="30" width="260" height="100" rx="10"></rect>
+          <text class="box-title small" x="314" y="52">db</text>
+          <text class="box-sub" x="314" y="70">postgres:16-alpine</text>
+          <text class="box-sub mono" x="314" y="86">:5432 · volume pgdata</text>
+          <text class="box-sub" x="314" y="102">healthcheck: pg_isready</text>
+          <text class="box-sub" x="314" y="118" style="fill:var(--text-faint)">5s interval / 5 retries</text>
+
+          <rect class="box data" x="580" y="30" width="260" height="100" rx="10"></rect>
+          <text class="box-title small" x="594" y="52">db_test</text>
+          <text class="box-sub" x="594" y="70">postgres:16-alpine (recruflow_test)</text>
+          <text class="box-sub mono" x="594" y="86">host :5433 → :5432 · no volume</text>
+          <text class="box-sub" x="594" y="102">healthcheck: pg_isready</text>
+          <text class="box-sub" x="594" y="118" style="fill:var(--text-faint)">ephemeral, BUG28 test isolation</text>
+
+          <rect class="box ai" x="860" y="30" width="260" height="100" rx="10"></rect>
+          <text class="box-title small" x="874" y="52">ollama</text>
+          <text class="box-sub" x="874" y="70">ollama/ollama:latest</text>
+          <text class="box-sub mono" x="874" y="86">:11434 · volume ollama_data</text>
+          <text class="box-sub" x="874" y="102">healthcheck: ollama list</text>
+          <text class="box-sub" x="874" y="118" style="fill:var(--text-faint)">GPU reservation (nvidia, count 1)</text>
+
+          <!-- Row 2: api, gated on db -->
+          <rect class="box app" x="300" y="190" width="260" height="130" rx="10"></rect>
+          <text class="box-title small" x="314" y="212">api</text>
+          <text class="box-sub" x="314" y="230">Dockerfile target: runtime</text>
+          <text class="box-sub mono" x="314" y="246">:8000</text>
+          <text class="box-sub" x="314" y="262">healthcheck: curl -f /health</text>
+          <text class="box-sub" x="314" y="278">10s interval, start_period 10s, 5 retries</text>
+          <text class="box-sub" x="314" y="294">bind: ./app, ./alembic (hot reload)</text>
+          <text class="box-sub" x="314" y="310" style="fill:var(--text-faint)">env_file: .env</text>
+
+          <!-- annotation: frontend anon volume -->
+          <text class="box-sub" x="34" y="336" style="fill:var(--text-faint)">bind: ./frontend + anon volume /app/node_modules (protects installed deps from host mount)</text>
+        </svg>
+      </div>
+      <div class="legend">
+        <span class="item"><span class="swatch app"></span> app container</span>
+        <span class="item"><span class="swatch data"></span> Postgres container</span>
+        <span class="item"><span class="swatch ai"></span> Ollama container</span>
+        <span class="item"><span class="line"></span> depends_on / startup gate</span>
+      </div>
+    </div>
+    <div class="callout">
+      <strong>Note:</strong> <code>api</code> does <em>not</em> wait on <code>ollama</code> at the
+      container-orchestration level; there is no Compose <code>depends_on</code> between them. If
+      Ollama is slow to warm up, the API still starts; the first CV-extraction or matcher call
+      simply waits on Ollama's own readiness at request time.
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="ingestion">
+    <h2><span class="num">3</span> Ingestion pipeline flow</h2>
+    <p class="desc">
+      Three independent triggers converge on one dispatch seam
+      (<code>CONNECTOR_REGISTRY</code>), so adding a connector never touches the scheduler, the
+      matcher, or the frontend. Every run ends at exactly one of two places: a persisted
+      <code>offers</code> row, or a dead-letter row in <code>ingestion_failures</code>.
+    </p>
+    <div class="diagram-frame">
+      <div class="diagram-scroll">
+        <svg viewBox="0 0 1180 780" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Ingestion pipeline flow diagram">
+          <defs>
+            <marker id="a3" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 Z" style="fill:var(--text-faint)"></path>
+            </marker>
+            <marker id="a3f" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 Z" style="fill:var(--fail)"></path>
+            </marker>
+          </defs>
+
+          <!-- edges -->
+          <path class="edge" d="M190,110 L560,150" marker-end="url(#a3)"></path>
+          <path class="edge" d="M570,110 L585,150" marker-end="url(#a3)"></path>
+          <path class="edge" d="M950,110 L610,150" marker-end="url(#a3)"></path>
+          <path class="edge" d="M590,220 L590,260" marker-end="url(#a3)"></path>
+          <path class="edge" d="M590,350 L590,390" marker-end="url(#a3)"></path>
+          <path class="edge" d="M590,460 L590,500" marker-end="url(#a3)"></path>
+          <path class="edge fail" d="M480,590 L280,630" marker-end="url(#a3f)"></path>
+          <path class="edge fail" d="M700,460 L210,620" marker-end="url(#a3f)"></path>
+          <path class="edge" d="M660,590 L660,630" marker-end="url(#a3)"></path>
+
+          <text class="edge-label" x="672" y="614">valid</text>
+          <text class="edge-label" x="330" y="605" style="fill:var(--fail)">invalid</text>
+          <text class="edge-label" x="608" y="478" style="fill:var(--fail)">fetch failure</text>
+
+          <!-- triggers -->
+          <rect class="box app" x="20" y="20" width="340" height="90" rx="10"></rect>
+          <text class="box-title small" x="34" y="44">AsyncIOScheduler job</text>
+          <text class="box-sub" x="34" y="62">one job per connector-tagged Source</text>
+          <text class="box-sub mono" x="34" y="78">interval | cron · config_json.schedule</text>
+          <text class="box-sub" x="34" y="94" style="fill:var(--text-faint)">automatic · runs in worker thread (ADR 0005)</text>
+
+          <rect class="box app" x="400" y="20" width="340" height="90" rx="10"></rect>
+          <text class="box-title small" x="414" y="44">POST /scheduler/run/{source}</text>
+          <text class="box-sub" x="414" y="62">manual trigger, audited</text>
+          <text class="box-sub" x="414" y="78">writes a scheduler_runs row</text>
+          <text class="box-sub" x="414" y="94" style="fill:var(--text-faint)">200 even on internal ok:false</text>
+
+          <rect class="box app" x="780" y="20" width="340" height="90" rx="10"></rect>
+          <text class="box-title small" x="794" y="44">POST /ingest/{source}</text>
+          <text class="box-sub" x="794" y="62">manual, job-seeker facing (Fetch now)</text>
+          <text class="box-sub" x="794" y="78">NOT scheduler-audited, ADR 0006</text>
+          <text class="box-sub" x="794" y="94" style="fill:var(--text-faint)">force_refresh query param, default false</text>
+
+          <!-- dispatch -->
+          <rect class="box plain" x="390" y="150" width="400" height="70" rx="10"></rect>
+          <text class="box-title small" x="404" y="174">CONNECTOR_REGISTRY dispatch</text>
+          <text class="box-sub" x="404" y="192">resolve_source_by_connector() → dispatch_ingestion()</text>
+          <text class="box-sub mono" x="404" y="208">app/ingestion/registry.py</text>
+
+          <!-- connector -->
+          <rect class="box app" x="390" y="260" width="400" height="90" rx="10"></rect>
+          <text class="box-title small" x="404" y="284">Connector.run_*_ingestion(session, source, force_refresh)</text>
+          <text class="box-sub" x="404" y="302">JobBoardConnector subclass, 9 registered</text>
+          <text class="box-sub" x="404" y="318">each owns its own transport (HTTP / sitemap / Playwright / RSS)</text>
+          <text class="box-sub" x="404" y="334" style="fill:var(--text-faint)">force_refresh bypasses incremental early-stop (ADR 0009, 0010)</text>
+
+          <!-- external -->
+          <rect class="box ext" x="390" y="390" width="400" height="70" rx="10"></rect>
+          <text class="box-title small" x="404" y="414">External Job Board</text>
+          <text class="box-sub" x="404" y="432">HTTP API · sitemap+JSON-LD · Playwright (Cloudflare) · RSS</text>
+          <text class="box-sub mono" x="404" y="448">explicit per-request timeout on every call</text>
+
+          <!-- validate -->
+          <rect class="box plain" x="390" y="500" width="400" height="90" rx="10"></rect>
+          <text class="box-title small" x="404" y="524">normalize_and_validate(raw)</text>
+          <text class="box-sub" x="404" y="542">Offer schema + cross-connector vocab tables</text>
+          <text class="box-sub" x="404" y="558">seniority / remote-flag / salary normalisation</text>
+          <text class="box-sub mono" x="404" y="574">app/ingestion/normalize.py, persist.py</text>
+
+          <!-- dead-letter -->
+          <rect class="box fail" x="60" y="630" width="320" height="90" rx="10"></rect>
+          <text class="box-title small" x="74" y="654">ingestion_failures (dead-letter)</text>
+          <text class="box-sub" x="74" y="672">validation_failed · page_fetch_failed</text>
+          <text class="box-sub" x="74" y="688">run_fetch_failed</text>
+          <text class="box-sub mono" x="74" y="704">record_failure(), upsert on dedup_key</text>
+
+          <!-- offers -->
+          <rect class="box data" x="460" y="630" width="420" height="110" rx="10"></rect>
+          <text class="box-title small" x="474" y="654">offers table</text>
+          <text class="box-sub" x="474" y="672">persist_offer(): compute dedup_hash → INSERT ... ON CONFLICT</text>
+          <text class="box-sub" x="474" y="688">(dedup_hash) DO NOTHING, re-SELECT for the existing id</text>
+          <text class="box-sub" x="474" y="704">returns IngestionResult(ok, fetched, created)</text>
+          <text class="box-sub" x="474" y="720" style="fill:var(--text-faint)">→ Source.last_fetched_at (+ scheduler_runs for automatic / manual-run)</text>
+        </svg>
+      </div>
+      <div class="legend">
+        <span class="item"><span class="swatch app"></span> app / trigger</span>
+        <span class="item"><span class="swatch plain"></span> pure dispatch / logic</span>
+        <span class="item"><span class="swatch ext"></span> external call</span>
+        <span class="item"><span class="swatch data"></span> persisted table</span>
+        <span class="item"><span class="swatch fail"></span> dead-letter table</span>
+      </div>
+    </div>
+    <div class="callout">
+      <strong>Three orthogonal per-connector knobs</strong>, all stored inside <code>Source.config_json</code>
+      (no schema migration per knob):
+      <ul style="margin:8px 0 0 18px; color:var(--text-dim)">
+        <li><b>Fetch Range</b>: the <code>posted_at</code> date window a run accepts (<code>mode: "all" | "range"</code>, <code>since</code>/<code>until</code>).</li>
+        <li><b>Auto-Fetch</b>: whether the connector's scheduled job runs at all (per-source on/off toggle).</li>
+        <li><b>Fetch Scope</b>: all offers vs. filtered-by-hard-skills at fetch time; only SOLID.Jobs, Bulldogjob, and Pracuj.pl support it.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="connectors">
+    <h2><span class="num">4</span> Connector registry</h2>
+    <p class="desc">
+      Every row below is one <code>ConnectorSpec</code> entry in <code>CONNECTOR_REGISTRY</code>
+      (<code>app/ingestion/registry.py</code>). None of them requires a scheduler, matcher, or
+      frontend change to add: only a new module + registry entry.
+    </p>
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead>
+          <tr><th>Connector key</th><th>Transport</th><th>Fetch Scope</th><th>Notable detail</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>solid_jobs</code></td><td>Direct HTTP API</td><td>✓ supported</td><td>Direct-HTTP rewrite replaced the old <code>sjctl</code> subprocess (ADR 0012); campaign param managed by recruFlow itself.</td></tr>
+          <tr><td><code>justjoinit</code></td><td>Direct HTTP API</td><td></td><td>Incremental pagination with a consecutive-already-seen early stop (ADR 0009); <code>force_refresh</code> bypasses it.</td></tr>
+          <tr><td><code>nofluffjobs</code></td><td>Direct HTTP API</td><td></td><td>Queried with <code>salaryPeriod=month</code>; no pagination loop, so <code>force_refresh</code> is a documented no-op.</td></tr>
+          <tr><td><code>bulldogjob</code></td><td>Sitemap + embedded <code>NEXT_DATA</code> (no public API)</td><td>✓ supported</td><td>Filtered listing caps at 50 offers/term (ADR 0027); sitemap cursor persisted (BUG41).</td></tr>
+          <tr><td><code>rocket_jobs</code></td><td>Sitemap + JSON-LD</td><td></td><td>Sitemap cursor persisted, <code>sorted_by_recency=False</code> (BUG41, previously stuck re-fetching page 1).</td></tr>
+          <tr><td><code>pracuj</code></td><td>Playwright (Cloudflare-gated)</td><td>✓ supported</td><td>Listing-page enumeration (stale sitemap); fresh browser context per fetch; Cloudflare allows exactly one clean nav per context (BUG43).</td></tr>
+          <tr><td><code>remoteok</code></td><td>Direct API, no pagination</td><td></td><td>Simplest connector in the registry.</td></tr>
+          <tr><td><code>remotive</code></td><td>Direct API, per-category fetch</td><td></td><td>Per-category results merged like Bulldogjob's filtered terms.</td></tr>
+          <tr><td><code>we_work_remotely</code></td><td>RSS only</td><td></td><td>No JSON endpoint at all, which forced the plain <code>Connector</code> Protocol shape; company parsed from title, not description.</td></tr>
+          <tr><td><code>the_protocol</code></td><td>(spike failed)</td><td></td><td>Cloudflare Managed Challenge persists after the first Playwright request even with a fresh context; never implemented (ADR 0024).</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="scoring">
+    <h2><span class="num">5</span> Scoring pipeline flow</h2>
+    <p class="desc">
+      A single backlog-draining job is the only automatic scorer; ingestion itself never triggers
+      scoring (that coupling caused a measured ~43% duplicate-score rate and was removed). A
+      module-level lock closes the remaining race between the backlog job and a manual
+      <code>POST /score/batch</code> call.
+    </p>
+    <div class="diagram-frame">
+      <div class="diagram-scroll">
+        <svg viewBox="0 0 1180 700" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Scoring pipeline flow diagram">
+          <defs>
+            <marker id="a4" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 Z" style="fill:var(--text-faint)"></path>
+            </marker>
+            <marker id="a4f" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 Z" style="fill:var(--fail)"></path>
+            </marker>
+          </defs>
+
+          <path class="edge" d="M330,100 L560,130" marker-end="url(#a4)"></path>
+          <path class="edge" d="M830,100 L620,130" marker-end="url(#a4)"></path>
+          <path class="edge" d="M590,200 L590,230" marker-end="url(#a4)"></path>
+          <path class="edge" d="M590,290 L590,320" marker-end="url(#a4)"></path>
+          <path class="edge" d="M590,410 L590,440" marker-end="url(#a4)"></path>
+          <path class="edge" d="M790,490 L860,490" marker-end="url(#a4)"></path>
+          <path class="edge" d="M390,490 L340,490" marker-end="url(#a4)"></path>
+          <path class="edge" d="M590,540 L590,580" marker-end="url(#a4)"></path>
+          <path class="edge" d="M790,625 L860,625" marker-end="url(#a4)"></path>
+          <path class="edge fail" d="M450,540 L200,580" marker-end="url(#a4f)"></path>
+
+          <text class="edge-label" x="825" y="428" text-anchor="middle" style="font-size:10.5px">structured-output call</text>
+          <text class="edge-label" x="365" y="428" text-anchor="middle" style="font-size:10.5px">apply caps</text>
+          <text class="edge-label" x="605" y="565">MatchScore insert</text>
+          <text class="edge-label" x="798" y="618" style="font-size:10.5px">SSE event</text>
+          <text class="edge-label" x="245" y="556" style="fill:var(--fail)">MatcherError</text>
+
+          <!-- triggers -->
+          <rect class="box app" x="140" y="20" width="380" height="80" rx="10"></rect>
+          <text class="box-title small" x="154" y="44">scoring:backlog job</text>
+          <text class="box-sub" x="154" y="62">APScheduler interval</text>
+          <text class="box-sub mono" x="154" y="78">Settings.scoring_job_interval_seconds (60s default)</text>
+          <text class="box-sub" x="154" y="94" style="fill:var(--text-faint)">fully independent of any source's ingestion schedule</text>
+
+          <rect class="box app" x="640" y="20" width="380" height="80" rx="10"></rect>
+          <text class="box-title small" x="654" y="44">POST /score/batch</text>
+          <text class="box-sub" x="654" y="62">manual trigger, same entrypoint</text>
+          <text class="box-sub" x="654" y="78">always 200; run_batch_scoring never raises</text>
+
+          <!-- run_batch_scoring -->
+          <rect class="box plain" x="390" y="130" width="400" height="70" rx="10"></rect>
+          <text class="box-title small" x="404" y="154">run_batch_scoring(session)</text>
+          <text class="box-sub mono" x="404" y="172">app/scoring/batch.py</text>
+          <text class="box-sub" x="404" y="188">returns BatchScoringSummary(scored, skipped, failed, remaining)</text>
+
+          <!-- lock -->
+          <rect class="box plain" x="390" y="230" width="400" height="60" rx="10"></rect>
+          <text class="box-title small" x="404" y="252">_scoring_lock (asyncio.Lock)</text>
+          <text class="box-sub" x="404" y="270">serializes overlapping callers, closing the duplicate-score race</text>
+
+          <!-- fetch unscored -->
+          <rect class="box plain" x="390" y="320" width="400" height="90" rx="10"></rect>
+          <text class="box-title small" x="404" y="344">_fetch_unscored_offers()</text>
+          <text class="box-sub" x="404" y="362">active Profile · fetch-range aware</text>
+          <text class="box-sub mono" x="404" y="378">limit = BATCH_SCORING_LIMIT (20) · order_by id</text>
+          <text class="box-sub" x="404" y="394" style="fill:var(--text-faint)">re-scores automatically on profile switch or in-place edit</text>
+
+          <!-- score loop -->
+          <rect class="box app" x="390" y="440" width="400" height="100" rx="10"></rect>
+          <text class="box-title small" x="404" y="464">score_offers_with_langchain()</text>
+          <text class="box-sub mono" x="404" y="482">app/llm/matcher.py</text>
+          <text class="box-sub" x="404" y="498">per-offer loop, on_progress() callback</text>
+          <text class="box-sub" x="404" y="514" style="fill:var(--text-faint)">source-agnostic, same path for all 9 connectors</text>
+
+          <!-- caps -->
+          <rect class="box plain" x="60" y="440" width="280" height="100" rx="10"></rect>
+          <text class="box-title small" x="74" y="464">Deterministic caps</text>
+          <text class="box-sub" x="74" y="482">deal-breaker cap ≤ 40 (code, not LLM)</text>
+          <text class="box-sub" x="74" y="498">hard-skill-miss cap ≤ 25</text>
+          <text class="box-sub" x="74" y="514">missing-salary clamp ≤ 0.5</text>
+
+          <!-- ollama -->
+          <rect class="box ai" x="860" y="440" width="260" height="100" rx="10"></rect>
+          <text class="box-title small" x="874" y="464">Ollama</text>
+          <text class="box-sub" x="874" y="482">ChatOllama · llama3.1:8b</text>
+          <text class="box-sub" x="874" y="498">_MatcherOutput: 6 dims + rationale</text>
+          <text class="box-sub" x="874" y="514" style="fill:var(--text-faint)">score_percent = round(weighted_total × 100)</text>
+
+          <!-- fail box -->
+          <rect class="box fail" x="60" y="580" width="280" height="90" rx="10"></rect>
+          <text class="box-title small" x="74" y="604">scoring_failures</text>
+          <text class="box-sub" x="74" y="622">failure_type = scoring_failed</text>
+          <text class="box-sub" x="74" y="638">logged WARNING, skipped; batch continues</text>
+
+          <!-- match_scores -->
+          <rect class="box data" x="390" y="580" width="400" height="90" rx="10"></rect>
+          <text class="box-title small" x="404" y="604">match_scores table</text>
+          <text class="box-sub" x="404" y="622">score_percent 0–100 + dimensions JSONB</text>
+          <text class="box-sub" x="404" y="638">insert-never-overwrite; full re-score history kept</text>
+
+          <!-- sse -->
+          <rect class="box app" x="860" y="580" width="260" height="90" rx="10"></rect>
+          <text class="box-title small" x="874" y="604">GET /scoring/events</text>
+          <text class="box-sub" x="874" y="622">SSE, one queue per subscriber</text>
+          <text class="box-sub" x="874" y="638">useScoreAlerts → threshold from localStorage</text>
+        </svg>
+      </div>
+      <div class="legend">
+        <span class="item"><span class="swatch app"></span> app / trigger / API</span>
+        <span class="item"><span class="swatch plain"></span> pure logic</span>
+        <span class="item"><span class="swatch ai"></span> local LLM call</span>
+        <span class="item"><span class="swatch data"></span> persisted table</span>
+        <span class="item"><span class="swatch fail"></span> dead-letter table</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="dlq">
+    <h2><span class="num">6</span> Dead-letter queue &amp; retry flow</h2>
+    <p class="desc">
+      Every handled, anticipated failure across ingestion and scoring lands in one of two
+      dead-letter tables through a single write primitive, and is retried through one generic
+      registry-driven read/retry API rather than four bespoke ones.
+    </p>
+    <div class="diagram-frame">
+      <div class="diagram-scroll">
+        <svg viewBox="0 0 1180 540" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Dead letter queue and retry flow diagram">
+          <defs>
+            <marker id="a5" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 Z" style="fill:var(--text-faint)"></path>
+            </marker>
+          </defs>
+
+          <path class="edge" d="M360,70 L460,215" marker-end="url(#a5)"></path>
+          <path class="edge" d="M360,170 L460,220" marker-end="url(#a5)"></path>
+          <path class="edge" d="M360,270 L460,235" marker-end="url(#a5)"></path>
+          <path class="edge" d="M360,370 L460,250" marker-end="url(#a5)"></path>
+          <path class="edge" d="M740,200 L840,180" marker-end="url(#a5)"></path>
+          <path class="edge" d="M740,250 L840,300" marker-end="url(#a5)"></path>
+          <path class="edge" d="M900,220 L600,340" marker-end="url(#a5)"></path>
+          <path class="edge" d="M990,340 L600,340" marker-end="url(#a5)"></path>
+          <path class="edge" d="M600,410 L600,430" marker-end="url(#a5)"></path>
+          <path class="edge" d="M740,465 L800,465" marker-end="url(#a5)"></path>
+          <path class="edge planned" d="M1010,465 L1010,300 L1020,300" marker-end="url(#a5)"></path>
+
+          <text class="edge-label" x="750" y="440">Retry button</text>
+          <text class="edge-label" x="1015" y="390" transform="rotate(-90 1015,390)">updates row in place</text>
+
+          <!-- write sites -->
+          <rect class="box plain" x="20" y="30" width="340" height="80" rx="10"></rect>
+          <text class="box-title small" x="34" y="54">normalize_and_validate()</text>
+          <text class="box-sub" x="34" y="72">validation_failed</text>
+          <text class="box-sub" x="34" y="88" style="fill:var(--text-faint)">malformed scraped record</text>
+
+          <rect class="box plain" x="20" y="130" width="340" height="80" rx="10"></rect>
+          <text class="box-title small" x="34" y="154">run_paginated_ingestion()</text>
+          <text class="box-sub" x="34" y="172">page_fetch_failed</text>
+          <text class="box-sub" x="34" y="188" style="fill:var(--text-faint)">a page after the first fails mid-run</text>
+
+          <rect class="box plain" x="20" y="230" width="340" height="80" rx="10"></rect>
+          <text class="box-title small" x="34" y="254">on_success hook (run ok = False)</text>
+          <text class="box-sub" x="34" y="272">run_fetch_failed</text>
+          <text class="box-sub" x="34" y="288" style="fill:var(--text-faint)">whole run's first-page fetch fails</text>
+
+          <rect class="box plain" x="20" y="330" width="340" height="80" rx="10"></rect>
+          <text class="box-title small" x="34" y="354">score_offers_with_langchain()</text>
+          <text class="box-sub" x="34" y="372">scoring_failed</text>
+          <text class="box-sub" x="34" y="388" style="fill:var(--text-faint)">MatcherError raised for one offer</text>
+
+          <!-- record_failure -->
+          <rect class="box plain" x="460" y="180" width="280" height="100" rx="10"></rect>
+          <text class="box-title small" x="474" y="204">record_failure()</text>
+          <text class="box-sub mono" x="474" y="222">app/dlq/service.py</text>
+          <text class="box-sub" x="474" y="238">Postgres upsert on dedup_key</text>
+          <text class="box-sub" x="474" y="254">one row per resource, re-opens on repeat</text>
+          <text class="box-sub" x="474" y="270" style="fill:var(--text-faint)">(ADR 0016) never raises itself</text>
+
+          <!-- tables -->
+          <rect class="box fail" x="840" y="140" width="300" height="80" rx="10"></rect>
+          <text class="box-title small" x="854" y="164">ingestion_failures</text>
+          <text class="box-sub" x="854" y="182">source_id, scheduler_run_id (nullable), page</text>
+
+          <rect class="box fail" x="840" y="260" width="300" height="80" rx="10"></rect>
+          <text class="box-title small" x="854" y="284">scoring_failures</text>
+          <text class="box-sub" x="854" y="302">offer_id, profile_id</text>
+
+          <!-- read -->
+          <rect class="box plain" x="460" y="340" width="280" height="70" rx="10"></rect>
+          <text class="box-title small" x="474" y="364">GET /failures/{process}</text>
+          <text class="box-sub" x="474" y="382">registry-driven filters, limit/offset</text>
+
+          <!-- frontend -->
+          <rect class="box app" x="460" y="430" width="280" height="70" rx="10"></rect>
+          <text class="box-title small" x="474" y="454">FailuresPage / FailuresTable</text>
+          <text class="box-sub" x="474" y="472">status badge + retry button + detail drawer</text>
+
+          <!-- retry -->
+          <rect class="box app" x="800" y="430" width="340" height="70" rx="10"></rect>
+          <text class="box-title small" x="814" y="454">POST /failures/{process}/{id}/retry</text>
+          <text class="box-sub" x="814" y="472">RETRY_HANDLERS[failure_type] → perform_retry()</text>
+        </svg>
+      </div>
+      <div class="legend">
+        <span class="item"><span class="swatch plain"></span> write site / pure logic</span>
+        <span class="item"><span class="swatch fail"></span> dead-letter table</span>
+        <span class="item"><span class="swatch app"></span> API / frontend</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="database">
+    <h2><span class="num">7</span> Database schema</h2>
+    <p class="desc">
+      Nine tables total: six v1 domain tables, <code>scheduler_runs</code> (the ingestion audit
+      trail), and two dead-letter tables. No ORM <code>relationship()</code> is used anywhere;
+      every join in application code is an explicit <code>select(...).join(...)</code>. The
+      diagram below draws only the primary column-aligned edges for clarity; every foreign key is
+      still listed in full in each table's card underneath.
+    </p>
+    <div class="diagram-frame">
+      <div class="diagram-scroll">
+        <svg viewBox="0 0 1180 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Database entity relationship overview">
+          <defs>
+            <marker id="a6" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 Z" style="fill:var(--text-faint)"></path>
+            </marker>
+          </defs>
+
+          <path class="edge" d="M320,70 L450,70" marker-end="url(#a6)"></path>
+          <path class="edge" d="M180,110 L180,160" marker-end="url(#a6)"></path>
+          <path class="edge" d="M180,250 L180,290" marker-end="url(#a6)"></path>
+          <path class="edge" d="M590,110 L590,160" marker-end="url(#a6)"></path>
+          <path class="edge" d="M590,250 L590,290" marker-end="url(#a6)"></path>
+          <path class="edge" d="M1000,110 L1000,160" marker-end="url(#a6)"></path>
+          <path class="edge" d="M1000,250 L1000,290" marker-end="url(#a6)"></path>
+
+          <!-- row 1 hubs -->
+          <rect class="box data" x="40" y="30" width="280" height="80" rx="10"></rect>
+          <text class="box-title small" x="54" y="56">sources</text>
+          <text class="box-sub" x="54" y="74">one row per registered connector</text>
+          <text class="box-sub mono" x="54" y="90">PK id · unique name · connector</text>
+
+          <rect class="box data" x="450" y="30" width="280" height="80" rx="10"></rect>
+          <text class="box-title small" x="464" y="56">offers</text>
+          <text class="box-sub" x="464" y="74">normalised job posting</text>
+          <text class="box-sub mono" x="464" y="90">PK id · unique dedup_hash</text>
+
+          <rect class="box data" x="860" y="30" width="280" height="80" rx="10"></rect>
+          <text class="box-title small" x="874" y="56">profiles</text>
+          <text class="box-sub" x="874" y="74">candidate's structured facts</text>
+          <text class="box-sub mono" x="874" y="90">PK id · unique name · is_active</text>
+
+          <!-- row 2 -->
+          <rect class="box plain" x="40" y="160" width="280" height="90" rx="10"></rect>
+          <text class="box-title small" x="54" y="184">scheduler_runs</text>
+          <text class="box-sub" x="54" y="202">audit trail, one row per run</text>
+          <text class="box-sub mono" x="54" y="218">FK source_id → sources.id</text>
+          <text class="box-sub mono" x="54" y="234">idx (source_id, started_at)</text>
+
+          <rect class="box plain" x="450" y="160" width="280" height="90" rx="10"></rect>
+          <text class="box-title small" x="464" y="184">cv_versions</text>
+          <text class="box-sub" x="464" y="202">tailored CV + cover letter draft</text>
+          <text class="box-sub mono" x="464" y="218">FK offer_id → offers.id</text>
+          <text class="box-sub mono" x="464" y="234">FK profile_id → profiles.id</text>
+
+          <rect class="box plain" x="860" y="160" width="280" height="90" rx="10"></rect>
+          <text class="box-title small" x="874" y="184">match_scores</text>
+          <text class="box-sub" x="874" y="202">score_percent 0–100 + dimensions</text>
+          <text class="box-sub mono" x="874" y="218">FK offer_id → offers.id</text>
+          <text class="box-sub mono" x="874" y="234">FK profile_id → profiles.id</text>
+
+          <!-- row 3 -->
+          <rect class="box fail" x="40" y="290" width="280" height="90" rx="10"></rect>
+          <text class="box-title small" x="54" y="314">ingestion_failures</text>
+          <text class="box-sub" x="54" y="332">dead-letter, ingestion side</text>
+          <text class="box-sub mono" x="54" y="348">FK source_id, scheduler_run_id (null)</text>
+
+          <rect class="box plain" x="450" y="290" width="280" height="90" rx="10"></rect>
+          <text class="box-title small" x="464" y="314">applications</text>
+          <text class="box-sub" x="464" y="332">intent/action to apply</text>
+          <text class="box-sub mono" x="464" y="348">FK offer_id, profile_id, cv_version_id (null)</text>
+
+          <rect class="box fail" x="860" y="290" width="280" height="90" rx="10"></rect>
+          <text class="box-title small" x="874" y="314">scoring_failures</text>
+          <text class="box-sub" x="874" y="332">dead-letter, scoring side</text>
+          <text class="box-sub mono" x="874" y="348">FK offer_id → offers.id</text>
+        </svg>
+      </div>
+      <div class="legend">
+        <span class="item"><span class="swatch data"></span> hub table</span>
+        <span class="item"><span class="swatch plain"></span> domain table</span>
+        <span class="item"><span class="swatch fail"></span> dead-letter table</span>
+        <span class="item"><span class="line"></span> drawn FK (column-aligned)</span>
+      </div>
+    </div>
+
+    <h3 class="sub-h">Full column reference</h3>
+    <div class="card-grid">
+      <div class="card">
+        <h4><span class="dot data"></span>sources</h4>
+        <ul>
+          <li><b>id</b> PK, autoincrement</li>
+          <li><b>name</b> string(100), unique, not null; display-only, never used for dispatch</li>
+          <li><b>connector</b> string(50), nullable; scheduler dispatch key</li>
+          <li><b>config_json</b> JSONB: schedule, fetch_range, auto_fetch_enabled, fetch_scope</li>
+          <li><b>last_fetched_at</b> timestamptz, nullable</li>
+          <li>created_at / updated_at</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="dot data"></span>offers</h4>
+        <ul>
+          <li><b>id</b> PK</li>
+          <li><b>dedup_hash</b> string(64), unique + indexed</li>
+          <li>source_id, external_id, canonical_url (nullable), title, company, location, remote, seniority</li>
+          <li>salary_min / salary_max / salary_currency, contract_type, description, posted_at, industry_tags (JSONB)</li>
+          <li><b>applied / hide / notes / link_opened_at</b>: user-owned, set only via PATCH</li>
+          <li>raw_payload JSONB; ELT raw response, always populated</li>
+        </ul>
+        <div class="fk">FK → sources.id</div>
+      </div>
+      <div class="card">
+        <h4><span class="dot data"></span>profiles</h4>
+        <ul>
+          <li><b>id</b> PK</li>
+          <li><b>name</b> unique; internal bookkeeping key, not domain content</li>
+          <li>status (draft / active-ish string), <b>is_active</b> boolean</li>
+          <li>data JSONB: skills, roles, education, preferences, deal_breakers, Skill.hard flags</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="dot app"></span>cv_versions</h4>
+        <ul>
+          <li>id PK</li>
+          <li>cv_markdown, cover_letter_markdown (nullable), tone (nullable)</li>
+          <li>status string, no DB enum</li>
+        </ul>
+        <div class="fk">FK → offers.id, profiles.id</div>
+      </div>
+      <div class="card">
+        <h4><span class="dot app"></span>match_scores</h4>
+        <ul>
+          <li>id PK</li>
+          <li>engine (Literal langchain | sjctl; only langchain used)</li>
+          <li><b>score_percent</b> int 0–100, not null</li>
+          <li>dimensions JSONB (open dict), rationale text</li>
+          <li>no uniqueness constraint on (offer_id, profile_id); re-scores always insert</li>
+        </ul>
+        <div class="fk">FK → offers.id, profiles.id</div>
+      </div>
+      <div class="card">
+        <h4><span class="dot app"></span>applications</h4>
+        <ul>
+          <li>id PK</li>
+          <li>status: drafted · reviewed · sent · failed · interview · offer · rejected</li>
+          <li>send_method (nullable), error_message (nullable), sent_at (nullable)</li>
+          <li style="color:var(--text-faint)">no creation path yet; Phase 4 not built</li>
+        </ul>
+        <div class="fk">FK → offers.id, profiles.id, cv_versions.id (nullable)</div>
+      </div>
+      <div class="card">
+        <h4><span class="dot data"></span>scheduler_runs</h4>
+        <ul>
+          <li>id PK</li>
+          <li>trigger_type: automatic | manual</li>
+          <li>status: running | ok | error</li>
+          <li>fetched_count / created_count (nullable Integer), warning (boolean)</li>
+          <li>started_at, finished_at (nullable while running)</li>
+        </ul>
+        <div class="fk">FK → sources.id · index (source_id, started_at)</div>
+      </div>
+      <div class="card">
+        <h4><span class="dot data"></span>ingestion_failures</h4>
+        <ul>
+          <li>DeadLetterMixin: id, dedup_key (unique), failure_type, error_message, raw_payload (nullable JSONB)</li>
+          <li>status: open | resolved, occurred_at, resolved_at (nullable)</li>
+          <li>page (nullable)</li>
+        </ul>
+        <div class="fk">FK → sources.id, scheduler_runs.id (nullable) · index (source_id, occurred_at)</div>
+      </div>
+      <div class="card">
+        <h4><span class="dot data"></span>scoring_failures</h4>
+        <ul>
+          <li>DeadLetterMixin fields (as above)</li>
+        </ul>
+        <div class="fk">FK → offers.id, profiles.id · index (offer_id, occurred_at)</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="api">
+    <h2><span class="num">8</span> API surface map</h2>
+    <p class="desc">
+      24 endpoints across 8 routers, all included in <code>app/main.py</code> in this order:
+      health → connectors → scheduler → ingestion → offers → profile → scoring → failures.
+      TypeScript types for the frontend are generated from this OpenAPI schema
+      (<code>make generate-types</code>) and committed to source control.
+    </p>
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead><tr><th>Method &amp; path</th><th>Router</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td><span class="badge get">GET</span> <code>/health</code></td><td>health</td><td>Liveness check, no DB touch.</td></tr>
+          <tr><td><span class="badge get">GET</span> <code>/health/db</code></td><td>health</td><td>DB round-trip check → 503 on driver exception.</td></tr>
+          <tr><td><span class="badge get">GET</span> <code>/connectors</code></td><td>connectors</td><td>Per-connector offer/scored/unscored counts + Fetch Scope support flag.</td></tr>
+          <tr><td><span class="badge post">POST</span> <code>/scheduler/run/{source}</code></td><td>scheduler</td><td>Manual, scheduler_runs-audited trigger.</td></tr>
+          <tr><td><span class="badge get">GET</span> <code>/scheduler/status</code></td><td>scheduler</td><td>Latest run per connector-tagged Source.</td></tr>
+          <tr><td><span class="badge put">PUT</span> <code>/scheduler/sources/{{source}}/interval</code></td><td>scheduler</td><td>Per-source (and bulk, no <code>{source}</code>) interval override.</td></tr>
+          <tr><td><span class="badge put">PUT</span> <code>/scheduler/sources/{{source}}/fetch-range</code></td><td>scheduler</td><td>Per-source (and bulk) Fetch Range window.</td></tr>
+          <tr><td><span class="badge put">PUT</span> <code>/scheduler/sources/{source}/fetch-scope</code></td><td>scheduler</td><td>All vs. filtered-by-hard-skills, where supported.</td></tr>
+          <tr><td><span class="badge put">PUT</span> <code>/scheduler/sources/{{source}}/auto-fetch</code></td><td>scheduler</td><td>Per-source (and bulk) scheduled-job on/off toggle.</td></tr>
+          <tr><td><span class="badge put">PUT</span> <code>/scheduler/sources/{{source}}/enabled</code></td><td>scheduler</td><td>Per-source (and bulk) hard enable/disable.</td></tr>
+          <tr><td><span class="badge post">POST</span> <code>/ingest/{source}</code></td><td>ingestion</td><td>Job-seeker "Fetch now"; not scheduler_runs-audited (ADR 0006).</td></tr>
+          <tr><td><span class="badge get">GET</span> <code>/offers</code></td><td>offers</td><td>Paginated, filterable, sortable; score joined inline via ROW_NUMBER() subquery.</td></tr>
+          <tr><td><span class="badge get">GET</span> <code>/offers/cleanup-preview</code></td><td>offers</td><td>Read-only count for the bulk-delete confirmation UI.</td></tr>
+          <tr><td><span class="badge delete">DELETE</span> <code>/offers</code></td><td>offers</td><td>Bulk-delete aged-out offers with no Application row.</td></tr>
+          <tr><td><span class="badge get">GET</span> <code>/offers/{offer_id}</code></td><td>offers</td><td>Full detail incl. description, raw_payload, updated_at.</td></tr>
+          <tr><td><span class="badge get">GET</span> <code>/offers/{offer_id}/score</code></td><td>offers</td><td>Most recent MatchScore for the active profile.</td></tr>
+          <tr><td><span class="badge get">GET</span> <code>/profile</code></td><td>profile</td><td>200 + null body when no profile is active.</td></tr>
+          <tr><td><span class="badge put">PUT</span> <code>/profile</code></td><td>profile</td><td>Upsert; <code>profile_id</code>/<code>activate</code> params support draft-edit-without-activating.</td></tr>
+          <tr><td><span class="badge post">POST</span> <code>/profile/upload</code></td><td>profile</td><td>CV → draft Profile via 3-way split LLM call. 415 / 503 on failure.</td></tr>
+          <tr><td><span class="badge post">POST</span> <code>/score/batch</code></td><td>scoring</td><td>Runs the batch scorer synchronously, commits, returns counts.</td></tr>
+          <tr><td><span class="badge get">GET</span> <code>/scoring/status</code></td><td>scoring</td><td>Live running/processed/total/remaining_backlog snapshot.</td></tr>
+          <tr><td><span class="badge get">GET</span> <code>/scoring/events</code></td><td>scoring</td><td>SSE stream; one <code>score</code> event per committed MatchScore.</td></tr>
+          <tr><td><span class="badge get">GET</span> <code>/failures/{process}</code></td><td>failures</td><td>Registry-driven; <code>process</code> = ingestion | scoring.</td></tr>
+          <tr><td><span class="badge post">POST</span> <code>/failures/{process}/{failure_id}/retry</code></td><td>failures</td><td>Dispatches to RETRY_HANDLERS[failure_type].</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="frontend">
+    <h2><span class="num">9</span> Frontend application map</h2>
+    <p class="desc">
+      Four routes under one <code>react-router-dom</code> shell (<code>App.tsx</code>). Every page
+      follows the same page → component → hook → typed-API-wrapper layering.
+    </p>
+    <div class="tree">
+      <ul>
+        <li><span class="route">/</span>: OfferListPage <span class="hint">Phase 1</span>
+          <ul>
+            <li>OfferFilters, ScoreFilter, OfferTable, per-connector FetchNowButton</li>
+            <li>hooks: useOffers (fetch-on-filter, 300ms debounce, paginated), useOfferScoreDetail (on-demand drawer), useScoreAlerts (SSE)</li>
+            <li>consumes: <code>GET /offers</code>, <code>GET /offers/{id}/score</code>, <code>POST /ingest/{source}</code>, <code>GET /scoring/events</code></li>
+          </ul>
+        </li>
+        <li><span class="route">/profile</span>: ProfileEditorPage <span class="hint">Phase 2</span>
+          <ul>
+            <li>CvUploadControl, SkillsTable (hard-skill star toggle), RolesList, EducationList, CertificationsList, LanguagesList, DealBreakersList, PreferencesFields</li>
+            <li>hooks: useProfileEditor (localStorage-cached draft, save-never-activates by default)</li>
+            <li>consumes: <code>GET /profile</code>, <code>PUT /profile</code>, <code>POST /profile/upload</code></li>
+          </ul>
+        </li>
+        <li><span class="route">/failures</span>: FailuresPage <span class="hint">hardening</span>
+          <ul>
+            <li>FailureFilters (process-conditional), FailuresTable, FailureDetailDrawer</li>
+            <li>hooks: useFailures (mirrors useOffers, no debounce)</li>
+            <li>consumes: <code>GET /failures/{process}</code>, <code>POST /failures/{process}/{id}/retry</code></li>
+          </ul>
+        </li>
+        <li><span class="route">/settings</span>: SettingsPage
+          <ul>
+            <li>Fetch cadence (interval / Fetch Range / Auto-Fetch / Fetch Scope per connector), Notifications (score alert threshold, mute, test sound)</li>
+            <li>hooks: useConnectorSettings, useKnownSources, useOfferCleanup, useSchedulerStatus, useScoringStatus</li>
+            <li>consumes: <code>GET /connectors</code>, every <code>PUT /scheduler/sources/*</code> route, <code>GET /scheduler/status</code>, <code>GET /scoring/status</code>, <code>GET /offers/cleanup-preview</code>, <code>DELETE /offers</code></li>
+          </ul>
+        </li>
+      </ul>
+    </div>
+    <div class="callout warn">
+      <strong>Known gap:</strong> <code>make test-frontend</code> (vitest) runs but is deliberately
+      not wired into <code>make ci</code> / GitHub Actions yet; see
+      <code>docs/adr/0007-vitest-introduced-but-not-wired-into-make-ci.md</code>.
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="cicd">
+    <h2><span class="num">10</span> CI / CD pipeline</h2>
+    <p class="desc">
+      Local pre-commit hooks and the GitHub Actions workflow both resolve to the exact same
+      command, <code>make ci</code>, so the two environments can never quietly drift apart.
+    </p>
+    <div class="diagram-frame">
+      <div class="diagram-scroll">
+        <svg viewBox="0 0 1180 460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="CI CD pipeline diagram">
+          <defs>
+            <marker id="a7" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 Z" style="fill:var(--text-faint)"></path>
+            </marker>
+          </defs>
+
+          <path class="edge" d="M150,100 L150,140" marker-end="url(#a7)"></path>
+          <path class="edge" d="M150,320 L150,340" marker-end="url(#a7)"></path>
+          <path class="edge" d="M480,90 L480,110" marker-end="url(#a7)"></path>
+          <path class="edge" d="M480,165 L480,175" marker-end="url(#a7)"></path>
+          <path class="edge" d="M480,230 L480,240" marker-end="url(#a7)"></path>
+          <path class="edge" d="M480,295 L480,305" marker-end="url(#a7)"></path>
+          <path class="edge" d="M920,80 L920,100" marker-end="url(#a7)"></path>
+          <path class="edge" d="M920,330 L920,350" marker-end="url(#a7)"></path>
+          <path class="edge planned" d="M680,215 L620,60" marker-end="url(#a7)"></path>
+
+          <text class="edge-label" x="500" y="565" style="display:none"></text>
+          <text class="edge-label" x="560" y="130" style="fill:var(--planned)">same command, local &amp; CI</text>
+
+          <!-- git commit -->
+          <rect class="box plain" x="20" y="30" width="260" height="70" rx="10"></rect>
+          <text class="box-title small" x="34" y="58">git commit</text>
+          <text class="box-sub" x="34" y="76">developer workstation</text>
+
+          <!-- pre-commit -->
+          <rect class="box app" x="20" y="140" width="260" height="180" rx="10"></rect>
+          <text class="box-title small" x="34" y="162">pre-commit hooks</text>
+          <text class="box-sub" x="34" y="180">trailing-whitespace</text>
+          <text class="box-sub" x="34" y="195">ruff check --fix · ruff format</text>
+          <text class="box-sub" x="34" y="210">mypy (strict where practical)</text>
+          <text class="box-sub" x="34" y="225">eslint --fix</text>
+          <text class="box-sub" x="34" y="240">uv lock --check</text>
+          <text class="box-sub" x="34" y="255">pnpm install --frozen-lockfile</text>
+          <text class="box-sub" x="34" y="273" style="fill:var(--text-faint)">local uv/pnpm toolchain, not hosted mirrors</text>
+          <text class="box-sub" x="34" y="289" style="fill:var(--text-faint)">fixers run before non-fixable checks</text>
+          <text class="box-sub" x="34" y="305" style="fill:var(--text-faint)">--frozen everywhere (no silent uv.lock rewrite)</text>
+
+          <!-- commit succeeds -->
+          <rect class="box plain" x="20" y="340" width="260" height="60" rx="10"></rect>
+          <text class="box-title small" x="34" y="365">commit created</text>
+          <text class="box-sub" x="34" y="382">hooks passed</text>
+
+          <!-- make ci -->
+          <rect class="box plain" x="350" y="30" width="260" height="60" rx="10"></rect>
+          <text class="box-title small" x="364" y="54">make ci</text>
+          <text class="box-sub" x="364" y="72">= format → lint → typecheck → test</text>
+
+          <rect class="box plain" x="350" y="110" width="260" height="55" rx="10"></rect>
+          <text class="box-sub" x="364" y="132">format: ruff format + fix</text>
+          <text class="box-sub" x="364" y="148">(python) + pnpm format</text>
+
+          <rect class="box plain" x="350" y="175" width="260" height="55" rx="10"></rect>
+          <text class="box-sub" x="364" y="197">lint: ruff check + mypy</text>
+          <text class="box-sub" x="364" y="213">+ pnpm lint (eslint)</text>
+
+          <rect class="box plain" x="350" y="240" width="260" height="55" rx="10"></rect>
+          <text class="box-sub" x="364" y="262">typecheck: mypy</text>
+          <text class="box-sub" x="364" y="278">+ pnpm typecheck (tsc -b)</text>
+
+          <rect class="box plain" x="350" y="305" width="260" height="55" rx="10"></rect>
+          <text class="box-sub" x="364" y="327">test: pytest (unit + integration)</text>
+          <text class="box-sub" x="364" y="343" style="fill:var(--text-faint)">vitest NOT included (ADR 0007)</text>
+
+          <!-- GH actions -->
+          <rect class="box app" x="790" y="20" width="260" height="60" rx="10"></rect>
+          <text class="box-title small" x="804" y="44">GitHub Actions</text>
+          <text class="box-sub" x="804" y="62">on: pull_request, push → main</text>
+
+          <rect class="box plain" x="680" y="100" width="480" height="230" rx="10"></rect>
+          <text class="box-title small" x="694" y="122">.github/workflows/ci.yml: single job</text>
+          <text class="box-sub" x="694" y="140">postgres:16-alpine service container (mirrors db)</text>
+          <text class="box-sub" x="694" y="155">actions/checkout</text>
+          <text class="box-sub" x="694" y="170">astral-sh/setup-uv@v6 (0.11.23) + uv sync --frozen --all-groups</text>
+          <text class="box-sub" x="694" y="185">pnpm/action-setup@v4 + actions/setup-node@v4</text>
+          <text class="box-sub" x="694" y="200">pnpm install --frozen-lockfile</text>
+          <text class="box-sub" x="694" y="215">cp .env.example .env</text>
+          <text class="box-sub" x="694" y="230">job-level DATABASE_URL / OLLAMA_BASE_URL / OLLAMA_MODEL</text>
+          <text class="box-sub" x="694" y="245">(DATABASE_URL → localhost:5432, overrides .env's db:5432)</text>
+          <text class="box-sub" x="694" y="264" style="font-weight:700">run: make ci</text>
+          <text class="box-sub" x="694" y="282" style="fill:var(--text-faint)">no GHCR image push, no CD step; CI only</text>
+          <text class="box-sub" x="694" y="298" style="fill:var(--text-faint)">README badge deferred; no GitHub remote configured yet</text>
+
+          <rect class="box plain" x="790" y="350" width="260" height="60" rx="10"></rect>
+          <text class="box-title small" x="804" y="374">pass / fail</text>
+          <text class="box-sub" x="804" y="392">→ PR status check</text>
+        </svg>
+      </div>
+      <div class="legend">
+        <span class="item"><span class="swatch app"></span> orchestration / gate</span>
+        <span class="item"><span class="swatch plain"></span> stage / step</span>
+        <span class="item"><span class="line dashed"></span> same underlying command</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="config">
+    <h2><span class="num">11</span> Configuration reference</h2>
+    <p class="desc">
+      Every setting is read once through <code>app/config.py</code>'s <code>Settings</code>
+      (pydantic-settings, <code>.env</code>-driven) and cached via <code>@lru_cache</code>.
+      <code>database_url</code>, <code>ollama_base_url</code>, and <code>ollama_model</code> have
+      no defaults; a process importing <code>app.main</code> without them raises immediately.
+    </p>
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead><tr><th>Variable</th><th>Default</th><th>Used by</th></tr></thead>
+        <tbody>
+          <tr><td><code>DATABASE_URL</code></td><td style="color:var(--text-faint)">required, no default</td><td>SQLAlchemy async engine (<code>postgresql+asyncpg://...</code>)</td></tr>
+          <tr><td><code>OLLAMA_BASE_URL</code></td><td style="color:var(--text-faint)">required, no default</td><td>ChatOllama client for both CV extraction and the Matcher</td></tr>
+          <tr><td><code>OLLAMA_MODEL</code></td><td><code>llama3.1:8b</code></td><td>CV extraction chain (ADR 0011)</td></tr>
+          <tr><td><code>MATCHER_OLLAMA_MODEL</code></td><td><code>llama3.1:8b</code></td><td>LangChain Matcher, independent of the above (ADR 0013)</td></tr>
+          <tr><td><code>SOLID_JOBS_CAMPAIGN</code></td><td><code>recruflow</code></td><td>Required query param on every SOLID.Jobs API call</td></tr>
+          <tr><td><code>BATCH_SCORING_LIMIT</code></td><td><code>20</code></td><td>Rows per backlog-drain tick (BUG16)</td></tr>
+          <tr><td><code>scoring_job_interval_seconds</code></td><td><code>60</code></td><td>Backlog-drain job cadence (config default, not in <code>.env.example</code> yet)</td></tr>
+          <tr><td><code>API_HOST</code> / <code>API_PORT</code></td><td><code>0.0.0.0</code> / <code>8000</code></td><td>Uvicorn bind address</td></tr>
+          <tr><td><code>CORS_ALLOW_ORIGIN</code></td><td><code>http://localhost:5173</code></td><td>Single exact-match allowed origin, no wildcard</td></tr>
+          <tr><td><code>VITE_API_BASE_URL</code></td><td><code>http://localhost:8000</code></td><td>Frontend's API base (build-time, Vite)</td></tr>
+          <tr><td><code>SMTP_HOST</code> / <code>PORT</code> / <code>USERNAME</code> / <code>PASSWORD</code> / <code>FROM_EMAIL</code></td><td style="color:var(--text-faint)">empty</td><td>Phase 4 application send; not built yet</td></tr>
+          <tr><td><code>SWARM_GRADE_THRESHOLD</code>, <code>SEND_QUEUE_*</code>, <code>FORM_FILL_DAILY_CAP</code></td><td style="color:var(--text-faint)">placeholders</td><td>Phase 5 swarm / send queue; not built yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    Source of truth for every fact on this page is the code and
+    <a href="../ARCHITECTURE.md">ARCHITECTURE.md</a> / <a href="architecture/">docs/architecture/*.md</a>
+    at the time this page was written. When a subsystem changes, update the relevant architecture
+    doc first; this page is a derived view, regenerate it rather than hand-patching drift.
+  </footer>
+
+</div>
+
+<script>
+  (function () {
+    var root = document.documentElement;
+    var btn = document.getElementById('theme-toggle');
+    var stored = null;
+    try { stored = localStorage.getItem('recruflow-docs-theme'); } catch (e) {}
+    if (stored === 'dark' || stored === 'light') root.setAttribute('data-theme', stored);
+    btn.addEventListener('click', function () {
+      var current = root.getAttribute('data-theme');
+      var next = current === 'dark' ? 'light' : (current === 'light' ? 'dark' :
+        (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark'));
+      root.setAttribute('data-theme', next);
+      try { localStorage.setItem('recruflow-docs-theme', next); } catch (e) {}
+    });
+  })();
+</script>
+</body>
+</html>

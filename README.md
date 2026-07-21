@@ -32,8 +32,8 @@ Docker Compose — no cloud services, no data leaving your box.
 
 ## Screenshots
 
-_Coming soon — one screenshot per page below (Offers, Profile, Failures, Settings) plus an
-architecture/infra diagram._
+Screenshots of each page are embedded inline in the [Walkthrough](#walkthrough) section below;
+architecture and infrastructure diagrams are in the [Architecture](#architecture) section.
 
 ## Quick start
 
@@ -129,7 +129,7 @@ interpolated by match percentage) that opens a drawer with the per-dimension bre
 rationale on click. A **Fetch now** button per connector triggers an immediate ingestion run.
 Rows you haven't opened yet that score above your alert threshold get a highlighted accent.
 
-_Screenshot: coming soon_
+<img src="docs/Capture1.JPG" alt="Offers page — filterable offer table with score badges" width="900">
 
 ### Profile — `/profile`
 
@@ -137,7 +137,7 @@ Upload a CV (PDF/DOCX) and a local LLM extracts a structured profile — skills,
 education, certifications, languages — facts only, nothing invented. Edit any field by hand, then
 **Save** (as a draft) or **Set as active** (the profile every offer gets scored against).
 
-_Screenshot: coming soon_
+<img src="docs/Capture2.JPG" alt="Profile page — structured candidate profile editor" width="900">
 
 ### Settings — `/settings`
 
@@ -146,7 +146,7 @@ Per-connector cards (fetch cadence, fetch date range, auto-fetch, stop/start), o
 preferences (minimum score to alert on, sound, volume — all live via a Server-Sent Events
 stream).
 
-_Screenshot: coming soon_
+<img src="docs/Capture4.JPG" alt="Settings page — per-connector cards and notification preferences" width="900">
 
 ### Failures — `/failures`
 
@@ -154,7 +154,7 @@ A dead-letter queue viewer for the ingestion and scoring pipelines. Every antici
 that used to just log-and-drop now lands here as one durable row per failing resource, with a
 **Retry** button that replays it through the original code path.
 
-_Screenshot: coming soon_
+<img src="docs/Capture3.JPG" alt="Failures page — dead letter queue viewer with retry" width="900">
 
 ## Architecture
 
@@ -166,6 +166,8 @@ _Screenshot: coming soon_
 | Database | PostgreSQL |
 | Scheduling | APScheduler, wired into the FastAPI lifespan |
 | Package managers | `uv` (Python) · `pnpm` (Node) |
+
+<img src="docs/System%20context.JPG" alt="System context diagram" width="900">
 
 Key design decisions:
 
@@ -182,7 +184,16 @@ Key design decisions:
 - **Dead letter queues, not silent logging** — handled failures in ingestion and scoring persist
   as retryable rows instead of disappearing into a log line.
 
-<!-- Infra/architecture diagram: coming soon -->
+**Ingestion pipeline**
+
+<img src="docs/Ingestion%20pipeline%20flow.JPG" alt="Ingestion pipeline flow diagram" width="900">
+
+**Scoring pipeline**
+
+<img src="docs/Scoring%20pipeline%20flow.JPG" alt="Scoring pipeline flow diagram" width="900">
+
+More detail on both flows, plus the full set of infrastructure and sequence diagrams, is in
+[docs/detailed infrastructure diagrams.html](<docs/detailed infrastructure diagrams.html>).
 
 Full documentation, split by subsystem so you only need to read what you're touching:
 
