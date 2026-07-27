@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.models import Source
 from app.scheduler.runs import build_source_status, get_latest_run_by_source
-from app.scheduler.service import run_scoring_job_sync, run_source_sync
+from app.scheduler.service import run_scoring_job, run_source_sync
 from app.scheduler.triggers import parse_schedule
 from app.schemas.scheduler import SourceStatus
 
@@ -54,9 +54,13 @@ def register_scoring_job(scheduler: AsyncIOScheduler, *, interval_seconds: int) 
     ingestion interval -- `max_instances=1` + `coalesce=True` means a run that
     takes longer than `interval_seconds` just chains straight into the next one instead
     of overlapping or piling up missed ticks, so the backlog drains continuously.
+
+    Registers the coroutine function `run_scoring_job` directly, not a sync wrapper, so
+    `AsyncIOScheduler` runs it on its own event loop instead of a thread-pool worker with a
+    fresh loop per tick (see `run_scoring_job`'s docstring).
     """
     scheduler.add_job(
-        run_scoring_job_sync,
+        run_scoring_job,
         trigger=IntervalTrigger(seconds=interval_seconds),
         id=SCORING_JOB_ID,
         replace_existing=True,

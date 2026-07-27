@@ -293,7 +293,7 @@ React + Vite + TypeScript, styled with Tailwind CSS, managed with `pnpm`.
   `score_offers_with_langchain` only `session.add()`s each new `MatchScore`, never flushes, so
   `row.id` is `None` until something forces a flush). The two places that already call
   `run_batch_scoring` and commit — `POST /score/batch` and the dedicated backlog-draining job's
-  `_run_scoring_job_async` (see matching.md) — both looped over `summary.grade_a_events` and
+  `run_scoring_job` (see matching.md) — both looped over `summary.grade_a_events` and
   called `publish_grade_a`. The later percentage-based rework renamed the field
   to `score_events` and dropped the Grade-A-only filter — see below.
 - **`GET /scoring/events`** (`app/api/routes/scoring.py`): an `EventSourceResponse`

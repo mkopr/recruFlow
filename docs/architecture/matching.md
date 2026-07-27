@@ -319,6 +319,23 @@
   20 → 50 to better match ingestion volume (9 connectors) now that concurrency makes a larger batch
   per tick actually feasible within `scoring_job_interval_seconds`. Ollama's own timeout/GPU
   contention (the dominant cause measured live) was left as an infra concern, not a code change.
+- **Scheduled backlog job runs on the app's own event loop, not a fresh one per tick**: the
+  scheduled job used to register `run_scoring_job_sync` (`app/scheduler/service.py`), a plain sync
+  function calling `asyncio.run(...)` — `AsyncIOScheduler` runs sync job functions in its default
+  thread-pool executor, so every tick got its own brand-new event loop in a worker thread, separate
+  from the main app's. `app/scoring/batch.py`'s `_scoring_lock` (an `asyncio.Lock`, shared with the
+  `POST /score/batch` route's own call on the main loop) binds to whichever event loop first
+  acquires it; once both the scheduled tick's throwaway loop and the main loop had each touched it,
+  any later acquire from the other raised `RuntimeError: ... is bound to a different event loop`,
+  crashing the manual "Score now" button live in production the first time both paths had run.
+  Fixed by registering the coroutine function `run_scoring_job` directly with `scheduler.add_job`
+  instead of a sync wrapper — `AsyncIOExecutor` runs a native coroutine function directly on the
+  scheduler's own event loop (the same one the rest of the app runs on) rather than dispatching to
+  the thread pool, so `_scoring_lock` is now only ever touched by one event loop for the process's
+  whole lifetime. Ingestion's `run_source_sync`/`run_source` deliberately keep the
+  sync-wrapper-plus-thread-pool pattern — some connectors make genuinely blocking/synchronous HTTP
+  calls, which do need to run off the main loop; scoring's call chain (`ChatOllama.ainvoke`,
+  SQLAlchemy async session) has no such blocking call, so it needed no thread at all.
 - **Fetch Range-aware selection and offer cleanup**: `_fetch_unscored_offers` and
   `_count_unscored_offers` now reuse `resolve_fetch_range` (`app/ingestion/runner.py`) so
   scoring never spends an LLM call on an offer the user has already excluded from ingestion via a

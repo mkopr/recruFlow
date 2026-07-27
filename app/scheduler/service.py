@@ -133,11 +133,21 @@ async def run_source(connector: str, *, trigger_type: str) -> SchedulerRunRecord
     return await asyncio.to_thread(run_source_sync, connector, trigger_type=trigger_type)
 
 
-async def _run_scoring_job_async() -> batch.BatchScoringSummary:
+async def run_scoring_job() -> batch.BatchScoringSummary:
     """One tick of the dedicated backlog-draining job (own engine/session, like
     `_run_source_async`). Runs on a fixed interval independent of any source's own
     ingestion cadence, so the active profile's backlog keeps draining even when no
     connector happens to fire.
+
+    Registered directly as a coroutine function with `AsyncIOScheduler` (unlike
+    `run_source_sync`/`run_source`'s sync-wrapper-plus-thread-pool pattern for ingestion,
+    which some connectors' synchronous HTTP calls genuinely need) so it runs on the
+    scheduler's own event loop -- the same loop the rest of the app runs on -- rather than
+    in a fresh event loop via `asyncio.run()` inside a worker thread. `app/scoring/batch.py`'s
+    `_scoring_lock` is a plain `asyncio.Lock`, which binds to whichever event loop first
+    acquires it; running this job on a second, throwaway loop per tick made that lock
+    (correctly shared with the `POST /score/batch` route's own call, on the app's main loop)
+    raise "bound to a different event loop" the moment both paths had ever touched it.
     """
     engine = get_engine()
     try:
@@ -162,10 +172,6 @@ async def _run_scoring_job_async() -> batch.BatchScoringSummary:
                 raise
     finally:
         await engine.dispose()
-
-
-def run_scoring_job_sync() -> batch.BatchScoringSummary:
-    return asyncio.run(_run_scoring_job_async())
 
 
 async def set_source_interval(session: AsyncSession, connector: str, seconds: int) -> Source:
