@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 from collections.abc import Callable, Collection
@@ -231,16 +232,16 @@ def _describe(exc: Exception) -> str:
     return str(exc) or exc.__class__.__name__
 
 
-async def score_offer_with_langchain(
+async def _score_offer(
     *,
+    chain: MatcherChain,
     offer_id: int,
     profile_id: int,
     profile: Profile,
     offer: Offer,
-    chain_factory: Callable[[], MatcherChain] = _build_chain,
 ) -> MatchScore:
     try:
-        output = await chain_factory().ainvoke(_build_messages(profile, offer))
+        output = await chain.ainvoke(_build_messages(profile, offer))
     except (httpx.HTTPError, OSError) as exc:
         logger.error("LangChain matcher LLM call failed: %s", exc, exc_info=True)
         raise MatcherError(f"LangChain matcher failed: {_describe(exc)}") from exc
@@ -280,8 +281,28 @@ async def score_offer_with_langchain(
     )
 
 
+async def score_offer_with_langchain(
+    *,
+    offer_id: int,
+    profile_id: int,
+    profile: Profile,
+    offer: Offer,
+    chain_factory: Callable[[], MatcherChain] = _build_chain,
+) -> MatchScore:
+    return await _score_offer(
+        chain=chain_factory(),
+        offer_id=offer_id,
+        profile_id=profile_id,
+        profile=profile,
+        offer=offer,
+    )
+
+
 def is_langchain_source(connector: str | None) -> bool:
     return connector in LANGCHAIN_SOURCES
+
+
+_ScoreOutcome = tuple[OfferModel, MatchScore | None, MatcherError | None]
 
 
 async def score_offers_with_langchain(
@@ -298,27 +319,50 @@ async def score_offers_with_langchain(
     # app/scoring/batch.py's select_scoring_candidates) must pass that same set here --
     # otherwise this per-offer gate silently falls back to the module-level default and
     # disagrees with what was actually selected.
+    if not offers:
+        return []
+
     scope = connectors if connectors is not None else LANGCHAIN_SOURCES
     profile = Profile(**profile_row.data)
+    # One chain (one ChatOllama client) is built for the whole batch and its LLM calls run
+    # concurrently, bounded by a semaphore, rather than the old fresh-chain-per-offer/fully-serial
+    # loop -- both were a hard throughput ceiling once Ollama latency approached the batch
+    # interval. DB writes below stay strictly sequential after the gather, since AsyncSession
+    # isn't safe for concurrent use.
+    chain = chain_factory()
+    semaphore = asyncio.Semaphore(get_settings().scoring_max_concurrency)
+    completed = 0
+
+    async def _process(offer_row: OfferModel, connector: str) -> _ScoreOutcome:
+        nonlocal completed
+        score: MatchScore | None = None
+        error: MatcherError | None = None
+        if connector in scope:
+            offer = Offer.model_validate(offer_row, from_attributes=True)
+            async with semaphore:
+                try:
+                    score = await _score_offer(
+                        chain=chain,
+                        offer_id=offer_row.id,
+                        profile_id=profile_row.id,
+                        profile=profile,
+                        offer=offer,
+                    )
+                except MatcherError as exc:
+                    error = exc
+        completed += 1
+        if on_progress is not None:
+            on_progress(completed)
+        return offer_row, score, error
+
+    outcomes = await asyncio.gather(
+        *(_process(offer_row, connector) for offer_row, connector in offers)
+    )
+
     results: list[MatchScoreModel] = []
-
-    for processed, (offer_row, connector) in enumerate(offers, start=1):
-        if connector not in scope:
-            if on_progress is not None:
-                on_progress(processed)
-            continue
-
-        offer = Offer.model_validate(offer_row, from_attributes=True)
-        try:
-            score = await score_offer_with_langchain(
-                offer_id=offer_row.id,
-                profile_id=profile_row.id,
-                profile=profile,
-                offer=offer,
-                chain_factory=chain_factory,
-            )
-        except MatcherError as exc:
-            logger.warning("LangChain matcher failed for offer_id=%s: %s", offer_row.id, exc)
+    for offer_row, score, error in outcomes:
+        if error is not None:
+            logger.warning("LangChain matcher failed for offer_id=%s: %s", offer_row.id, error)
             await record_failure(
                 session,
                 ScoringFailure,
@@ -326,23 +370,18 @@ async def score_offers_with_langchain(
                 offer_id=offer_row.id,
                 profile_id=profile_row.id,
                 failure_type=FailureType.SCORING_FAILED,
-                error_message=str(exc),
+                error_message=str(error),
             )
-            if on_progress is not None:
-                on_progress(processed)
-            continue
-
-        row = MatchScoreModel(
-            offer_id=score.offer_id,
-            profile_id=score.profile_id,
-            engine=score.engine,
-            score_percent=score.score_percent,
-            dimensions=score.dimensions,
-            rationale=score.rationale,
-        )
-        session.add(row)
-        results.append(row)
-        if on_progress is not None:
-            on_progress(processed)
+        elif score is not None:
+            row = MatchScoreModel(
+                offer_id=score.offer_id,
+                profile_id=score.profile_id,
+                engine=score.engine,
+                score_percent=score.score_percent,
+                dimensions=score.dimensions,
+                rationale=score.rationale,
+            )
+            session.add(row)
+            results.append(row)
 
     return results

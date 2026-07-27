@@ -16,7 +16,8 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from_email: str = ""
     solid_jobs_campaign: str = "recruflow"
-    batch_scoring_limit: int = 20
+    batch_scoring_limit: int = 50
+    scoring_max_concurrency: int = 5
     scoring_job_interval_seconds: int = 60
     app_env: str = "development"
     log_level: str = "INFO"

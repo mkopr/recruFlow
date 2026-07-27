@@ -298,6 +298,27 @@
   ingestion-focused test's scheduler run from triggering a real batch-scoring pass, back when
   ingestion itself triggered scoring, as described above. That trigger was later removed entirely, so
   neither guard has anything left to protect against and both were deleted along with it.
+- **Batch scoring concurrency, chain reuse, and narrow-column candidate scan**: live investigation
+  found Ollama timeouts compounding with two structural throughput ceilings: `score_offers_with_langchain`
+  awaited offers strictly one at a time (a 120s-timeout call blocked the entire batch), and built a
+  fresh `ChatOllama`/`with_structured_output` chain per offer instead of once per batch. Fixed by
+  building the chain once per batch call (`chain_factory()` invoked a single time, not per offer)
+  and scoring offers concurrently via `asyncio.gather` bounded by an `asyncio.Semaphore` sized from
+  the new `Settings.scoring_max_concurrency` (`SCORING_MAX_CONCURRENCY`, default `5`) — a stuck call
+  no longer blocks healthy ones behind it. DB writes (`session.add`/`record_failure`) stay strictly
+  sequential, run only after `gather` resolves, since `AsyncSession` isn't safe for concurrent use;
+  `_score_offer` is the shared chain-taking core both `score_offer_with_langchain` (single-offer,
+  still one fresh chain per call — used by `app/dlq/retry.py`'s retry path) and the batch function
+  call into. `select_scoring_candidates` (`app/scoring/batch.py`) now runs a narrow-column scan
+  (`_candidate_scan_stmt`: `id`/`posted_at`/the owning Source's `config_json` only) to order and
+  fetch-range-filter the whole backlog and compute `total`, then hydrates full `Offer` rows
+  (`_hydrate_candidates_stmt`) only for the page actually returned — refining ADR 0020's
+  materialize-then-filter tradeoff (still no SQL-side `resolve_fetch_range` reimplementation) now
+  that the backlog has grown large enough for full-row hydration of the entire candidate set, every
+  tick, to be the measurable cost that ADR anticipated. `Settings.batch_scoring_limit` default raised
+  20 → 50 to better match ingestion volume (9 connectors) now that concurrency makes a larger batch
+  per tick actually feasible within `scoring_job_interval_seconds`. Ollama's own timeout/GPU
+  contention (the dominant cause measured live) was left as an infra concern, not a code change.
 - **Fetch Range-aware selection and offer cleanup**: `_fetch_unscored_offers` and
   `_count_unscored_offers` now reuse `resolve_fetch_range` (`app/ingestion/runner.py`) so
   scoring never spends an LLM call on an offer the user has already excluded from ingestion via a

@@ -33,9 +33,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from tests.integration.test_langchain_matcher_batch import (
     _STRONG_OUTPUT_KWARGS,
-    _FailingChain,
     _FakeChain,
-    _SequencedChainBuilder,
+    _SequencedChain,
 )
 from tests.integration.test_offers_routes import (
     _create_offer,
@@ -398,8 +397,8 @@ async def test_run_batch_scoring_partial_failure_does_not_abort_batch(
     db_session: AsyncSession,
 ) -> None:
     connector = _fake_connector()
-    chains: Iterator[_FakeChain | _FailingChain] = iter(
-        [_FailingChain(), _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS))]
+    outcomes: Iterator[_MatcherOutput | BaseException] = iter(
+        [RuntimeError("simulated matcher failure"), _MatcherOutput(**_STRONG_OUTPUT_KWARGS)]
     )
 
     await _deactivate_all_profiles(db_session)
@@ -411,7 +410,7 @@ async def test_run_batch_scoring_partial_failure_does_not_abort_batch(
         await db_session.commit()
 
         summary = await run_batch_scoring(
-            db_session, connectors={connector}, chain_factory=_SequencedChainBuilder(chains)
+            db_session, connectors={connector}, chain_factory=lambda: _SequencedChain(outcomes)
         )
         await db_session.commit()
 

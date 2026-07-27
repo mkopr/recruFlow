@@ -80,14 +80,20 @@ def _open_scoring_failures(profile_id: int) -> Select[tuple[int]]:
     )
 
 
-def _candidate_offers_stmt(
+def _candidate_scan_stmt(
     profile_id: int, connectors: Collection[str]
-) -> Select[tuple[OfferModel, str, dict[str, Any]]]:
+) -> Select[tuple[int, datetime | None, dict[str, Any] | None]]:
+    """Narrow-column scan: just enough (`id`, `posted_at`, the owning Source's
+    `config_json`) to order the whole candidate backlog and test each row against
+    `_in_fetch_range`, without paying to hydrate every candidate's full `Offer` row
+    (title/description/etc.) on every tick -- that full hydration is reserved for
+    `_hydrate_candidates_stmt`, run only over the page actually selected.
+    """
     already_scored = select(MatchScoreModel.offer_id).where(
         MatchScoreModel.profile_id == profile_id
     )
     return (
-        select(OfferModel, Source.connector, Source.config_json)
+        select(OfferModel.id, OfferModel.posted_at, Source.config_json)
         .join(Source, OfferModel.source_id == Source.id)
         .where(Source.connector.in_(connectors))
         .where(OfferModel.id.not_in(already_scored))
@@ -97,6 +103,17 @@ def _candidate_offers_stmt(
             OfferModel.created_at.desc(),
             OfferModel.id.desc(),
         )
+    )
+
+
+def _hydrate_candidates_stmt(offer_ids: Collection[int]) -> Select[tuple[OfferModel, str | None]]:
+    """Full `Offer` rows (plus connector) for exactly the page of ids `select_scoring_candidates`
+    decided to return -- never the whole backlog.
+    """
+    return (
+        select(OfferModel, Source.connector)
+        .join(Source, OfferModel.source_id == Source.id)
+        .where(OfferModel.id.in_(offer_ids))
     )
 
 
@@ -130,20 +147,30 @@ async def select_scoring_candidates(
     session: AsyncSession, profile_id: int, *, connectors: Collection[str], limit: int
 ) -> CandidateSelection:
     """The single seam for scoring candidate selection: ordering, exclusion,
-    fetch-range, and connector scope, in one query.
+    fetch-range, and connector scope.
 
-    `total` in the result covers every in-range candidate regardless of `limit`,
-    so a caller wanting only the count can pass `limit=0` -- one scan serves both
-    a capped page and an accurate backlog total, instead of two independently
-    re-executed statements.
+    `total` in the result covers every in-range candidate regardless of `limit`, computed from
+    a narrow-column scan (`_candidate_scan_stmt`); only the page actually returned (at most
+    `limit` rows) pays to hydrate a full `Offer` row, via a second, `id`-scoped query
+    (`_hydrate_candidates_stmt`) -- avoids materializing the entire backlog's full rows just to
+    slice `[:limit]` in Python (refining ADR 0020's tradeoff without reintroducing SQL-side
+    fetch-range parsing).
     """
-    rows = (await session.execute(_candidate_offers_stmt(profile_id, connectors))).all()
-    in_range = tuple(
-        (offer, connector)
-        for offer, connector, config_json in rows
-        if _in_fetch_range(offer, config_json)
-    )
-    return CandidateSelection(selected=in_range[:limit], total=len(in_range))
+    scan_rows = (await session.execute(_candidate_scan_stmt(profile_id, connectors))).all()
+    in_range_ids = [
+        offer_id
+        for offer_id, posted_at, config_json in scan_rows
+        if _in_fetch_range(OfferModel(posted_at=posted_at), config_json)
+    ]
+    total = len(in_range_ids)
+    page_ids = in_range_ids[:limit]
+    if not page_ids:
+        return CandidateSelection(selected=(), total=total)
+
+    hydrated = (await session.execute(_hydrate_candidates_stmt(page_ids))).all()
+    by_id = {offer.id: (offer, connector) for offer, connector in hydrated}
+    selected = tuple(by_id[offer_id] for offer_id in page_ids)
+    return CandidateSelection(selected=selected, total=total)
 
 
 async def _count_already_scored(

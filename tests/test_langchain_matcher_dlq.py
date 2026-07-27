@@ -20,25 +20,22 @@ _STRONG_OUTPUT_KWARGS = {
 }
 
 
-class _FakeChain:
-    def __init__(self, output: _MatcherOutput) -> None:
-        self._output = output
+class _SequencedChain:
+    """A single chain whose `ainvoke` result/exception varies call-to-call.
+
+    `score_offers_with_langchain` builds one chain per batch and reuses it across
+    every offer, so simulating "offer 1 fails, offer 2 succeeds" needs one chain object with
+    call-ordered behavior, not a fresh chain per offer.
+    """
+
+    def __init__(self, outcomes: "Iterator[_MatcherOutput | BaseException]") -> None:
+        self._outcomes = outcomes
 
     async def ainvoke(self, messages: list[BaseMessage]) -> _MatcherOutput:
-        return self._output
-
-
-class _FailingChain:
-    async def ainvoke(self, messages: list[BaseMessage]) -> _MatcherOutput:
-        raise RuntimeError("simulated matcher failure")
-
-
-class _SequencedChainBuilder:
-    def __init__(self, chains: "Iterator[_FakeChain | _FailingChain]") -> None:
-        self._chains = chains
-
-    def __call__(self) -> "_FakeChain | _FailingChain":
-        return next(self._chains)
+        outcome = next(self._outcomes)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
 
 
 def _offer_row(offer_id: int) -> OfferModel:
@@ -77,8 +74,8 @@ def _profile_row(profile_id: int) -> ProfileModel:
 
 @pytest.mark.asyncio
 async def test_score_offers_with_langchain_records_scoring_failure_for_offer_that_raises() -> None:
-    chains: Iterator[_FakeChain | _FailingChain] = iter(
-        [_FailingChain(), _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS))]
+    outcomes: Iterator[_MatcherOutput | BaseException] = iter(
+        [RuntimeError("simulated matcher failure"), _MatcherOutput(**_STRONG_OUTPUT_KWARGS)]
     )
     profile_row = _profile_row(1)
     offer_1 = _offer_row(1)
@@ -90,7 +87,7 @@ async def test_score_offers_with_langchain_records_scoring_failure_for_offer_tha
         session,
         profile_row,
         [(offer_1, "justjoinit"), (offer_2, "justjoinit")],
-        chain_factory=_SequencedChainBuilder(chains),
+        chain_factory=lambda: _SequencedChain(outcomes),
     )
 
     assert len(results) == 1

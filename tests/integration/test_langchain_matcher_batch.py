@@ -38,12 +38,22 @@ class _FailingChain:
         raise RuntimeError("simulated matcher failure")
 
 
-class _SequencedChainBuilder:
-    def __init__(self, chains: "Iterator[_FakeChain | _FailingChain]") -> None:
-        self._chains = chains
+class _SequencedChain:
+    """A single chain whose `ainvoke` result/exception varies call-to-call.
 
-    def __call__(self) -> "_FakeChain | _FailingChain":
-        return next(self._chains)
+    `score_offers_with_langchain` now builds one chain per batch and reuses it
+    across every offer, so a test simulating "offer N fails, offer N+1 succeeds" needs one
+    chain object with call-ordered behavior, not a fresh chain per offer.
+    """
+
+    def __init__(self, outcomes: "Iterator[_MatcherOutput | BaseException]") -> None:
+        self._outcomes = outcomes
+
+    async def ainvoke(self, messages: list[BaseMessage]) -> _MatcherOutput:
+        outcome = next(self._outcomes)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
 
 
 async def _create_profile(session: AsyncSession) -> ProfileModel:
@@ -104,8 +114,8 @@ async def test_score_offers_with_langchain_scores_all_three_sources_including_so
 async def test_score_offers_with_langchain_continues_batch_after_one_offer_fails(
     db_session: AsyncSession,
 ) -> None:
-    chains: Iterator[_FakeChain | _FailingChain] = iter(
-        [_FailingChain(), _FakeChain(_MatcherOutput(**_STRONG_OUTPUT_KWARGS))]
+    outcomes: Iterator[_MatcherOutput | BaseException] = iter(
+        [RuntimeError("simulated matcher failure"), _MatcherOutput(**_STRONG_OUTPUT_KWARGS)]
     )
 
     jj_source = await _create_source(db_session, connector=JUSTJOINIT)
@@ -121,7 +131,7 @@ async def test_score_offers_with_langchain_continues_batch_after_one_offer_fails
         db_session,
         profile,
         [(offer_1, JUSTJOINIT), (offer_2, JUSTJOINIT)],
-        chain_factory=_SequencedChainBuilder(chains),
+        chain_factory=lambda: _SequencedChain(outcomes),
     )
 
     rows = (
