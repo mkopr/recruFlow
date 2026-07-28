@@ -222,8 +222,9 @@ async def test_run_pracuj_ingestion_creates_offers_with_raw_payload_stored(
     source = await _create_source(db_session, config_json=_FAST_IT_CONFIG)
     slug1, slug2 = _unique_slug("backend"), _unique_slug("frontend")
     url1, url2 = _job_url(slug1), _job_url(slug2)
-    record1 = _detail_record(1001, "Backend Engineer", url1)
-    record2 = _detail_record(1002, "Frontend Engineer", url2)
+    backend_title, frontend_title = f"Backend Engineer {uuid4()}", f"Frontend Engineer {uuid4()}"
+    record1 = _detail_record(1001, backend_title, url1)
+    record2 = _detail_record(1002, frontend_title, url2)
 
     _install_router(
         monkeypatch,
@@ -245,8 +246,8 @@ async def test_run_pracuj_ingestion_creates_offers_with_raw_payload_stored(
     )
     assert len(rows) == 2
     titles = {row.title for row in rows}
-    assert titles == {"Backend Engineer", "Frontend Engineer"}
-    row1 = next(r for r in rows if r.title == "Backend Engineer")
+    assert titles == {backend_title, frontend_title}
+    row1 = next(r for r in rows if r.title == backend_title)
     assert row1.raw_payload == record1
     assert row1.canonical_url == url1
 
@@ -259,7 +260,7 @@ async def test_run_pracuj_ingestion_dedups_on_reingest(
     source = await _create_source(db_session, config_json=_FAST_IT_CONFIG)
     slug = _unique_slug("backend")
     url = _job_url(slug)
-    record = _detail_record(2001, "Backend Engineer", url)
+    record = _detail_record(2001, f"Backend Engineer {uuid4()}", url)
 
     _install_router(
         monkeypatch,
@@ -302,7 +303,8 @@ async def test_run_pracuj_ingestion_applies_category_filter_end_to_end(
     source = await _create_source(db_session, config_json=_FAST_IT_CONFIG)
     it_slug, sales_slug = _unique_slug("it-job"), _unique_slug("sales-job")
     it_url, sales_url = _job_url(it_slug), _job_url(sales_slug)
-    it_record = _detail_record(3001, "Python Developer", it_url)
+    it_title = f"Python Developer {uuid4()}"
+    it_record = _detail_record(3001, it_title, it_url)
 
     # The "it" listing URL only ever yields the IT offer -- Pracuj.pl's own server performs the
     # keyword match, so a router that would answer a *different* keyword's listing URL with the
@@ -327,7 +329,7 @@ async def test_run_pracuj_ingestion_applies_category_filter_end_to_end(
         .all()
     )
     assert len(rows) == 1
-    assert rows[0].title == "Python Developer"
+    assert rows[0].title == it_title
     assert sales_url != it_url  # sanity: distinct fixture URLs, sales offer never fetched
 
 
@@ -352,8 +354,9 @@ async def test_run_pracuj_ingestion_resumes_from_persisted_listing_page_cursor(
     )
     slug1, slug2 = _unique_slug("page1"), _unique_slug("page2")
     url1, url2 = _job_url(slug1), _job_url(slug2)
-    record1 = _detail_record(6001, "Page One Engineer", url1)
-    record2 = _detail_record(6002, "Page Two Engineer", url2)
+    page_one_title, page_two_title = f"Page One Engineer {uuid4()}", f"Page Two Engineer {uuid4()}"
+    record1 = _detail_record(6001, page_one_title, url1)
+    record2 = _detail_record(6002, page_two_title, url2)
 
     _install_router(
         monkeypatch,
@@ -388,7 +391,7 @@ async def test_run_pracuj_ingestion_resumes_from_persisted_listing_page_cursor(
     )
     assert len(rows) == 2
     titles = {row.title for row in rows}
-    assert titles == {"Page One Engineer", "Page Two Engineer"}
+    assert titles == {page_one_title, page_two_title}
 
 
 @pytest.mark.integration
@@ -405,7 +408,8 @@ async def test_pracuj_connector_skips_a_challenged_detail_page_and_keeps_the_res
     source = await _create_source(db_session, config_json=_FAST_IT_CONFIG)
     ok_slug, challenge_slug = _unique_slug("ok"), _unique_slug("challenge")
     ok_url, challenge_url = _job_url(ok_slug), _job_url(challenge_slug)
-    ok_record = _detail_record(4001, "Backend Engineer", ok_url)
+    ok_title = f"Backend Engineer {uuid4()}"
+    ok_record = _detail_record(4001, ok_title, ok_url)
 
     _install_router(
         monkeypatch,
@@ -428,7 +432,7 @@ async def test_pracuj_connector_skips_a_challenged_detail_page_and_keeps_the_res
         .all()
     )
     assert len(rows) == 1
-    assert rows[0].title == "Backend Engineer"
+    assert rows[0].title == ok_title
     failures = (
         (
             await db_session.execute(
@@ -449,7 +453,7 @@ async def test_pracuj_offer_becomes_scoring_eligible(
     source = await _create_source(db_session, connector=PRACUJ, config_json=_FAST_IT_CONFIG)
     slug = _unique_slug("backend")
     url = _job_url(slug)
-    record = _detail_record(5001, "Backend Engineer", url)
+    record = _detail_record(5001, f"Backend Engineer {uuid4()}", url)
 
     _install_router(
         monkeypatch,
@@ -514,8 +518,9 @@ async def test_filtered_fetch_scope_loops_category_filter_per_hard_skill_term(
 
     python_slug, go_slug = _unique_slug("python-dev"), _unique_slug("go-dev")
     python_url, go_url = _job_url(python_slug), _job_url(go_slug)
-    python_record = _detail_record(2001, "Python Developer", python_url)
-    go_record = _detail_record(2002, "Go Developer", go_url)
+    python_title, go_title = f"Python Developer {uuid4()}", f"Go Developer {uuid4()}"
+    python_record = _detail_record(2001, python_title, python_url)
+    go_record = _detail_record(2002, go_title, go_url)
 
     python_listing_url = _listing_url("Python")
     go_listing_url = _listing_url("Go")
@@ -549,7 +554,7 @@ async def test_filtered_fetch_scope_loops_category_filter_per_hard_skill_term(
         .all()
     )
     titles = {row.title for row in rows}
-    assert titles == {"Python Developer", "Go Developer"}
+    assert titles == {python_title, go_title}
     # filtered runs must not touch listing_page_cursor (start_page always 1 per term)
     assert "listing_page_cursor" not in source.config_json
 

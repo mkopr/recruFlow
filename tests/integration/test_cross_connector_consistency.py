@@ -34,7 +34,7 @@ def _solid_jobs_raw(**overrides: Any) -> dict[str, Any]:
     offer: dict[str, Any] = {
         "jobOfferKey": str(uuid4()),
         "url": f"https://solid.jobs/o/{uuid4()}",
-        "title": "Backend Engineer",
+        "title": f"Backend Engineer {uuid4()}",
         "company": "Acme",
         "locations": ["Warszawa"],
         "isRemote": True,
@@ -50,7 +50,7 @@ def _justjoinit_raw(**overrides: Any) -> dict[str, Any]:
     offer: dict[str, Any] = {
         "guid": str(uuid4()),
         "slug": f"acme-backend-engineer-{uuid4()}",
-        "title": "Backend Engineer",
+        "title": f"Backend Engineer {uuid4()}",
         "workplaceType": "remote",
         "experienceLevel": "senior",
         "companyName": "Acme",
@@ -67,7 +67,7 @@ def _nofluffjobs_raw(**overrides: Any) -> dict[str, Any]:
         "id": f"backend-engineer-acme-{uuid4()}",
         "url": f"backend-engineer-acme-{uuid4()}",
         "reference": str(uuid4()),
-        "title": "Backend Engineer",
+        "title": f"Backend Engineer {uuid4()}",
         "name": "Acme",
         "location": {"places": [{"city": "Warszawa"}], "fullyRemote": True},
         "seniority": ["Senior"],
@@ -335,13 +335,18 @@ async def test_seniority_canonical_across_all_sources(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_cross_posted_offer_is_stored_as_separate_rows_per_source(
+async def test_cross_posted_offer_with_identical_content_is_deduped_across_sources(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Since US48, the content-based duplicate check (company + title + salary, global
+    # across sources) is exactly meant to catch this scenario: the same job posted on two
+    # different job boards, under two different canonical_urls. It is expected to collapse
+    # this into a single row attributed to whichever source ingested it first -- this
+    # supersedes the pre-US48 behavior of always storing one row per source.
     justjoinit_source = await _create_source(db_session, "justjoinit")
     nofluffjobs_source = await _create_source(db_session, "nofluffjobs")
 
-    shared_title = "Staff Backend Engineer"
+    shared_title = f"Staff Backend Engineer {uuid4()}"
     shared_company = "Acme"
     shared_city = "Warszawa"
 
@@ -385,12 +390,10 @@ async def test_cross_posted_offer_is_stored_as_separate_rows_per_source(
     nofluffjobs_rows = await _rows_for_source(db_session, nofluffjobs_source.id)
 
     assert len(justjoinit_rows) == 1
-    assert len(nofluffjobs_rows) == 1
-    assert justjoinit_rows[0].source_id != nofluffjobs_rows[0].source_id
-    assert justjoinit_rows[0].dedup_hash != nofluffjobs_rows[0].dedup_hash
+    assert len(nofluffjobs_rows) == 0
 
     all_offer_ids = {row.id for row in justjoinit_rows} | {row.id for row in nofluffjobs_rows}
-    assert len(all_offer_ids) == 2
+    assert len(all_offer_ids) == 1
 
 
 @pytest.mark.integration
@@ -403,7 +406,7 @@ async def test_missing_optional_field_stored_as_null_not_placeholder(
     raw = {
         "guid": str(uuid4()),
         "slug": f"acme-backend-engineer-{uuid4()}",
-        "title": "Backend Engineer",
+        "title": f"Backend Engineer {uuid4()}",
         "companyName": "Acme",
     }
     monkeypatch.setattr(

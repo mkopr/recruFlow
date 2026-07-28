@@ -235,7 +235,7 @@ async def test_disabled_connector_does_not_touch_existing_offers(
         db_session,
         {
             "source_id": source.id,
-            "title": "Backend Engineer",
+            "title": f"Backend Engineer {uuid4()}",
             "company": "Acme",
             "canonical_url": canonical_url,
         },

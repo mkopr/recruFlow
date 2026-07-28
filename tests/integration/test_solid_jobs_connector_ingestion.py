@@ -62,7 +62,7 @@ def _raw_offer(**overrides: Any) -> dict[str, Any]:
     offer = {
         "jobOfferKey": str(uuid4()),
         "url": _unique_url("x"),
-        "title": "Backend Engineer",
+        "title": f"Backend Engineer {uuid4()}",
         "company": "Acme",
         "locations": ["Warszawa"],
         "isRemote": True,
@@ -109,7 +109,7 @@ async def test_run_solid_jobs_ingestion_persists_and_maps_offers(
         .all()
     )
     assert len(rows) == 1
-    assert rows[0].title == "Backend Engineer"
+    assert rows[0].title == offer["title"]
     assert rows[0].raw_payload == offer
 
 

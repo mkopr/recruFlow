@@ -288,7 +288,7 @@ async def test_retry_validation_failure_success_persists_offer_and_resolves(
     canonical_url = _unique_url("retry")
     raw_payload = {
         "source_id": source_id,
-        "title": "Backend Engineer",
+        "title": f"Backend Engineer {uuid4()}",
         "company": "Acme",
         "canonical_url": canonical_url,
     }

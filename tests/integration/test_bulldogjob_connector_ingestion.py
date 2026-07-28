@@ -152,8 +152,9 @@ async def test_run_bulldogjob_ingestion_persists_and_maps_offers(
     source = await _create_source(db_session)
     id1, id2 = _unique_job_id("backend"), _unique_job_id("frontend")
     url1, url2 = _job_url(id1), _job_url(id2)
-    next_data1 = _next_data(id1, "Backend Engineer")
-    next_data2 = _next_data(id2, "Frontend Engineer")
+    backend_title, frontend_title = f"Backend Engineer {uuid4()}", f"Frontend Engineer {uuid4()}"
+    next_data1 = _next_data(id1, backend_title)
+    next_data2 = _next_data(id2, frontend_title)
 
     monkeypatch.setattr(
         httpx,
@@ -175,8 +176,8 @@ async def test_run_bulldogjob_ingestion_persists_and_maps_offers(
     )
     assert len(rows) == 2
     titles = {row.title for row in rows}
-    assert titles == {"Backend Engineer", "Frontend Engineer"}
-    row1 = next(r for r in rows if r.title == "Backend Engineer")
+    assert titles == {backend_title, frontend_title}
+    row1 = next(r for r in rows if r.title == backend_title)
     assert row1.raw_payload == next_data1
 
 
@@ -212,7 +213,8 @@ async def test_run_bulldogjob_ingestion_skips_single_broken_detail_page_without_
     source = await _create_source(db_session)
     good_id, broken_id = _unique_job_id("good"), _unique_job_id("broken")
     good_url, broken_url = _job_url(good_id), _job_url(broken_id)
-    good_html = _detail_html(good_id, "Backend Engineer")
+    good_title = f"Backend Engineer {uuid4()}"
+    good_html = _detail_html(good_id, good_title)
 
     monkeypatch.setattr(
         httpx,
@@ -234,7 +236,7 @@ async def test_run_bulldogjob_ingestion_skips_single_broken_detail_page_without_
         .all()
     )
     assert len(rows) == 1
-    assert rows[0].title == "Backend Engineer"
+    assert rows[0].title == good_title
 
 
 @pytest.mark.integration
@@ -245,7 +247,7 @@ async def test_run_bulldogjob_ingestion_dedups_on_reingest(
     source = await _create_source(db_session)
     job_id = _unique_job_id("backend")
     url = _job_url(job_id)
-    html = _detail_html(job_id, "Backend Engineer")
+    html = _detail_html(job_id, f"Backend Engineer {uuid4()}")
 
     monkeypatch.setattr(
         httpx,
@@ -278,7 +280,9 @@ async def test_run_bulldogjob_ingestion_already_seen_stop_threshold_avoids_refet
     )
     ids = [_unique_job_id(f"job{i}") for i in range(10)]
     urls = [_job_url(job_id) for job_id in ids]
-    htmls = {_job_url(job_id): _detail_html(job_id, f"Job {i}") for i, job_id in enumerate(ids)}
+    htmls = {
+        _job_url(job_id): _detail_html(job_id, f"Job {i} {uuid4()}") for i, job_id in enumerate(ids)
+    }
 
     call_log_1: list[str] = []
     monkeypatch.setattr(
@@ -332,8 +336,11 @@ async def test_run_bulldogjob_ingestion_range_mode_skips_offers_outside_since_un
     in_id, out_id = _unique_job_id("in-range"), _unique_job_id("out-range")
     in_range_url, out_of_range_url = _job_url(in_id), _job_url(out_id)
 
-    in_range_html = _detail_html(in_id, "In Range", publishedAt="2026-06-15T00:00:00Z")
-    out_of_range_html = _detail_html(out_id, "Out Of Range", publishedAt="2026-05-01T00:00:00Z")
+    in_range_title = f"In Range {uuid4()}"
+    in_range_html = _detail_html(in_id, in_range_title, publishedAt="2026-06-15T00:00:00Z")
+    out_of_range_html = _detail_html(
+        out_id, f"Out Of Range {uuid4()}", publishedAt="2026-05-01T00:00:00Z"
+    )
 
     monkeypatch.setattr(
         httpx,
@@ -355,7 +362,7 @@ async def test_run_bulldogjob_ingestion_range_mode_skips_offers_outside_since_un
         .all()
     )
     assert len(rows) == 1
-    assert rows[0].title == "In Range"
+    assert rows[0].title == in_range_title
 
 
 @pytest.mark.integration
@@ -370,7 +377,9 @@ async def test_run_bulldogjob_ingestion_resumes_from_persisted_cursor_across_run
     source = await _create_source(db_session, config_json={"page_size": 5, "max_pages": 1})
     ids = [_unique_job_id(f"job{i}") for i in range(10)]
     urls = [_job_url(job_id) for job_id in ids]
-    htmls = {_job_url(job_id): _detail_html(job_id, f"Job {i}") for i, job_id in enumerate(ids)}
+    htmls = {
+        _job_url(job_id): _detail_html(job_id, f"Job {i} {uuid4()}") for i, job_id in enumerate(ids)
+    }
 
     call_log_1: list[str] = []
     monkeypatch.setattr(
@@ -428,8 +437,9 @@ async def test_run_bulldogjob_ingestion_since_cutoff_does_not_stop_pagination_ea
     )
     old_id, new_id = _unique_job_id("old"), _unique_job_id("new")
     old_url, new_url = _job_url(old_id), _job_url(new_id)
-    old_html = _detail_html(old_id, "Old Listing", publishedAt="2026-01-01T00:00:00Z")
-    new_html = _detail_html(new_id, "New Listing", publishedAt="2026-06-15T00:00:00Z")
+    new_title = f"New Listing {uuid4()}"
+    old_html = _detail_html(old_id, f"Old Listing {uuid4()}", publishedAt="2026-01-01T00:00:00Z")
+    new_html = _detail_html(new_id, new_title, publishedAt="2026-06-15T00:00:00Z")
 
     monkeypatch.setattr(
         httpx,
@@ -451,7 +461,7 @@ async def test_run_bulldogjob_ingestion_since_cutoff_does_not_stop_pagination_ea
         .all()
     )
     assert len(rows) == 1
-    assert rows[0].title == "New Listing"
+    assert rows[0].title == new_title
 
 
 @pytest.mark.integration
@@ -468,7 +478,9 @@ async def test_run_bulldogjob_ingestion_throttles_between_detail_fetches(
     source = await _create_source(db_session, config_json={"rate_limit_delay_seconds": 2.5})
     ids = [_unique_job_id(f"job{i}") for i in range(3)]
     urls = [_job_url(job_id) for job_id in ids]
-    htmls = {_job_url(job_id): _detail_html(job_id, f"Job {i}") for i, job_id in enumerate(ids)}
+    htmls = {
+        _job_url(job_id): _detail_html(job_id, f"Job {i} {uuid4()}") for i, job_id in enumerate(ids)
+    }
 
     monkeypatch.setattr(
         httpx, "get", _make_router(jobs_xml=_jobs_sitemap_xml(urls), detail_html_by_url=htmls)
@@ -489,7 +501,9 @@ async def test_run_bulldogjob_ingestion_uses_page_size_from_config(
     source = await _create_source(db_session, config_json={"page_size": 5})
     ids = [_unique_job_id(f"job{i}") for i in range(8)]
     urls = [_job_url(job_id) for job_id in ids]
-    htmls = {_job_url(job_id): _detail_html(job_id, f"Job {i}") for i, job_id in enumerate(ids)}
+    htmls = {
+        _job_url(job_id): _detail_html(job_id, f"Job {i} {uuid4()}") for i, job_id in enumerate(ids)
+    }
 
     call_log: list[str] = []
     monkeypatch.setattr(
@@ -546,6 +560,7 @@ async def test_filtered_fetch_scope_fetches_one_filtered_listing_page_per_hard_s
         _filtered_listing_url("Go"),
     )
     requested_listing_urls: list[str] = []
+    python_title, go_title = f"Python Developer {uuid4()}", f"Go Developer {uuid4()}"
 
     def _router(url: str, **kwargs: Any) -> _FakeResponse:
         if url == python_listing_url:
@@ -555,9 +570,9 @@ async def test_filtered_fetch_scope_fetches_one_filtered_listing_page_per_hard_s
             requested_listing_urls.append(url)
             return _FakeResponse(text=_filtered_listing_html([go_id]))
         if url == python_url:
-            return _FakeResponse(text=_detail_html(python_id, "Python Developer"))
+            return _FakeResponse(text=_detail_html(python_id, python_title))
         if url == go_url:
-            return _FakeResponse(text=_detail_html(go_id, "Go Developer"))
+            return _FakeResponse(text=_detail_html(go_id, go_title))
         return _FakeResponse(status_error=httpx.ConnectError("unexpected url"))
 
     monkeypatch.setattr(httpx, "get", _router)
@@ -575,7 +590,7 @@ async def test_filtered_fetch_scope_fetches_one_filtered_listing_page_per_hard_s
         .all()
     )
     titles = {row.title for row in rows}
-    assert titles == {"Python Developer", "Go Developer"}
+    assert titles == {python_title, go_title}
     # filtered runs must not persist sitemap_cursor -- see docs/adr/0027
     assert "sitemap_cursor" not in source.config_json
 

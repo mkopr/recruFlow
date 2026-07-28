@@ -132,8 +132,9 @@ async def test_run_rocket_jobs_ingestion_persists_and_maps_offers(
     source = await _create_source(db_session)
     slug1, slug2 = _unique_slug("backend"), _unique_slug("frontend")
     url1, url2 = _job_url(slug1), _job_url(slug2)
-    posting1 = _job_posting(slug1, "Backend Engineer")
-    posting2 = _job_posting(slug2, "Frontend Engineer")
+    backend_title, frontend_title = f"Backend Engineer {uuid4()}", f"Frontend Engineer {uuid4()}"
+    posting1 = _job_posting(slug1, backend_title)
+    posting2 = _job_posting(slug2, frontend_title)
 
     monkeypatch.setattr(
         httpx,
@@ -155,8 +156,8 @@ async def test_run_rocket_jobs_ingestion_persists_and_maps_offers(
     )
     assert len(rows) == 2
     titles = {row.title for row in rows}
-    assert titles == {"Backend Engineer", "Frontend Engineer"}
-    row1 = next(r for r in rows if r.title == "Backend Engineer")
+    assert titles == {backend_title, frontend_title}
+    row1 = next(r for r in rows if r.title == backend_title)
     assert row1.raw_payload == {**posting1, "_source_url": url1}
     assert row1.canonical_url == url1
 
@@ -193,7 +194,8 @@ async def test_run_rocket_jobs_ingestion_skips_single_broken_detail_page_without
     source = await _create_source(db_session)
     good_slug, broken_slug = _unique_slug("good"), _unique_slug("broken")
     good_url, broken_url = _job_url(good_slug), _job_url(broken_slug)
-    good_html = _detail_html(good_slug, "Backend Engineer")
+    good_title = f"Backend Engineer {uuid4()}"
+    good_html = _detail_html(good_slug, good_title)
 
     monkeypatch.setattr(
         httpx,
@@ -215,7 +217,7 @@ async def test_run_rocket_jobs_ingestion_skips_single_broken_detail_page_without
         .all()
     )
     assert len(rows) == 1
-    assert rows[0].title == "Backend Engineer"
+    assert rows[0].title == good_title
 
 
 @pytest.mark.integration
@@ -226,7 +228,7 @@ async def test_run_rocket_jobs_ingestion_dedups_on_reingest(
     source = await _create_source(db_session)
     slug = _unique_slug("backend")
     url = _job_url(slug)
-    html = _detail_html(slug, "Backend Engineer")
+    html = _detail_html(slug, f"Backend Engineer {uuid4()}")
 
     monkeypatch.setattr(
         httpx,
@@ -259,7 +261,9 @@ async def test_run_rocket_jobs_ingestion_already_seen_stop_threshold_avoids_refe
     )
     slugs = [_unique_slug(f"job{i}") for i in range(10)]
     urls = [_job_url(slug) for slug in slugs]
-    htmls = {_job_url(slug): _detail_html(slug, f"Job {i}") for i, slug in enumerate(slugs)}
+    htmls = {
+        _job_url(slug): _detail_html(slug, f"Job {i} {uuid4()}") for i, slug in enumerate(slugs)
+    }
 
     call_log_1: list[str] = []
     monkeypatch.setattr(
@@ -297,7 +301,9 @@ async def test_run_rocket_jobs_ingestion_uses_page_size_from_config(
     source = await _create_source(db_session, config_json={"page_size": 5})
     slugs = [_unique_slug(f"job{i}") for i in range(8)]
     urls = [_job_url(slug) for slug in slugs]
-    htmls = {_job_url(slug): _detail_html(slug, f"Job {i}") for i, slug in enumerate(slugs)}
+    htmls = {
+        _job_url(slug): _detail_html(slug, f"Job {i} {uuid4()}") for i, slug in enumerate(slugs)
+    }
 
     call_log: list[str] = []
     monkeypatch.setattr(
@@ -326,7 +332,9 @@ async def test_run_rocket_jobs_ingestion_resumes_from_persisted_cursor_across_ru
     source = await _create_source(db_session, config_json={"page_size": 5, "max_pages": 1})
     slugs = [_unique_slug(f"job{i}") for i in range(10)]
     urls = [_job_url(slug) for slug in slugs]
-    htmls = {_job_url(slug): _detail_html(slug, f"Job {i}") for i, slug in enumerate(slugs)}
+    htmls = {
+        _job_url(slug): _detail_html(slug, f"Job {i} {uuid4()}") for i, slug in enumerate(slugs)
+    }
 
     call_log_1: list[str] = []
     monkeypatch.setattr(
@@ -380,7 +388,9 @@ async def test_run_rocket_jobs_ingestion_throttles_between_detail_fetches(
     source = await _create_source(db_session, config_json={"rate_limit_delay_seconds": 2.5})
     slugs = [_unique_slug(f"job{i}") for i in range(3)]
     urls = [_job_url(slug) for slug in slugs]
-    htmls = {_job_url(slug): _detail_html(slug, f"Job {i}") for i, slug in enumerate(slugs)}
+    htmls = {
+        _job_url(slug): _detail_html(slug, f"Job {i} {uuid4()}") for i, slug in enumerate(slugs)
+    }
 
     monkeypatch.setattr(
         httpx, "get", _make_router(sitemap_xml=_urlset_xml(urls), detail_html_by_url=htmls)
@@ -401,7 +411,7 @@ async def test_run_rocket_jobs_ingestion_scoring_eligibility(
     source = await _create_source(db_session, connector=ROCKET_JOBS)
     slug = _unique_slug("backend")
     url = _job_url(slug)
-    html = _detail_html(slug, "Backend Engineer")
+    html = _detail_html(slug, f"Backend Engineer {uuid4()}")
 
     monkeypatch.setattr(
         httpx,

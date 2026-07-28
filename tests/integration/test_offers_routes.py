@@ -62,7 +62,7 @@ async def _delete_sources_with_offers(session: AsyncSession, source_ids: list[in
 async def _create_offer(session: AsyncSession, source_id: int, **overrides: object) -> int:
     mapped_fields: dict[str, object] = {
         "source_id": source_id,
-        "title": "Backend Engineer",
+        "title": f"Backend Engineer {uuid4()}",
         "company": "Acme",
         "canonical_url": _unique_url("offer"),
     }
@@ -713,11 +713,12 @@ async def test_get_offer_detail_includes_normalised_fields_and_raw_payload(
 ) -> None:
     source_id = await _create_source(db_session)
     raw_payload = {"id": "abc123", "nested": {"k": "v"}}
+    unique_title = f"Backend Engineer {uuid4()}"
     result = await ingest_offer(
         db_session,
         {
             "source_id": source_id,
-            "title": "Backend Engineer",
+            "title": unique_title,
             "company": "Acme",
             "canonical_url": _unique_url("detail"),
         },
@@ -731,7 +732,7 @@ async def test_get_offer_detail_includes_normalised_fields_and_raw_payload(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["title"] == "Backend Engineer"
+    assert body["title"] == unique_title
     assert body["company"] == "Acme"
     assert body["raw_payload"] == raw_payload
 
@@ -1165,7 +1166,7 @@ async def test_reingest_does_not_reset_user_owned_fields(db_session: AsyncSessio
     source_id = await _create_source(db_session, connector=connector)
     mapped_fields: dict[str, object] = {
         "source_id": source_id,
-        "title": "Backend Engineer",
+        "title": f"Backend Engineer {uuid4()}",
         "company": "Acme",
         "canonical_url": _unique_url("reingest"),
     }
@@ -1202,7 +1203,7 @@ async def test_reingest_does_not_reset_link_opened_at(db_session: AsyncSession) 
     source_id = await _create_source(db_session, connector=connector)
     mapped_fields: dict[str, object] = {
         "source_id": source_id,
-        "title": "Backend Engineer",
+        "title": f"Backend Engineer {uuid4()}",
         "company": "Acme",
         "canonical_url": _unique_url("reingest-link-opened"),
     }

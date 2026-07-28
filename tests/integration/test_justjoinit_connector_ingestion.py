@@ -44,7 +44,7 @@ def _raw_offer(**overrides: Any) -> dict[str, Any]:
     offer: dict[str, Any] = {
         "guid": str(uuid4()),
         "slug": f"acme-backend-engineer-{uuid4()}",
-        "title": "Backend Engineer",
+        "title": f"Backend Engineer {uuid4()}",
         "workplaceType": "remote",
         "workingTime": "full_time",
         "experienceLevel": "senior",
@@ -91,7 +91,7 @@ async def test_run_justjoinit_ingestion_persists_and_maps_offers(
         .all()
     )
     assert len(rows) == 1
-    assert rows[0].title == "Backend Engineer"
+    assert rows[0].title == offer["title"]
     assert rows[0].raw_payload == offer
 
 

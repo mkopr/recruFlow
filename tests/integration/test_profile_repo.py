@@ -50,7 +50,7 @@ async def test_reset_test_profiles_succeeds_when_a_match_score_references_the_de
         db_session,
         {
             "source_id": source.id,
-            "title": "Backend Engineer",
+            "title": f"Backend Engineer {uuid4()}",
             "company": "Acme",
             "canonical_url": f"https://example.com/jobs/{uuid4()}",
         },
@@ -336,7 +336,7 @@ async def _scored_offer(db_session: AsyncSession, profile_id: int) -> int:
         db_session,
         {
             "source_id": source.id,
-            "title": "Backend Engineer",
+            "title": f"Backend Engineer {uuid4()}",
             "company": "Acme",
             "canonical_url": f"https://example.com/jobs/{uuid4()}",
         },

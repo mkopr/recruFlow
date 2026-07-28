@@ -45,7 +45,7 @@ def _raw_offer(**overrides: Any) -> dict[str, Any]:
         "id": f"backend-engineer-acme-{uuid4()}",
         "url": f"backend-engineer-acme-{uuid4()}",
         "reference": str(uuid4()),
-        "title": "Backend Engineer",
+        "title": f"Backend Engineer {uuid4()}",
         "name": "Acme",
         "location": {
             "places": [{"city": "Warszawa"}],
@@ -88,7 +88,7 @@ async def test_run_nofluffjobs_ingestion_persists_and_maps_offers(
         .all()
     )
     assert len(rows) == 1
-    assert rows[0].title == "Backend Engineer"
+    assert rows[0].title == offer["title"]
     assert rows[0].raw_payload == offer
 
 

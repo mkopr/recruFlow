@@ -135,13 +135,14 @@ async def test_score_event_fires_exactly_once_on_new_score(
 ) -> None:
     connector = f"fake-{uuid4()}"
     _patch_matcher_for_fake_connector(monkeypatch, connector, _STRONG_OUTPUT_KWARGS)
+    title = f"Backend Engineer {uuid4()}"
 
     engine = get_engine()
     sessionmaker = get_sessionmaker(engine)
     async with sessionmaker() as session:
         await _activate_fresh_profile(session)
         source_id = await _create_source(session, connector=connector)
-        offer_id = await _create_offer(session, source_id)
+        offer_id = await _create_offer(session, source_id, title=title)
         await session.commit()
 
     try:
@@ -155,7 +156,7 @@ async def test_score_event_fires_exactly_once_on_new_score(
 
             event = await _next_score_event(lines)
             assert event["offer_id"] == offer_id
-            assert event["title"] == "Backend Engineer"
+            assert event["title"] == title
             assert event["company"] == "Acme"
             assert isinstance(event["score_percent"], int)
 

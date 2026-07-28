@@ -74,7 +74,7 @@ async def test_ingest_persists_offers_end_to_end_visible_in_db(
             session,
             {
                 "source_id": source.id,
-                "title": "Backend Engineer",
+                "title": f"Backend Engineer {uuid4()}",
                 "company": "Acme",
                 "canonical_url": canonical_url,
             },
@@ -323,7 +323,7 @@ async def test_ingest_does_not_trigger_batch_scoring_for_newly_persisted_offer(
             session,
             {
                 "source_id": source.id,
-                "title": "Backend Engineer",
+                "title": f"Backend Engineer {uuid4()}",
                 "company": "Acme",
                 "canonical_url": canonical_url,
             },

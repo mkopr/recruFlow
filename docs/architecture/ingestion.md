@@ -56,6 +56,47 @@
     record (already logged inside `normalize_and_validate` — never logged twice), otherwise
     `persist_offer`'s `(row, created)` tuple.
 
+### Content-based duplicate detection (company + title + salary)
+
+- **Purpose**: `dedup_hash` only catches re-ingesting the *same posting from the same source*
+  (or, via its fallback, an exact title/company/location match). It misses the same job reposted
+  on a *different* job board under a *different* canonical URL — a real, growing problem now that
+  9 connectors are registered. `_find_content_duplicate` (`app/ingestion/persist.py`) adds a
+  second, independent signal for exactly that case.
+- **Mechanism**: a plain `SELECT` (no unique index behind it) run at the top of `persist_offer`,
+  before the existing `dedup_hash`/insert logic. It matches on `OfferModel.company == offer.company`,
+  `OfferModel.title == offer.title` (both exact-string, post-trim, case-sensitive — no
+  normalization in this pass), and `salary_min`/`salary_max`/`salary_currency` all equal via
+  Postgres's `IS NOT DISTINCT FROM` rather than `=`, since ordinary SQL equality never matches
+  `NULL = NULL` and two postings that both omit a salary should still count as matching on it. A
+  hit short-circuits `persist_offer` and returns `(existing_row, False)` — the same return
+  contract as a `dedup_hash` hit, so every caller (`ingest_offer`, `run_paginated_ingestion`, every
+  connector) needs zero changes, and a content-duplicate counts toward
+  `run_paginated_ingestion`'s `consecutive_already_seen` early-stop exactly like a hash-duplicate
+  already does.
+- **Global, not per-source**: the check is not scoped to a Source or connector, since the
+  motivating scenario is one job appearing across connectors. A consequence: when a
+  cross-connector content-duplicate is detected, the surviving row keeps the `source_id` of
+  whichever connector ingested it *first* — the second connector's ingestion run reports it as
+  already-seen and gets zero new rows under its own `source_id`.
+- **Independent of `dedup_hash`** — this does not replace or modify `dedup.py`'s hash/fallback
+  logic; both mechanisms run, and either can independently cause a skip. If both would match the
+  same incoming offer it is still only skipped once, since `persist_offer` returns on the first
+  hit. See `docs/adr/0028-content-based-duplicate-detection-is-independent-of-dedup-hash.md` for
+  why this is deliberately a second signal rather than a change to the existing fallback, why
+  exact-equality (no salary tolerance, no currency conversion) was chosen, and why company/title
+  normalization was deferred.
+- **Accepted limitations**: no DB-level uniqueness constraint backs this (a standard unique index
+  treats every `NULL` as distinct, the opposite of what the salary NULL-safe match needs), so two
+  concurrent `persist_offer` calls for the same content-duplicate can both pass the check and both
+  insert — a narrow, accepted race mirroring this project's existing accepted stance on concurrent
+  `/ingest` triggers. Company/title comparison is case-sensitive with no legal-suffix
+  normalization (`"Acme"` and `"ACME"` are not deduped).
+- **Visibility**: a skipped content-duplicate is logged at `INFO` (company, title, salary, and the
+  matched row's `id`) but adds no new field to `IngestionResult`, `IngestResponse`,
+  `ManualRunResponse`, or `SourceStatus`, and needs no frontend change — a deliberate, smaller v1
+  scope per this project's minimal-numeric-UI preference.
+
 ### Cross-connector schema consistency
 
 - **Purpose**: the three connectors were originally built in isolation, each one's own test file

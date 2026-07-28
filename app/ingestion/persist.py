@@ -45,9 +45,43 @@ async def normalize_and_validate(session: AsyncSession, raw: dict[str, Any]) -> 
         return None
 
 
+# No unique index backs this check (a standard Postgres unique index treats every NULL as
+# distinct, the opposite of the NULL-safe salary equality this needs), so there is a narrow,
+# accepted race window between two concurrent persist_offer calls for the same content-duplicate.
+# See docs/adr/0028-content-based-duplicate-detection-is-independent-of-dedup-hash.md.
+async def _find_content_duplicate(session: AsyncSession, offer: Offer) -> OfferModel | None:
+    stmt = (
+        select(OfferModel)
+        .where(
+            OfferModel.company == offer.company,
+            OfferModel.title == offer.title,
+            OfferModel.salary_min.is_not_distinct_from(offer.salary_min),
+            OfferModel.salary_max.is_not_distinct_from(offer.salary_max),
+            OfferModel.salary_currency.is_not_distinct_from(offer.salary_currency),
+        )
+        .limit(1)
+    )
+    row: OfferModel | None = await session.scalar(stmt)
+    return row
+
+
 async def persist_offer(
     session: AsyncSession, offer: Offer, raw_payload: dict[str, Any]
 ) -> tuple[OfferModel, bool]:
+    content_duplicate = await _find_content_duplicate(session, offer)
+    if content_duplicate is not None:
+        logger.info(
+            "skipping offer as content duplicate: company=%r title=%r salary=(%s, %s, %s) "
+            "matches existing offer id=%d",
+            offer.company,
+            offer.title,
+            offer.salary_min,
+            offer.salary_max,
+            offer.salary_currency,
+            content_duplicate.id,
+        )
+        return content_duplicate, False
+
     dedup_hash = compute_dedup_hash(offer)
     stmt = (
         pg_insert(OfferModel)
