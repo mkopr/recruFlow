@@ -7,11 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.models import Source
 from app.scheduler.runs import build_source_status, get_latest_run_by_source
-from app.scheduler.service import run_scoring_job, run_source_sync
+from app.scheduler.service import run_detail_retry_job, run_scoring_job, run_source_sync
 from app.scheduler.triggers import parse_schedule
 from app.schemas.scheduler import SourceStatus
 
 SCORING_JOB_ID = "scoring:backlog"
+DETAIL_RETRY_JOB_ID = "dlq:retry_403"
 
 
 def build_job_id(connector: str) -> str:
@@ -63,6 +64,23 @@ def register_scoring_job(scheduler: AsyncIOScheduler, *, interval_seconds: int) 
         run_scoring_job,
         trigger=IntervalTrigger(seconds=interval_seconds),
         id=SCORING_JOB_ID,
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+
+def register_detail_retry_job(scheduler: AsyncIOScheduler, *, interval_seconds: int) -> None:
+    """Register the dedicated 403/429 detail-fetch retry job, decoupled from every source's
+    own ingestion interval and from `scoring:backlog` -- mirrors `register_scoring_job` exactly
+    (own `IntervalTrigger`, `max_instances=1` + `coalesce=True` so a slow tick chains into the
+    next instead of overlapping, registering the coroutine function directly so it runs on the
+    scheduler's own event loop rather than a fresh one per tick).
+    """
+    scheduler.add_job(
+        run_detail_retry_job,
+        trigger=IntervalTrigger(seconds=interval_seconds),
+        id=DETAIL_RETRY_JOB_ID,
         replace_existing=True,
         max_instances=1,
         coalesce=True,

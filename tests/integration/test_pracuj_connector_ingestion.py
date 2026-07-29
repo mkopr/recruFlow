@@ -396,15 +396,15 @@ async def test_run_pracuj_ingestion_resumes_from_persisted_listing_page_cursor(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_pracuj_connector_skips_a_challenged_detail_page_and_keeps_the_rest(
+async def test_pracuj_connector_skips_a_blocked_detail_page_and_keeps_the_rest(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # This used to assert an IngestionFailure got recorded and the whole page aborted on a
-    # single 403'd detail page -- that was true back when this connector shared one browser
-    # context for a whole run, so one challenge really did mean nothing else on the page would
-    # succeed either. Now that `run` opens a fresh context per fetch, a lone challenged detail
-    # URL is just a skip, and the real regression to guard against is the *rest* of the page
-    # silently getting thrown away with it.
+    # This used to assert no IngestionFailure got recorded for a single 403'd detail page --
+    # true before this story, when a 403 status wasn't distinguished from any other fetch
+    # failure. It's now recorded as a per-URL `detail_fetch_blocked` row (US49) so it can be
+    # automatically retried later, while the page-abort behavior this test also guards against
+    # (a lone blocked detail URL must not throw away the rest of the page, fixed by opening a
+    # fresh browser context per fetch) is unchanged.
     source = await _create_source(db_session, config_json=_FAST_IT_CONFIG)
     ok_slug, challenge_slug = _unique_slug("ok"), _unique_slug("challenge")
     ok_url, challenge_url = _job_url(ok_slug), _job_url(challenge_slug)
@@ -442,7 +442,10 @@ async def test_pracuj_connector_skips_a_challenged_detail_page_and_keeps_the_res
         .scalars()
         .all()
     )
-    assert failures == []
+    assert len(failures) == 1
+    assert failures[0].failure_type == "detail_fetch_blocked"
+    assert failures[0].url == challenge_url
+    assert failures[0].blocked_status == 403
 
 
 @pytest.mark.integration

@@ -44,6 +44,8 @@ async def record_run_fetch_failure(
     fields: dict[str, Any] = {}
     if scheduler_run_id is not None:
         fields["scheduler_run_id"] = scheduler_run_id
+    if result.blocked_status is not None:
+        fields["blocked_status"] = result.blocked_status
     await record_failure(
         session,
         IngestionFailure,

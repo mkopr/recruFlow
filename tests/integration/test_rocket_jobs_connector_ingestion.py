@@ -6,9 +6,9 @@ from uuid import uuid4
 import httpx
 import pytest
 from app.connectors.rocket_jobs import ROCKET_JOBS_SITEMAP_URL, RocketJobsConnector
+from app.db.models import IngestionFailure, Source
 from app.db.models import MatchScore as MatchScoreModel
 from app.db.models import Offer as OfferModel
-from app.db.models import Source
 from app.ingestion.normalize import ROCKET_JOBS
 from app.ingestion.types import IngestionResult
 from app.llm.matcher import _MatcherOutput
@@ -184,6 +184,63 @@ async def test_run_rocket_jobs_ingestion_returns_not_ok_on_sitemap_fetch_failure
         .all()
     )
     assert len(rows) == 0
+
+
+def _blocked_status_error(status_code: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", "https://rocketjobs.pl/blocked")
+    return httpx.HTTPStatusError(
+        "blocked", request=request, response=httpx.Response(status_code, request=request)
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_run_rocket_jobs_ingestion_records_blocked_detail_fetch_and_persists_the_rest(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = await _create_source(db_session)
+    good_slug, blocked_slug = _unique_slug("good"), _unique_slug("blocked")
+    good_url, blocked_url = _job_url(good_slug), _job_url(blocked_slug)
+    good_title = f"Backend Engineer {uuid4()}"
+    good_html = _detail_html(good_slug, good_title)
+
+    def _router(url: str, **kwargs: Any) -> _FakeResponse:
+        if url == ROCKET_JOBS_SITEMAP_URL:
+            return _FakeResponse(text=_urlset_xml([good_url, blocked_url]))
+        if url == good_url:
+            return _FakeResponse(text=good_html)
+        if url == blocked_url:
+            return _FakeResponse(status_error=_blocked_status_error(403))
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr(httpx, "get", _router)
+
+    result = await RocketJobsConnector().run(db_session, source)
+    await db_session.commit()
+
+    assert result.ok is True
+    assert result.created == 1
+    rows = (
+        (await db_session.execute(select(OfferModel).where(OfferModel.source_id == source.id)))
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].title == good_title
+
+    failures = (
+        (
+            await db_session.execute(
+                select(IngestionFailure).where(IngestionFailure.source_id == source.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(failures) == 1
+    assert failures[0].failure_type == "detail_fetch_blocked"
+    assert failures[0].url == blocked_url
+    assert failures[0].blocked_status == 403
 
 
 @pytest.mark.integration

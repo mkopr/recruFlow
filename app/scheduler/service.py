@@ -8,8 +8,10 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.db.models import SchedulerRun, Source
 from app.db.session import get_engine, get_sessionmaker
+from app.dlq import retry as dlq_retry
 from app.ingestion.lifecycle import record_run_fetch_failure, run_with_lifecycle
 from app.ingestion.registry import CONNECTOR_REGISTRY, resolve_source_by_connector
 from app.ingestion.types import IngestionResult
@@ -169,6 +171,42 @@ async def run_scoring_job() -> batch.BatchScoringSummary:
             except Exception:
                 await session.rollback()
                 logger.exception("scheduled backlog scoring failed")
+                raise
+    finally:
+        await engine.dispose()
+
+
+async def run_detail_retry_job() -> dlq_retry.DetailRetrySummary:
+    """One tick of the dedicated `dlq:retry_403` job (own engine/session, like
+    `run_scoring_job`/`_run_source_async`). Runs on a fixed interval independent of any
+    source's own ingestion cadence -- per BUG43, a fresh context/IP is what clears a
+    Cloudflare-style block, not elapsed time within the same run, so retrying belongs in its
+    own decoupled job rather than inline at the end of a connector's `run()`.
+    """
+    settings = get_settings()
+    engine = get_engine()
+    try:
+        sessionmaker = get_sessionmaker(engine)
+        async with sessionmaker() as session:
+            try:
+                # `run_detail_retry_batch` commits per-row internally (via `perform_retry`),
+                # so there's no batch-level commit needed here, unlike `run_scoring_job`.
+                summary = await dlq_retry.run_detail_retry_batch(
+                    session,
+                    min_age_seconds=settings.detail_retry_min_age_seconds,
+                    max_attempts=settings.detail_retry_max_attempts,
+                )
+                logger.info(
+                    "scheduled 403/429 retry: attempted=%d resolved=%d still_blocked=%d "
+                    "abandoned=%d",
+                    summary.attempted,
+                    summary.resolved,
+                    summary.still_blocked,
+                    summary.abandoned,
+                )
+                return summary
+            except Exception:
+                logger.exception("scheduled 403/429 retry failed")
                 raise
     finally:
         await engine.dispose()

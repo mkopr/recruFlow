@@ -15,6 +15,20 @@ _proxy_pool = ProxyPool()
 _fingerprints = FingerprintPool()
 
 
+class BlockedFetchError(Exception):
+    """Raised when every proxy-rotated attempt's final failure was an HTTP 403 or 429 --
+    the shape of a bot-block (Cloudflare Managed Challenge and similar), as distinct from a
+    timeout, connection error, 5xx, or malformed response. Callers that want to collect and
+    later retry blocked fetches (as opposed to today's "log and move on") catch this
+    specifically; everything else about `_get`'s failure contract -- returning `None` on any
+    other failure, never raising -- is unchanged.
+    """
+
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f"blocked: HTTP {status_code}")
+        self.status_code = status_code
+
+
 def _get(
     url: str,
     *,
@@ -27,6 +41,7 @@ def _get(
     error_noun: str = "offers",
     log_params: bool = True,
 ) -> httpx.Response | None:
+    last_status_code: int | None = None
     for attempt in range(1, _MAX_PROXY_ATTEMPTS + 1):
         proxy = _proxy_pool.get_proxy(logger)
         if proxy is None:
@@ -42,7 +57,19 @@ def _get(
                 proxy=proxy,
             )
             response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            last_status_code = exc.response.status_code
+            logger.error(
+                "request failed via proxy %r (attempt %d/%d): url=%r",
+                proxy,
+                attempt,
+                _MAX_PROXY_ATTEMPTS,
+                url,
+                exc_info=True,
+            )
+            continue
         except httpx.HTTPError:
+            last_status_code = None
             logger.error(
                 "request failed via proxy %r (attempt %d/%d): url=%r",
                 proxy,
@@ -72,6 +99,9 @@ def _get(
             _MAX_PROXY_ATTEMPTS,
             url,
         )
+
+    if last_status_code is not None and last_status_code in (403, 429):
+        raise BlockedFetchError(last_status_code)
     return None
 
 

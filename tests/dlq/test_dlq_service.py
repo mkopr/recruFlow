@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from app.db.models import IngestionFailure, ScoringFailure
-from app.dlq.service import record_failure
+from app.dlq.service import build_detail_url_dedup_key, record_failure
 from app.dlq.types import FailureType
 
 
@@ -59,3 +59,29 @@ async def test_record_failure_logs_error_on_failure(caplog: pytest.LogCaptureFix
         )
 
     assert any(r.levelno == logging.ERROR for r in caplog.records)
+
+
+def test_build_detail_url_dedup_key_is_stable_and_prefixed_by_source() -> None:
+    url = "https://rocketjobs.pl/oferta-pracy/example-posting"
+
+    key_a = build_detail_url_dedup_key(1, url)
+    key_b = build_detail_url_dedup_key(1, url)
+
+    assert key_a == key_b
+    assert key_a.startswith("source:1:detail_url:")
+
+
+def test_build_detail_url_dedup_key_differs_across_urls_and_sources() -> None:
+    url_a = "https://rocketjobs.pl/oferta-pracy/a"
+    url_b = "https://rocketjobs.pl/oferta-pracy/b"
+
+    assert build_detail_url_dedup_key(1, url_a) != build_detail_url_dedup_key(1, url_b)
+    assert build_detail_url_dedup_key(1, url_a) != build_detail_url_dedup_key(2, url_a)
+
+
+def test_build_detail_url_dedup_key_stays_under_255_chars_for_a_very_long_url() -> None:
+    url = "https://rocketjobs.pl/oferta-pracy/" + ("x" * 2000)
+
+    key = build_detail_url_dedup_key(123456, url)
+
+    assert len(key) <= 255

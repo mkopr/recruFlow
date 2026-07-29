@@ -48,6 +48,10 @@ class Connector(Protocol):
     ) -> IngestionResult: ...
 
 
+class DetailRetry(Protocol):
+    async def __call__(self, session: AsyncSession, source: Source, url: str) -> bool: ...
+
+
 @dataclass(frozen=True)
 class ConnectorSpec:
     name: str
@@ -57,6 +61,9 @@ class ConnectorSpec:
     # Only connectors with a confirmed live keyword-filter mechanism support Fetch
     # Scope's "filtered" mode -- see CONTEXT.md's Fetch Scope glossary entry.
     supports_fetch_scope: bool = False
+    # Only the three detail-page-fetch connectors (Bulldogjob, Rocket Jobs, Pracuj.pl) support
+    # retrying one blocked posting URL in isolation -- see US49/`app.dlq.retry`.
+    detail_retry: DetailRetry | None = None
 
 
 _solid_jobs = SolidJobsConnector(campaign=get_settings().solid_jobs_campaign)
@@ -84,15 +91,20 @@ CONNECTOR_REGISTRY: dict[str, ConnectorSpec] = {
         label=_bulldogjob.name,
         dispatch=_bulldogjob.run,
         supports_fetch_scope=True,
+        detail_retry=_bulldogjob.retry_detail_fetch,
     ),
     ROCKET_JOBS: ConnectorSpec(
-        name=ROCKET_JOBS, label=_rocket_jobs.name, dispatch=_rocket_jobs.run
+        name=ROCKET_JOBS,
+        label=_rocket_jobs.name,
+        dispatch=_rocket_jobs.run,
+        detail_retry=_rocket_jobs.retry_detail_fetch,
     ),
     PRACUJ: ConnectorSpec(
         name=PRACUJ,
         label=_pracuj.name,
         dispatch=_pracuj.run,
         supports_fetch_scope=True,
+        detail_retry=_pracuj.retry_detail_fetch,
         # Browser-driven fetching is far more expensive than every other connector's plain
         # HTTP call (see `docs/adr/0026`), so it gets a longer interval than the
         # shared 300s default -- the same "expensive, throttle hard" rationale ADR 0024/0026

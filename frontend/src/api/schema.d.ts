@@ -578,6 +578,12 @@ export interface components {
       scheduler_run_id: number | null;
       /** Page */
       page: number | null;
+      /** Url */
+      url: string | null;
+      /** Blocked Status */
+      blocked_status: number | null;
+      /** Retry Count */
+      retry_count: number;
       /** Failure Type */
       failure_type: string;
       /** Error Message */
@@ -1853,7 +1859,7 @@ export interface operations {
         offer_id?: number | null;
         /** @description Profile id (scoring only) */
         profile_id?: number | null;
-        status?: 'open' | 'resolved' | 'all';
+        status?: 'open' | 'resolved' | 'abandoned' | 'all';
         limit?: number;
         offset?: number;
       };

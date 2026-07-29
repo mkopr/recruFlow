@@ -17,7 +17,7 @@ from app.api.routes.scheduler import router as scheduler_router
 from app.api.routes.scoring import router as scoring_router
 from app.config import get_settings
 from app.db.session import get_engine, get_sessionmaker
-from app.scheduler.lifecycle import register_jobs, register_scoring_job
+from app.scheduler.lifecycle import register_detail_retry_job, register_jobs, register_scoring_job
 from app.scheduler.runs import reconcile_stale_running_runs
 from app.scheduler.service import ensure_sources_exist
 
@@ -42,8 +42,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     scheduler = AsyncIOScheduler(timezone="UTC")
     job_count = await register_jobs(scheduler, sessionmaker)
     register_scoring_job(scheduler, interval_seconds=settings.scoring_job_interval_seconds)
+    register_detail_retry_job(
+        scheduler, interval_seconds=settings.detail_retry_job_interval_seconds
+    )
     scheduler.start()
-    logger.info("scheduler started with %d source job(s) + 1 backlog scoring job", job_count)
+    logger.info(
+        "scheduler started with %d source job(s) + 1 backlog scoring job + 1 detail retry job",
+        job_count,
+    )
     app.state.scheduler = scheduler
 
     try:

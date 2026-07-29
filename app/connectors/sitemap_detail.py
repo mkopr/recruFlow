@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
@@ -9,10 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.connectors.base import JobBoardConnector
 from app.connectors.fingerprint import FingerprintPool
+from app.connectors.http import BlockedFetchError
 from app.connectors.proxy_pool import ProxyPool
 from app.connectors.sitemap import next_sitemap_cursor, resolve_sitemap_cursor
-from app.db.models import Source
+from app.db.models import IngestionFailure, Source
+from app.dlq.service import build_detail_url_dedup_key, record_failure
+from app.dlq.types import FailureType
 from app.ingestion.fetch_scope import FETCH_SCOPE_FILTERED, resolve_fetch_scope_terms
+from app.ingestion.persist import normalize_and_validate, persist_offer
 from app.ingestion.runner import resolve_fetch_range, run_paginated_ingestion
 from app.ingestion.types import IngestionResult
 
@@ -65,6 +70,7 @@ class SitemapDetailPageConnector(JobBoardConnector, ABC):
         return None
 
     def _fetch_detail_html(self, url: str) -> str | None:
+        last_status_code: int | None = None
         for attempt in range(1, _MAX_PROXY_ATTEMPTS + 1):
             proxy = _proxy_pool.get_proxy(logger)
             if proxy is None:
@@ -79,7 +85,19 @@ class SitemapDetailPageConnector(JobBoardConnector, ABC):
                     proxy=proxy,
                 )
                 response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                last_status_code = exc.response.status_code
+                logger.error(
+                    "request failed via proxy %r (attempt %d/%d): url=%r",
+                    proxy,
+                    attempt,
+                    _MAX_PROXY_ATTEMPTS,
+                    url,
+                    exc_info=True,
+                )
+                continue
             except httpx.HTTPError:
+                last_status_code = None
                 logger.error(
                     "request failed via proxy %r (attempt %d/%d): url=%r",
                     proxy,
@@ -98,6 +116,8 @@ class SitemapDetailPageConnector(JobBoardConnector, ABC):
             _MAX_PROXY_ATTEMPTS,
             url,
         )
+        if last_status_code is not None and last_status_code in (403, 429):
+            raise BlockedFetchError(last_status_code)
         return None
 
     async def _run_over_urls(
@@ -128,11 +148,12 @@ class SitemapDetailPageConnector(JobBoardConnector, ABC):
         # (including "reached the end", i.e. `None`) so it can be written back below.
         initial_cursor = resolve_sitemap_cursor(config, len(urls))
         last_cursor: int | None = initial_cursor
+        blocked: list[tuple[str, int]] = []
 
         def fetch_page(
             cursor: int, page_size: int
         ) -> tuple[list[dict[str, Any]], int | None] | None:
-            nonlocal last_cursor
+            nonlocal last_cursor, blocked
             chunk_urls = urls[cursor : cursor + page_size]
             if not chunk_urls:
                 last_cursor = None
@@ -142,7 +163,11 @@ class SitemapDetailPageConnector(JobBoardConnector, ABC):
             for url in chunk_urls:
                 if rate_limit_delay_seconds > 0:
                     time.sleep(rate_limit_delay_seconds)
-                html = self._fetch_detail_html(url)
+                try:
+                    html = self._fetch_detail_html(url)
+                except BlockedFetchError as exc:
+                    blocked.append((url, exc.status_code))
+                    continue
                 if html is None:
                     continue
                 parsed = self.extract_detail_json(html, url=url)
@@ -173,6 +198,17 @@ class SitemapDetailPageConnector(JobBoardConnector, ABC):
             # that early-stop must not apply here.
             sorted_by_recency=False,
         )
+        for blocked_url, status_code in blocked:
+            await record_failure(
+                session,
+                IngestionFailure,
+                dedup_key=build_detail_url_dedup_key(source.id, blocked_url),
+                source_id=source.id,
+                url=blocked_url,
+                blocked_status=status_code,
+                failure_type=FailureType.DETAIL_FETCH_BLOCKED,
+                error_message=f"{self.name} detail fetch blocked: HTTP {status_code}",
+            )
         if persist_cursor:
             source.config_json = {**config, "sitemap_cursor": next_sitemap_cursor(last_cursor)}
         return result
@@ -193,7 +229,18 @@ class SitemapDetailPageConnector(JobBoardConnector, ABC):
                 total_fetched = 0
                 total_created = 0
                 for term in resolution.terms:
-                    urls = self.fetch_filtered_sitemap_urls(config, term)
+                    try:
+                        urls = self.fetch_filtered_sitemap_urls(config, term)
+                    except BlockedFetchError as exc:
+                        return IngestionResult(
+                            ok=False,
+                            fetched=total_fetched,
+                            created=total_created,
+                            error_message=(
+                                f"failed to fetch {self.name} offers filtered by {term!r}"
+                            ),
+                            blocked_status=exc.status_code,
+                        )
                     if urls is None:
                         return IngestionResult(
                             ok=False,
@@ -227,7 +274,16 @@ class SitemapDetailPageConnector(JobBoardConnector, ABC):
                         )
                 return IngestionResult(ok=True, fetched=total_fetched, created=total_created)
 
-        urls = self.fetch_sitemap_urls(config)
+        try:
+            urls = self.fetch_sitemap_urls(config)
+        except BlockedFetchError as exc:
+            return IngestionResult(
+                ok=False,
+                fetched=0,
+                created=0,
+                error_message=f"failed to fetch {self.name} offers",
+                blocked_status=exc.status_code,
+            )
         if urls is None:
             return IngestionResult(
                 ok=False, fetched=0, created=0, error_message=f"failed to fetch {self.name} offers"
@@ -235,3 +291,24 @@ class SitemapDetailPageConnector(JobBoardConnector, ABC):
         return await self._run_over_urls(
             session, source, config, urls, force_refresh=force_refresh, since=since, until=until
         )
+
+    def supports_detail_retry(self) -> bool:
+        return True
+
+    async def retry_detail_fetch(self, session: AsyncSession, source: Source, url: str) -> bool:
+        # `_fetch_detail_html` is a synchronous, blocking call (proxy-rotated httpx) -- this
+        # retry job's tick runs on the main event loop the same way `run_scoring_job` does, so
+        # calling it directly here would freeze the whole API exactly as BUG42 found for
+        # `run_paginated_ingestion`'s own `fetch_page` call.
+        html = await asyncio.to_thread(self._fetch_detail_html, url)
+        if html is None:
+            return False
+        parsed = self.extract_detail_json(html, url=url)
+        if parsed is None:
+            return False
+        mapped = self.map_offer(source.id, parsed)
+        offer = await normalize_and_validate(session, mapped)
+        if offer is None:
+            return False
+        await persist_offer(session, offer, parsed)
+        return True

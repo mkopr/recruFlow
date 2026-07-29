@@ -1,11 +1,14 @@
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import httpx
 import pytest
 import pytest_asyncio
+from app.connectors.http import BlockedFetchError
 from app.db.models import IngestionFailure, ScoringFailure
 from app.dlq import retry as dlq_retry_module
 from app.schemas.match_score import MatchScore as MatchScoreSchema
@@ -40,6 +43,8 @@ async def _seed_ingestion_failure(
     raw_payload: dict[str, object] | None = None,
     status: str = "open",
     occurred_at: datetime | None = None,
+    url: str | None = None,
+    blocked_status: int | None = None,
 ) -> IngestionFailure:
     row = IngestionFailure(
         source_id=source_id,
@@ -49,6 +54,8 @@ async def _seed_ingestion_failure(
         raw_payload=raw_payload,
         status=status,
         occurred_at=occurred_at or datetime.now(UTC),
+        url=url,
+        blocked_status=blocked_status,
     )
     session.add(row)
     await session.flush()
@@ -275,6 +282,124 @@ async def test_list_failures_default_status_open_excludes_resolved(
         await _delete_failures(
             db_session, ingestion_ids=[open_row.id, resolved_row.id], scoring_ids=[]
         )
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_list_failures_status_abandoned_is_filterable(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    connector = f"justjoinit-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    open_row = await _seed_ingestion_failure(
+        db_session, source_id=source_id, dedup_key=f"source:{source_id}:open"
+    )
+    abandoned_row = await _seed_ingestion_failure(
+        db_session,
+        source_id=source_id,
+        dedup_key=f"source:{source_id}:abandoned",
+        failure_type="detail_fetch_blocked",
+        status="abandoned",
+    )
+    await db_session.commit()
+
+    try:
+        default_response = await client.get("/failures/ingestion", params={"source": connector})
+        default_ids = {item["id"] for item in default_response.json()["items"]}
+        assert default_ids == {open_row.id}
+
+        abandoned_response = await client.get(
+            "/failures/ingestion", params={"source": connector, "status": "abandoned"}
+        )
+        abandoned_body = abandoned_response.json()
+        assert [item["id"] for item in abandoned_body["items"]] == [abandoned_row.id]
+
+        all_response = await client.get(
+            "/failures/ingestion", params={"source": connector, "status": "all"}
+        )
+        all_ids = {item["id"] for item in all_response.json()["items"]}
+        assert all_ids == {open_row.id, abandoned_row.id}
+    finally:
+        await _delete_failures(
+            db_session, ingestion_ids=[open_row.id, abandoned_row.id], scoring_ids=[]
+        )
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_retry_detail_fetch_blocked_success_persists_offer_and_resolves(
+    client: httpx.AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connector = f"fake-detail-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    blocked_url = _unique_url("blocked")
+    row = await _seed_ingestion_failure(
+        db_session,
+        source_id=source_id,
+        dedup_key=f"source:{source_id}:detail_url:test",
+        failure_type="detail_fetch_blocked",
+        error_message="blocked: HTTP 403",
+        url=blocked_url,
+        blocked_status=403,
+    )
+    await db_session.commit()
+
+    detail_retry = AsyncMock(return_value=True)
+    fake_spec = SimpleNamespace(detail_retry=detail_retry)
+    monkeypatch.setattr(dlq_retry_module, "CONNECTOR_REGISTRY", {connector: fake_spec})
+
+    try:
+        response = await client.post(f"/failures/ingestion/{row.id}/retry")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "resolved"
+        detail_retry.assert_awaited_once()
+        assert detail_retry.call_args.args[2] == blocked_url
+
+        await db_session.refresh(row)
+        assert row.status == "resolved"
+    finally:
+        await _delete_failures(db_session, ingestion_ids=[row.id], scoring_ids=[])
+        await _delete_sources_with_offers(db_session, [source_id])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_retry_detail_fetch_blocked_still_blocked_stays_open_with_incremented_error(
+    client: httpx.AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connector = f"fake-detail-{uuid4()}"
+    source_id = await _create_source(db_session, connector=connector)
+    blocked_url = _unique_url("blocked")
+    row = await _seed_ingestion_failure(
+        db_session,
+        source_id=source_id,
+        dedup_key=f"source:{source_id}:detail_url:test",
+        failure_type="detail_fetch_blocked",
+        error_message="blocked: HTTP 403",
+        url=blocked_url,
+        blocked_status=403,
+    )
+    await db_session.commit()
+
+    async def _still_blocked(session: Any, source: Any, url: str) -> bool:
+        raise BlockedFetchError(403)
+
+    fake_spec = SimpleNamespace(detail_retry=_still_blocked)
+    monkeypatch.setattr(dlq_retry_module, "CONNECTOR_REGISTRY", {connector: fake_spec})
+
+    try:
+        response = await client.post(f"/failures/ingestion/{row.id}/retry")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "open"
+        assert "403" in body["error_message"]
+    finally:
+        await _delete_failures(db_session, ingestion_ids=[row.id], scoring_ids=[])
         await _delete_sources_with_offers(db_session, [source_id])
 
 

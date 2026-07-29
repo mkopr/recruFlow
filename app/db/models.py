@@ -186,6 +186,7 @@ class IngestionFailure(DeadLetterMixin, Base):
     __tablename__ = "ingestion_failures"
     __table_args__ = (
         Index("ix_ingestion_failures_source_id_occurred_at", "source_id", "occurred_at"),
+        Index("ix_ingestion_failures_status_blocked_status", "status", "blocked_status"),
     )
 
     source_id: Mapped[int] = mapped_column(Integer, ForeignKey("sources.id"), nullable=False)
@@ -193,6 +194,9 @@ class IngestionFailure(DeadLetterMixin, Base):
         Integer, ForeignKey("scheduler_runs.id"), nullable=True
     )
     page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    blocked_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
 
 class ScoringFailure(DeadLetterMixin, Base):

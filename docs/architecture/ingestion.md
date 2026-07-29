@@ -594,21 +594,33 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   `sjctl evaluate` scoring path left uncovered.
 - **`DeadLetterMixin`** (`app/db/models.py`): `id`, `dedup_key` (`String(255)`, unique per table),
   `failure_type` (`String(30)`), `error_message` (`Text`), `raw_payload` (`JSONB`, nullable),
-  `status` (`String(20)`, `"open"`/`"resolved"`, plain string per this repo's no-DB-enum
-  convention), `occurred_at` (`DateTime(timezone=True)`, last-occurrence timestamp), `resolved_at`
-  (nullable). `IngestionFailure` (`ingestion_failures`) adds `source_id` (FK `sources.id`),
+  `status` (`String(20)`, `"open"`/`"resolved"`/`"abandoned"` — see "Automatic 403/429 retry"
+  below for the third value — plain string per this repo's no-DB-enum convention), `occurred_at`
+  (`DateTime(timezone=True)`, last-occurrence timestamp), `resolved_at` (nullable).
+  `IngestionFailure` (`ingestion_failures`) adds `source_id` (FK `sources.id`),
   `scheduler_run_id` (FK `scheduler_runs.id`, nullable — null for manually-triggered failures,
-  per ADR 0006), `page` (nullable). `ScoringFailure` (`scoring_failures`) adds `offer_id` (FK
-  `offers.id`), `profile_id` (FK `profiles.id`). Each gets a composite index mirroring
-  `scheduler_runs`' `(source_id, started_at)` convention: `(source_id, occurred_at)` and
-  `(offer_id, occurred_at)` respectively. Migration: `7130773ba67b_dead_letter_queues`.
+  per ADR 0006), `page` (nullable), and (US49) `url` (`Text`, nullable — the specific posting URL
+  a per-URL detail-fetch failure was recorded for), `blocked_status` (`Integer`, nullable — the
+  HTTP status, always `403` or `429`, of a block-shaped fetch failure; `NULL` for every other
+  failure shape), `retry_count` (`Integer`, `server_default="0"` — attempts spent by the
+  automatic `dlq:retry_403` job specifically, not manual retries via `/failures`). `ScoringFailure`
+  (`scoring_failures`) adds `offer_id` (FK `offers.id`), `profile_id` (FK `profiles.id`) — none of
+  US49's new columns apply to scoring failures. Each ingestion-failure table gets a composite
+  index mirroring `scheduler_runs`' `(source_id, started_at)` convention: `(source_id,
+  occurred_at)`, plus (US49) `(status, blocked_status)` for the retry job's selection query;
+  `scoring_failures` keeps its own `(offer_id, occurred_at)` index. Migrations:
+  `7130773ba67b_dead_letter_queues`, `a1c2d4e6f8b0_detail_fetch_blocked_dlq`.
 - **One row per resource, not one row per occurrence** — see
   `docs/adr/0016-dead-letter-rows-are-mutable-per-resource-not-append-only.md`. `dedup_key`
   identifies the failing *resource*: the job posting's `canonical_url` for `validation_failed`
   (falling back to `source_id:title:company` when `canonical_url` itself is missing/invalid);
   `source:{source_id}` for `page_fetch_failed` and `run_fetch_failed` — these two share one row
   per source, since page position isn't a stable identity across retries; `offer:{offer_id}:profile:{profile_id}`
-  for `scoring_failed`. A recurring failure re-opens and updates the existing row in place
+  for `scoring_failed`; (US49) `source:{source_id}:detail_url:{sha256(url)}` for
+  `detail_fetch_blocked` — a raw posting URL isn't guaranteed to fit `String(255)`, so it's
+  hashed (`app.dlq.service.build_detail_url_dedup_key`) rather than embedded directly, and it's
+  per-*source-and-URL* (not just per-URL) so the same posting URL colliding across two sources
+  can never collide on one row. A recurring failure re-opens and updates the existing row in place
   (`status="open"`, `resolved_at=NULL`, fresh `error_message`/`occurred_at`) rather than
   appending a sibling row.
 - **`app/dlq/service.py`**: `record_failure(session, model_cls, *, dedup_key, **fields) -> None`
@@ -634,7 +646,7 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   second `if process ==` branch. A future process (e.g. Phase 4/5's send queue) is one more
   registry entry — the route body is unchanged.
 - **`app/dlq/retry.py`**: `RETRY_HANDLERS: dict[str, RetryHandler]`, keyed by `failure_type`
-  (flat across both tables, since the four `failure_type` strings are globally unique) rather
+  (flat across both tables, since the five `failure_type` strings are globally unique) rather
   than by process, because retry mechanics differ per failure type, not per table.
   `validation_failed` re-runs `Offer.model_validate(row.raw_payload)` then `persist_offer` on
   success. `scoring_failed` re-runs `score_offer_with_langchain(...)` then adds a `MatchScore`
@@ -645,11 +657,20 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   failure from the re-triggered ingestion lands on this exact row via the ordinary
   `record_failure` upsert (in a *different* session, since `trigger_ingest` owns its own
   engine/session lifecycle) — `perform_retry` calls `session.refresh(row)` afterward to pick that
-  up rather than trusting its own possibly-stale copy. `perform_retry(session, row)` is the
-  shared success/failure envelope: on success, sets `status="resolved"` + `resolved_at`; on
-  failure, either the handler already updated `row` in place (validation/scoring) or a refresh
-  picks up the externally-recorded update (fetch failures); either way it commits.
-- **Five write call sites**: `normalize_and_validate` (`app/ingestion/persist.py`, now
+  up rather than trusting its own possibly-stale copy. (US49) `detail_fetch_blocked`'s
+  `_retry_detail_fetch_blocked` is the one finer-grained exception to "retry means re-run the
+  whole source": it looks up the row's `source_id`, dispatches through
+  `CONNECTOR_REGISTRY[source.connector].detail_retry(session, source, row.url)` — set only for
+  Bulldogjob/Rocket Jobs/Pracuj.pl (see below) — which re-fetches and persists exactly that one
+  URL. A `None` `row.url` (shouldn't happen in practice, but the column is nullable) or a
+  `BlockedFetchError` raised by the retry itself both call `_mark_still_failing(row, ...)`
+  directly (unlike the two handlers above, this failure type's dedup key is already unique per
+  URL, so there's no separate session whose upsert would otherwise race this one) and return
+  `False`. `perform_retry(session, row)` is the shared success/failure envelope: on success, sets
+  `status="resolved"` + `resolved_at`; on failure, either the handler already updated `row` in
+  place (validation/scoring/detail-blocked) or a refresh picks up the externally-recorded update
+  (fetch failures); either way it commits.
+- **Six write call sites**: `normalize_and_validate` (`app/ingestion/persist.py`, now
   `async` and takes a leading `session` param) records `validation_failed` before returning
   `None`; `run_paginated_ingestion` (`app/ingestion/runner.py`) records `page_fetch_failed` when
   a page after the first returns `None`; `app/scheduler/service.py`'s `on_success` and
@@ -660,7 +681,94 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   `scheduler_runs`' own status/warning semantics left completely untouched (`finish_run_ok`'s
   call is unchanged — a `run_fetch_failed` row is additive, not a replacement audit trail).
   `score_offers_with_langchain` (`app/llm/matcher.py`) records `scoring_failed` in its existing
-  `except MatcherError` branch before continuing to the next offer.
+  `except MatcherError` branch before continuing to the next offer. (US49) `SitemapDetailPageConnector._run_over_urls`
+  (`app/connectors/sitemap_detail.py`, shared by Bulldogjob/Rocket Jobs) and `PracujConnector.run`
+  (`app/connectors/pracuj.py`) both accumulate a `blocked: list[tuple[str, int]]` out-param
+  through their per-URL detail-fetch loop and, once the run's own `run_paginated_ingestion` call
+  returns, record one `detail_fetch_blocked` row per `(url, status)` pair.
+
+#### Block-shaped fetch failures (403/429) and the automatic `dlq:retry_403` retry job
+
+- **Purpose**: confirmed live 2026-07-29, Rocket Jobs' detail-page fetch was failing 210/210
+  (100%) with `403 Forbidden` and producing zero new offers for over a day, with nothing
+  recording, surfacing, or retrying it — a failed detail fetch was (and for every *other*
+  connector still is, for a non-block failure) just a logged-and-dropped `continue`. This adds a
+  way to tell a bot-block apart from an ordinary transient failure, record the block-shaped ones
+  durably, and automatically retry them later — after a cooldown, via a fresh proxy/context, not
+  inline in the same run (BUG43 found a fresh context/IP, not elapsed time within the same run,
+  is what clears this operator's Cloudflare Managed Challenge).
+- **`BlockedFetchError`** (`app/connectors/http.py`): raised by `_get` (and therefore every one
+  of its four thin wrappers — `fetch_json`/`fetch_xml`/`fetch_gzip_xml`/`fetch_text` — propagate
+  it unchanged, none of them catch it) when the *last* of its `_MAX_PROXY_ATTEMPTS` proxy-rotated
+  attempts failed with an HTTP 403 or 429 specifically (`httpx.HTTPStatusError`, distinguished
+  from the generic `httpx.HTTPError` catch that still just returns `None`). Every other failure
+  shape — timeout, connection error, 5xx, malformed response, or an *earlier* attempt's 403 that a
+  later attempt recovers from — is completely unchanged: still returns `None`, never raises.
+  `SitemapDetailPageConnector._fetch_detail_html` (its own duplicated httpx retry loop, not
+  routed through `_get`) and `PracujConnector`'s Playwright-driven `_fetch_rendered_page` /
+  `_fetch_html_with_proxy_rotation` got the identical treatment, so all three detail-page-fetch
+  connectors (Bulldogjob, Rocket Jobs, Pracuj.pl) raise the same exception for the same shape of
+  failure regardless of transport. `_fetch_rendered_page`'s known limitation: a *200-status*
+  Cloudflare challenge page (`_is_challenge_page`) is deliberately **not** treated as a block for
+  this purpose — only status-code-based 403/429 is in scope.
+- **`IngestionResult.blocked_status: int | None`** (`app/ingestion/types.py`) threads the status
+  code up through every bulk connector's single interception point,
+  `run_paginated_ingestion`'s `await asyncio.to_thread(fetch_page, ...)` call
+  (`app/ingestion/runner.py`) — catching `BlockedFetchError` there and passing `blocked_status`
+  through to both the `page_index == 0` `IngestionResult` and the later-page `record_failure`
+  call is what gives SOLID.Jobs/JustJoin.it/NoFluffJobs/RemoteOK/Remotive/We Work Remotely
+  block-status tagging on their existing `page_fetch_failed`/`run_fetch_failed` rows with **zero
+  per-connector code changes** — they all already funnel through this one call site.
+  `record_run_fetch_failure` (`app/ingestion/lifecycle.py`) forwards `result.blocked_status` onto
+  `run_fetch_failed` rows the same optional way it already forwards `scheduler_run_id`. This is
+  purely a *tag* on the existing whole-source failure rows for these six connectors — it changes
+  nothing about when or whether the row is written, matching the story's explicit scope
+  boundary: only the three detail-page connectors get the new per-URL mechanism below.
+- **Per-URL retry for the three detail-page connectors**: `JobBoardConnector.supports_detail_retry() -> bool`
+  (default `False`) and `async def retry_detail_fetch(session, source, url) -> bool` (default
+  raises `NotImplementedError`) are two more `base.py` hooks in the same default-then-override
+  shape as `supports_fetch_scope`/`apply_fetch_scope_term`. `SitemapDetailPageConnector` and
+  `PracujConnector` both override them: `retry_detail_fetch` re-fetches the one URL (via
+  `asyncio.to_thread` for the sitemap-detail connectors' synchronous httpx call — required per
+  BUG42, since this retry job's tick runs on the app's own event loop, not a per-connector worker
+  thread; via a fresh single-use Playwright browser for Pracuj.pl), parses it, and on success
+  calls `normalize_and_validate` + `persist_offer` directly — the same two-step `ingest_offer`
+  does, but split so a validation failure and a persist can both be observed by the caller as a
+  plain `bool`. `ConnectorSpec.detail_retry: DetailRetry | None` (`app/ingestion/registry.py`) is
+  wired to exactly these three specs (Bulldogjob, Rocket Jobs, Pracuj.pl); every other spec
+  leaves it `None`.
+- **`app/dlq/retry.py::run_detail_retry_batch(session, *, min_age_seconds, max_attempts) -> DetailRetrySummary`**:
+  one tick of the job. Selects every `IngestionFailure` row with `status="open"`,
+  `blocked_status IS NOT NULL`, and `occurred_at` older than `min_age_seconds` —
+  **deliberately not filtered by `failure_type`**: an open, sufficiently-old, block-tagged row is
+  eligible regardless of whether it's the new per-URL `detail_fetch_blocked` (dispatches to
+  `_retry_detail_fetch_blocked`) or one of the six bulk connectors' now-tagged
+  `page_fetch_failed`/`run_fetch_failed` rows (dispatches to the existing whole-source
+  `_retry_fetch_failed`) — `perform_retry`'s existing `failure_type`-keyed dispatch already
+  handles that branching, so the selection query doesn't need to. A row already at
+  `retry_count >= max_attempts` is flipped straight to `status="abandoned"` without spending
+  another attempt (still visible/manually-retryable via `/failures`, just no longer picked up
+  here); otherwise `retry_count` is incremented and `perform_retry` is called (which commits
+  internally, so this function never double-commits). `DetailRetrySummary` (frozen dataclass:
+  `attempted`/`resolved`/`still_blocked`/`abandoned`) is the per-tick return value logged by the
+  job.
+- **`dlq:retry_403` scheduled job**: mirrors BUG24's `scoring:backlog` job exactly —
+  `DETAIL_RETRY_JOB_ID = "dlq:retry_403"`, `register_detail_retry_job(scheduler, *,
+  interval_seconds)` (`app/scheduler/lifecycle.py`) registers `run_detail_retry_job`
+  (`app/scheduler/service.py`) directly as a coroutine (not the sync-wrapper-plus-thread-pool
+  pattern connector runs use) with `IntervalTrigger`, `max_instances=1`, `coalesce=True`,
+  `replace_existing=True`, so a slow tick chains into the next instead of overlapping. Owns its
+  own `get_engine()`/`get_sessionmaker(engine)`/session lifecycle per tick, exactly like
+  `run_scoring_job`. Registered in `app/main.py`'s `lifespan` alongside `register_jobs`/
+  `register_scoring_job`. Three new `Settings` fields (`app/config.py`):
+  `detail_retry_job_interval_seconds` (default `300`, the job's own poll cadence),
+  `detail_retry_min_age_seconds` (default `1800` — the cooldown before an open blocked row is
+  even eligible, giving a source's next few ordinary ingestion cycles a chance to pass first),
+  `detail_retry_max_attempts` (default `5`).
+- **Visibility**: no new UI — `GET /failures/ingestion` and `POST /failures/ingestion/{id}/retry`
+  work unchanged against `detail_fetch_blocked` rows and the new `status="abandoned"` value
+  (`Literal["open", "resolved", "abandoned", "all"]` on the route's `status` query param); a
+  count shown anywhere stays a bare number per this project's minimal-numeric-UI convention.
 - **`GET /failures/{process}`** (`app/api/routes/failures.py`): `process` is a plain `str` path
   param (not a `Literal`), so an unregistered value reaches the handler body and produces a `404`
   via registry lookup rather than FastAPI's own `422` — mirroring `UnknownConnectorError`'s
@@ -669,7 +777,8 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   `Source.connector`, using a `_NO_MATCHING_SOURCE_ID = -1` sentinel for an unknown connector —
   same pattern as `GET /offers`' `_NO_ACTIVE_PROFILE_ID`, so an unrecognized filter value returns
   an empty page rather than an unfiltered one or an error. `status` defaults to `"open"`
-  (`"resolved"`/`"all"` also accepted) rather than showing every historical row by default. A
+  (`"resolved"`/`"abandoned"`/`"all"` also accepted — `"abandoned"` added by US49, see below) rather
+  than showing every historical row by default. A
   filter param outside the target process's `spec.filterable_params` (e.g. `offer_id` on
   `/failures/ingestion`) is a `400`, not silently ignored — `source`/`offer_id`/`profile_id`
   stay declared on the route signature for OpenAPI/Swagger discoverability, but which ones are

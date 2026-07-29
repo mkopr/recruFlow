@@ -13,9 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.connectors.base import JobBoardConnector
 from app.connectors.fingerprint import FingerprintPool
+from app.connectors.http import BlockedFetchError
 from app.connectors.proxy_pool import ProxyPool
 from app.db.models import IngestionFailure, Source
-from app.dlq.service import record_failure
+from app.dlq.service import build_detail_url_dedup_key, record_failure
 from app.dlq.types import FailureType
 from app.ingestion.fetch_scope import resolve_fetch_scope_terms
 from app.ingestion.normalize import (
@@ -25,6 +26,7 @@ from app.ingestion.normalize import (
     normalize_seniority,
     to_int,
 )
+from app.ingestion.persist import normalize_and_validate, persist_offer
 from app.ingestion.runner import resolve_fetch_range, run_paginated_ingestion
 from app.ingestion.types import IngestionResult
 
@@ -64,9 +66,17 @@ def _is_challenge_page(html: str) -> bool:
 
 async def _fetch_rendered_page(page: Page, url: str, *, timeout: float = 15.0) -> str | None:
     """Navigate `page` to `url` and return its rendered HTML, or `None` on any failure --
-    transport error, timeout, non-2xx status, or a Cloudflare Managed Challenge page in place
-    of real content. Same failure contract as `app/connectors/http.py`'s `fetch_text`/
-    `fetch_json`: log via `exc_info=True`, return `None`, never raise.
+    transport error, timeout, non-2xx status other than 403/429, or a Cloudflare Managed
+    Challenge page in place of real content. Same failure contract as
+    `app/connectors/http.py`'s `fetch_text`/`fetch_json` for those cases: log via
+    `exc_info=True`, return `None`, never raise.
+
+    The one exception: a 403 or 429 status raises `BlockedFetchError` instead of returning
+    `None`, so callers collecting bot-block failures for later retry (see `_collect_offers`/
+    `_fetch_offer_details`) can tell a block apart from an ordinary transient failure. Known
+    limitation: a *200-status* Cloudflare challenge page (`_is_challenge_page`) is NOT treated
+    as a block for this purpose -- this story's scope is status-code-based (403/429) only, so
+    a challenge page that returns 200 still just returns `None` here, same as before.
     """
     try:
         resp = await page.goto(url, timeout=timeout * 1000, wait_until="domcontentloaded")
@@ -80,6 +90,8 @@ async def _fetch_rendered_page(page: Page, url: str, *, timeout: float = 15.0) -
 
     if resp.status >= 400:
         logger.error("failed to fetch Pracuj.pl page: url=%r status=%r", url, resp.status)
+        if resp.status in (403, 429):
+            raise BlockedFetchError(resp.status)
         return None
     if _is_challenge_page(html):
         logger.error("Pracuj.pl challenge page encountered: url=%r", url)
@@ -143,6 +155,7 @@ async def _fetch_offer_details(
     candidate_urls: list[str],
     *,
     collected: list[dict[str, Any]],
+    blocked: list[tuple[str, int]],
     total_cap: int,
     rate_limit_delay_seconds: float,
 ) -> None:
@@ -157,13 +170,22 @@ async def _fetch_offer_details(
     transient hiccup (confirmed live: 25/25 fresh-context detail fetches succeeded in a row) as
     a real block, so skipping it and continuing gets far more of an already-fetched listing
     page's offers collected per run instead of throwing all of them away.
+
+    A `BlockedFetchError` (fetch_html's every proxy-rotated attempt terminating in a 403/429)
+    is appended to `blocked` in place as `(url, status_code)` and otherwise treated the same as
+    a `None` result -- skip this URL, keep going -- so a single block doesn't abort the page
+    either; the caller records these for later automatic retry.
     """
     for detail_url in candidate_urls:
         if len(collected) >= total_cap:
             return
 
         await asyncio.sleep(rate_limit_delay_seconds)
-        detail_html = await fetch_html(detail_url)
+        try:
+            detail_html = await fetch_html(detail_url)
+        except BlockedFetchError as exc:
+            blocked.append((detail_url, exc.status_code))
+            continue
         if detail_html is None:
             continue
 
@@ -181,7 +203,8 @@ async def _collect_offers(
     page_size: int,
     max_pages: int,
     rate_limit_delay_seconds: float,
-) -> tuple[list[dict[str, Any]], bool, bool, int]:
+    blocked: list[tuple[str, int]],
+) -> tuple[list[dict[str, Any]], bool, bool, int, int | None]:
     """Enumerate offer URLs from Pracuj.pl's keyword-filtered search listing (`;kw`, applying
     `category_filter` at enumeration time -- Pracuj.pl's own published sitemap
     (`SiteMaps/CurrentOffers/SiteMapIndexJobOffers.xml`, robots.txt-listed) was found live
@@ -196,18 +219,26 @@ async def _collect_offers(
     deduped-away the same first `page_size * max_pages` listings forever, never reaching the
     rest of the category's results.
 
-    Returns `(offers, enumeration_ok, mid_run_failure, next_start_page)`. `enumeration_ok=False`
-    means the first listing-page fetch itself failed -- `run` maps this straight to
-    `IngestionResult(ok=False, ...)`, and `next_start_page` is meaningless in that case.
-    `mid_run_failure=True` means a *later listing-page* fetch failed after that (page 2+ of this
-    run) -- unlike an individual detail fetch (see `_fetch_offer_details`'s docstring),
+    Returns `(offers, enumeration_ok, mid_run_failure, next_start_page, listing_blocked_status)`.
+    `enumeration_ok=False` means the first listing-page fetch itself failed -- `run` maps this
+    straight to `IngestionResult(ok=False, ...)`, and `next_start_page` is meaningless in that
+    case. `mid_run_failure=True` means a *later listing-page* fetch failed after that (page 2+
+    of this run) -- unlike an individual detail fetch (see `_fetch_offer_details`'s docstring),
     losing the listing page itself means there's no way to know what the rest of that page's
     offer URLs even were, so collection stops there rather than guessing; whatever was already
     collected is still returned so it gets persisted, and `next_start_page` points back at the
     page that failed so the next run retries it rather than skipping past unseen listings.
     `next_start_page` is `1` (wrap for a fresh pass) when an empty or short page proved the
     listing is genuinely exhausted, or `start_page`+pages-actually-consumed otherwise (the
-    listing has more pages this run didn't get to yet).
+    listing has more pages this run didn't get to yet). `listing_blocked_status` is the HTTP
+    status (403/429) of a listing-page fetch that failed via `BlockedFetchError`, or `None` if
+    the listing-page failure (if any) wasn't block-shaped.
+
+    `blocked` is an out-param (like `_fetch_offer_details`'s `collected`) that every blocked
+    detail-fetch URL and status is appended to in place -- threaded all the way down from
+    `run`, through `_enumerate_pracuj_offers`, so one list accumulates every block across
+    however many listing pages/terms this call chain walks, rather than each layer merging its
+    own separately-returned list.
     """
     collected: list[dict[str, Any]] = []
     total_cap = page_size * max_pages
@@ -221,14 +252,20 @@ async def _collect_offers(
         if listing_page_num > start_page:
             await asyncio.sleep(rate_limit_delay_seconds)
         listing_url = f"{listing_url_base}?pn={listing_page_num}&rop={page_size}"
-        grouped = await _fetch_listing_page(fetch_html, listing_url)
+        try:
+            grouped = await _fetch_listing_page(fetch_html, listing_url)
+            listing_blocked_status: int | None = None
+        except BlockedFetchError as exc:
+            grouped = None
+            listing_blocked_status = exc.status_code
         if grouped is None:
             if listing_page_num == start_page:
-                return [], False, False, start_page
-            return collected, True, True, listing_page_num
+                return [], False, False, start_page, listing_blocked_status
+            return collected, True, True, listing_page_num, listing_blocked_status
 
         if not grouped:
-            return collected, True, False, 1  # empty page -- clean end, wrap for next pass
+            # empty page -- clean end, wrap for next pass
+            return collected, True, False, 1, None
 
         candidate_urls = [
             sub_offer["offerAbsoluteUri"]
@@ -242,15 +279,16 @@ async def _collect_offers(
             fetch_html,
             candidate_urls,
             collected=collected,
+            blocked=blocked,
             total_cap=total_cap,
             rate_limit_delay_seconds=rate_limit_delay_seconds,
         )
 
         last_page_num = listing_page_num
         if len(grouped) < page_size:
-            return collected, True, False, 1  # short page -- reached the end, wrap
+            return collected, True, False, 1, None  # short page -- reached the end, wrap
 
-    return collected, True, False, last_page_num + 1
+    return collected, True, False, last_page_num + 1, None
 
 
 def _pick_monthly_salary(
@@ -299,6 +337,7 @@ async def _fetch_html_with_proxy_rotation(browser: Browser, url: str) -> str | N
     resets that budget without the much higher cost of relaunching the whole browser process
     for every page/offer.
     """
+    last_blocked_status: int | None = None
     for attempt in range(1, _MAX_PROXY_ATTEMPTS + 1):
         proxy = _proxy_pool.get_proxy(logger)
         if proxy is None:
@@ -313,7 +352,12 @@ async def _fetch_html_with_proxy_rotation(browser: Browser, url: str) -> str | N
         )
         try:
             page = await context.new_page()
-            html = await _fetch_rendered_page(page, url)
+            try:
+                html = await _fetch_rendered_page(page, url)
+                last_blocked_status = None
+            except BlockedFetchError as exc:
+                html = None
+                last_blocked_status = exc.status_code
         finally:
             await context.close()
 
@@ -326,6 +370,8 @@ async def _fetch_html_with_proxy_rotation(browser: Browser, url: str) -> str | N
             _MAX_PROXY_ATTEMPTS,
             url,
         )
+    if last_blocked_status is not None:
+        raise BlockedFetchError(last_blocked_status)
     return None
 
 
@@ -338,10 +384,17 @@ async def _enumerate_pracuj_offers(
     page_size: int,
     max_pages: int,
     rate_limit_delay_seconds: float,
-) -> tuple[list[dict[str, Any]], bool, bool, int | None]:
+    blocked: list[tuple[str, int]],
+) -> tuple[list[dict[str, Any]], bool, bool, int | None, int | None]:
     """Dispatches to `_collect_offers` either once (unfiltered, resuming from `start_page`) or
     once per filtered term (each restarting at page 1, merging results) -- see `run`'s
     `next_start_page` handling for why only the unfiltered path returns a resumable cursor.
+
+    `blocked` is forwarded unchanged into every `_collect_offers` call (see that function's
+    docstring) so one list accumulates every blocked detail-fetch URL across every term.
+    `listing_blocked_status` in the return tuple is `_collect_offers`'s own value for the
+    unfiltered path, or the last non-`None` value seen across terms for the filtered path --
+    precision beyond "a listing-page block happened somewhere in this run" isn't needed here.
     """
 
     async def fetch_html(url: str) -> str | None:
@@ -355,6 +408,7 @@ async def _enumerate_pracuj_offers(
             page_size=page_size,
             max_pages=max_pages,
             rate_limit_delay_seconds=rate_limit_delay_seconds,
+            blocked=blocked,
         )
 
     # Filtered runs don't participate in the listing_page_cursor resumption -- always
@@ -363,12 +417,14 @@ async def _enumerate_pracuj_offers(
     offers: list[dict[str, Any]] = []
     enumeration_ok = False
     mid_run_failure = False
+    listing_blocked_status: int | None = None
     for term in filtered_terms:
         (
             term_offers,
             term_enumeration_ok,
             term_mid_run_failure,
             _term_next_start_page,
+            term_listing_blocked_status,
         ) = await _collect_offers(
             fetch_html,
             category_filter=term,
@@ -376,13 +432,16 @@ async def _enumerate_pracuj_offers(
             page_size=page_size,
             max_pages=max_pages,
             rate_limit_delay_seconds=rate_limit_delay_seconds,
+            blocked=blocked,
         )
         # Cross-term duplicate detail records are harmless -- ingest_offer's canonical-URL
         # dedup collapses them at persist time.
         offers.extend(term_offers)
         enumeration_ok = enumeration_ok or term_enumeration_ok
         mid_run_failure = mid_run_failure or term_mid_run_failure
-    return offers, enumeration_ok, mid_run_failure, None
+        if term_listing_blocked_status is not None:
+            listing_blocked_status = term_listing_blocked_status
+    return offers, enumeration_ok, mid_run_failure, None, listing_blocked_status
 
 
 class PracujConnector(JobBoardConnector):
@@ -518,6 +577,7 @@ class PracujConnector(JobBoardConnector):
             )
         filtered_terms = scope_resolution.terms  # empty means mode == "all", unchanged behavior
 
+        blocked: list[tuple[str, int]] = []
         async with async_playwright() as playwright:
             # A per-context `proxy` override (see `_fetch_html_with_proxy_rotation`) is
             # silently ignored on Chromium/Windows unless the browser itself is launched with
@@ -532,6 +592,7 @@ class PracujConnector(JobBoardConnector):
                     enumeration_ok,
                     mid_run_failure,
                     next_start_page,
+                    listing_blocked_status,
                 ) = await _enumerate_pracuj_offers(
                     browser,
                     filtered_terms=filtered_terms,
@@ -540,13 +601,18 @@ class PracujConnector(JobBoardConnector):
                     page_size=page_size,
                     max_pages=max_pages,
                     rate_limit_delay_seconds=rate_limit_delay_seconds,
+                    blocked=blocked,
                 )
             finally:
                 await browser.close()
 
         if not enumeration_ok:
             return IngestionResult(
-                ok=False, fetched=0, created=0, error_message=f"failed to fetch {self.name} offers"
+                ok=False,
+                fetched=0,
+                created=0,
+                error_message=f"failed to fetch {self.name} offers",
+                blocked_status=listing_blocked_status,
             )
 
         if mid_run_failure:
@@ -557,6 +623,7 @@ class PracujConnector(JobBoardConnector):
                 source_id=source.id,
                 failure_type=FailureType.PAGE_FETCH_FAILED,
                 error_message=f"failed to fetch {self.name} page mid-run",
+                blocked_status=listing_blocked_status,
             )
 
         def fetch_page(
@@ -585,6 +652,45 @@ class PracujConnector(JobBoardConnector):
             # (already fully prefetched) listing.
             sorted_by_recency=False,
         )
+        for blocked_url, status_code in blocked:
+            await record_failure(
+                session,
+                IngestionFailure,
+                dedup_key=build_detail_url_dedup_key(source.id, blocked_url),
+                source_id=source.id,
+                url=blocked_url,
+                blocked_status=status_code,
+                failure_type=FailureType.DETAIL_FETCH_BLOCKED,
+                error_message=f"{self.name} detail fetch blocked: HTTP {status_code}",
+            )
         if not filtered_terms:
             source.config_json = {**config, "listing_page_cursor": next_start_page}
         return result
+
+    def supports_detail_retry(self) -> bool:
+        return True
+
+    async def retry_detail_fetch(self, session: AsyncSession, source: Source, url: str) -> bool:
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(
+                headless=True, proxy={"server": "http://per-context"}
+            )
+            try:
+                # Let BlockedFetchError propagate uncaught -- the caller (the DLQ retry
+                # handler) is what decides how a still-blocked row is marked.
+                html = await _fetch_html_with_proxy_rotation(browser, url)
+            finally:
+                await browser.close()
+
+        if html is None:
+            return False
+        detail_data = extract_next_data(html, url=url)
+        offer_record = _dehydrated_query_data(detail_data, "jobOffer") if detail_data else None
+        if not isinstance(offer_record, dict):
+            return False
+        mapped = self.map_offer(source.id, offer_record)
+        offer = await normalize_and_validate(session, mapped)
+        if offer is None:
+            return False
+        await persist_offer(session, offer, offer_record)
+        return True

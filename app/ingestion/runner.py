@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import TypeAdapter, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.connectors.http import BlockedFetchError
 from app.db.models import IngestionFailure
 from app.dlq.service import record_failure
 from app.dlq.types import FailureType
@@ -95,7 +96,12 @@ async def run_paginated_ingestion(  # noqa: C901
         # concurrent request (confirmed live 2026-07-14: the API stopped responding to anything,
         # including `/health`, while a single Bulldogjob run was mid-flight) -- so it runs on a
         # worker thread instead, exactly as if it were any other blocking call.
-        page = await asyncio.to_thread(fetch_page, cursor, page_size)
+        blocked_status: int | None = None
+        try:
+            page = await asyncio.to_thread(fetch_page, cursor, page_size)
+        except BlockedFetchError as exc:
+            blocked_status = exc.status_code
+            page = None
         if page is None:
             if page_index == 0:
                 return IngestionResult(
@@ -103,6 +109,7 @@ async def run_paginated_ingestion(  # noqa: C901
                     fetched=0,
                     created=0,
                     error_message=f"failed to fetch {source_name} offers",
+                    blocked_status=blocked_status,
                 )
             logger.warning("%s pagination stopped early after %d page(s)", source_name, page_index)
             await record_failure(
@@ -113,6 +120,7 @@ async def run_paginated_ingestion(  # noqa: C901
                 failure_type=FailureType.PAGE_FETCH_FAILED,
                 page=page_index,
                 error_message=f"failed to fetch {source_name} page {page_index}",
+                blocked_status=blocked_status,
             )
             break
 

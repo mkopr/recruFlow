@@ -63,6 +63,12 @@ class JobBoardConnector(ABC):
     def apply_fetch_scope_term(self, config: dict[str, Any], term: str) -> dict[str, Any]:
         raise NotImplementedError
 
+    def supports_detail_retry(self) -> bool:
+        return False
+
+    async def retry_detail_fetch(self, session: AsyncSession, source: Source, url: str) -> bool:
+        raise NotImplementedError
+
     def fetch_page(
         self, config: dict[str, Any], cursor: Any, page_size: int
     ) -> tuple[list[dict[str, Any]], Any | None] | None:

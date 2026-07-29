@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from app.connectors import pracuj
+from app.connectors.http import BlockedFetchError
 from app.connectors.pracuj import (
     DEFAULT_RATE_LIMIT_DELAY_SECONDS,
     PRACUJ_HOMEPAGE_URL,
@@ -287,19 +288,27 @@ async def test_collect_offers_applies_category_filter_to_listing_url() -> None:
         requested_urls.append(url)
         return _listing_html([])
 
-    offers, enumeration_ok, mid_run_failure, next_start_page = await _collect_offers(
+    (
+        offers,
+        enumeration_ok,
+        mid_run_failure,
+        next_start_page,
+        listing_blocked_status,
+    ) = await _collect_offers(
         fake_fetch_html,
         category_filter="python developer",
         start_page=1,
         page_size=10,
         max_pages=1,
         rate_limit_delay_seconds=0,
+        blocked=[],
     )
 
     assert offers == []
     assert enumeration_ok is True
     assert mid_run_failure is False
     assert next_start_page == 1
+    assert listing_blocked_status is None
     assert requested_urls == ["https://www.pracuj.pl/praca/python%20developer;kw?pn=1&rop=10"]
 
 
@@ -315,13 +324,20 @@ async def test_collect_offers_fetches_detail_page_per_enumerated_candidate() -> 
             return _detail_html(_MONTHLY_UOP_DETAIL_RECORD)
         raise AssertionError(f"unexpected url: {url}")
 
-    offers, enumeration_ok, mid_run_failure, next_start_page = await _collect_offers(
+    (
+        offers,
+        enumeration_ok,
+        mid_run_failure,
+        next_start_page,
+        listing_blocked_status,
+    ) = await _collect_offers(
         fake_fetch_html,
         category_filter="it",
         start_page=1,
         page_size=10,
         max_pages=1,
         rate_limit_delay_seconds=0,
+        blocked=[],
     )
 
     assert enumeration_ok is True
@@ -330,6 +346,7 @@ async def test_collect_offers_fetches_detail_page_per_enumerated_candidate() -> 
     # Only 1 group on a page_size=10 page -- a short page proves the listing is exhausted, so
     # the next run should wrap back to page 1 rather than resume forward.
     assert next_start_page == 1
+    assert listing_blocked_status is None
 
 
 @pytest.mark.asyncio
@@ -337,19 +354,27 @@ async def test_collect_offers_returns_not_ok_when_first_listing_fetch_fails() ->
     async def fake_fetch_html(url: str) -> str | None:
         return None
 
-    offers, enumeration_ok, mid_run_failure, next_start_page = await _collect_offers(
+    (
+        offers,
+        enumeration_ok,
+        mid_run_failure,
+        next_start_page,
+        listing_blocked_status,
+    ) = await _collect_offers(
         fake_fetch_html,
         category_filter="it",
         start_page=1,
         page_size=10,
         max_pages=1,
         rate_limit_delay_seconds=0,
+        blocked=[],
     )
 
     assert offers == []
     assert enumeration_ok is False
     assert mid_run_failure is False
     assert next_start_page == 1
+    assert listing_blocked_status is None
 
 
 @pytest.mark.asyncio
@@ -383,13 +408,20 @@ async def test_collect_offers_skips_a_single_failed_detail_fetch_and_keeps_going
             return None
         raise AssertionError(f"unexpected url: {url}")
 
-    offers, enumeration_ok, mid_run_failure, next_start_page = await _collect_offers(
+    (
+        offers,
+        enumeration_ok,
+        mid_run_failure,
+        next_start_page,
+        listing_blocked_status,
+    ) = await _collect_offers(
         fake_fetch_html,
         category_filter="it",
         start_page=1,
         page_size=10,
         max_pages=1,
         rate_limit_delay_seconds=0,
+        blocked=[],
     )
 
     assert enumeration_ok is True
@@ -399,6 +431,7 @@ async def test_collect_offers_skips_a_single_failed_detail_fetch_and_keeps_going
     assert offers == [_HOURLY_ONLY_DETAIL_RECORD, _HOURLY_ONLY_DETAIL_RECORD]
     # Short page (3 < page_size=10) -- reached the end, wrap for next pass.
     assert next_start_page == 1
+    assert listing_blocked_status is None
 
 
 @pytest.mark.asyncio
@@ -416,13 +449,20 @@ async def test_collect_offers_resumes_enumeration_from_start_page() -> None:
             return _detail_html(_HOURLY_ONLY_DETAIL_RECORD)
         raise AssertionError(f"unexpected url: {url}")
 
-    offers, enumeration_ok, mid_run_failure, next_start_page = await _collect_offers(
+    (
+        offers,
+        enumeration_ok,
+        mid_run_failure,
+        next_start_page,
+        listing_blocked_status,
+    ) = await _collect_offers(
         fake_fetch_html,
         category_filter="it",
         start_page=3,
         page_size=1,
         max_pages=1,
         rate_limit_delay_seconds=0,
+        blocked=[],
     )
 
     assert enumeration_ok is True
@@ -433,6 +473,7 @@ async def test_collect_offers_resumes_enumeration_from_start_page() -> None:
     # A full (not short) page with max_pages exhausted -- more listings likely remain past this
     # run's window, so the next run should resume forward, not wrap back to page 1.
     assert next_start_page == 4
+    assert listing_blocked_status is None
 
 
 def _fake_sleep() -> Any:
@@ -470,6 +511,7 @@ async def test_rate_limit_delay_is_honoured_between_detail_fetches(
         page_size=10,
         max_pages=1,
         rate_limit_delay_seconds=configured_delay,
+        blocked=[],
     )
 
     assert fake_sleep.calls
@@ -487,8 +529,8 @@ async def test_pracuj_run_returns_not_ok_on_enumeration_failure(
 
     async def _fake_collect_offers(
         fetch_html: Any, **kwargs: Any
-    ) -> tuple[list[Any], bool, bool, int]:
-        return [], False, False, 1
+    ) -> tuple[list[Any], bool, bool, int, int | None]:
+        return [], False, False, 1, None
 
     monkeypatch.setattr(pracuj, "_collect_offers", _fake_collect_offers)
     monkeypatch.setattr(pracuj, "async_playwright", _fake_async_playwright)
@@ -512,8 +554,8 @@ async def test_pracuj_run_delegates_to_run_paginated_ingestion_with_collected_of
 
     async def _fake_collect_offers(
         fetch_html: Any, **kwargs: Any
-    ) -> tuple[list[Any], bool, bool, int]:
-        return [_HOURLY_ONLY_DETAIL_RECORD], True, False, 3
+    ) -> tuple[list[Any], bool, bool, int, int | None]:
+        return [_HOURLY_ONLY_DETAIL_RECORD], True, False, 3, None
 
     monkeypatch.setattr(pracuj, "_collect_offers", _fake_collect_offers)
     monkeypatch.setattr(pracuj, "async_playwright", _fake_async_playwright)
@@ -552,9 +594,9 @@ async def test_pracuj_run_reads_listing_page_cursor_from_config(
 
     async def _fake_collect_offers(
         fetch_html: Any, **kwargs: Any
-    ) -> tuple[list[Any], bool, bool, int]:
+    ) -> tuple[list[Any], bool, bool, int, int | None]:
         captured_collect_kwargs.update(kwargs)
-        return [], True, False, 6
+        return [], True, False, 6, None
 
     monkeypatch.setattr(pracuj, "_collect_offers", _fake_collect_offers)
     monkeypatch.setattr(pracuj, "async_playwright", _fake_async_playwright)
@@ -584,8 +626,8 @@ async def test_pracuj_run_records_failure_on_mid_run_fetch_failure(
 
     async def _fake_collect_offers(
         fetch_html: Any, **kwargs: Any
-    ) -> tuple[list[Any], bool, bool, int]:
-        return [], True, True, 1
+    ) -> tuple[list[Any], bool, bool, int, int | None]:
+        return [], True, True, 1, 429
 
     monkeypatch.setattr(pracuj, "_collect_offers", _fake_collect_offers)
     monkeypatch.setattr(pracuj, "async_playwright", _fake_async_playwright)
@@ -611,6 +653,7 @@ async def test_pracuj_run_records_failure_on_mid_run_fetch_failure(
 
     assert recorded["source_id"] == 7
     assert recorded["dedup_key"] == "source:7"
+    assert recorded["blocked_status"] == 429
 
 
 def test_supports_fetch_scope_is_true() -> None:
@@ -663,9 +706,9 @@ async def test_pracuj_run_filtered_mode_loops_collect_offers_once_per_hard_skill
 
     async def _fake_collect_offers(
         fetch_html: Any, **kwargs: Any
-    ) -> tuple[list[Any], bool, bool, int]:
+    ) -> tuple[list[Any], bool, bool, int, int | None]:
         calls.append(kwargs)
-        return [{"id": kwargs["category_filter"]}], True, False, 1
+        return [{"id": kwargs["category_filter"]}], True, False, 1, None
 
     monkeypatch.setattr(pracuj, "_collect_offers", _fake_collect_offers)
 
@@ -709,6 +752,9 @@ class _FakeContext:
     async def new_page(self) -> _FakePage:
         return _FakePage()
 
+    async def close(self) -> None:
+        return None
+
 
 class _FakeBrowser:
     async def new_context(self, **kwargs: Any) -> _FakeContext:
@@ -750,3 +796,211 @@ def test_httpx_never_referenced_in_pracuj_connector_module() -> None:
             import_names.add(node.module)
 
     assert "httpx" not in import_names
+
+
+class _FakeRenderResp:
+    def __init__(self, status: int, html: str = "<html>ok</html>") -> None:
+        self.status = status
+        self._html = html
+
+    async def text(self) -> str:
+        return self._html
+
+
+class _FakeRenderPage:
+    def __init__(self, resp: _FakeRenderResp | None) -> None:
+        self._resp = resp
+
+    async def goto(self, url: str, **kwargs: Any) -> _FakeRenderResp | None:
+        return self._resp
+
+
+@pytest.mark.asyncio
+async def test_fetch_rendered_page_raises_blocked_fetch_error_on_403() -> None:
+    page = _FakeRenderPage(_FakeRenderResp(403))
+
+    with pytest.raises(BlockedFetchError) as exc_info:
+        await pracuj._fetch_rendered_page(page, "https://example.test")  # type: ignore[arg-type]
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_fetch_rendered_page_raises_blocked_fetch_error_on_429() -> None:
+    page = _FakeRenderPage(_FakeRenderResp(429))
+
+    with pytest.raises(BlockedFetchError) as exc_info:
+        await pracuj._fetch_rendered_page(page, "https://example.test")  # type: ignore[arg-type]
+
+    assert exc_info.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_fetch_rendered_page_returns_none_on_non_block_error_status() -> None:
+    page = _FakeRenderPage(_FakeRenderResp(500))
+
+    result = await pracuj._fetch_rendered_page(page, "https://example.test")  # type: ignore[arg-type]
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_rendered_page_returns_none_on_200_challenge_page_not_treated_as_block() -> (
+    None
+):
+    # Known limitation documented on `_fetch_rendered_page`: a 200-status Cloudflare challenge
+    # page is NOT treated as a block for this story's purposes -- only 403/429 status codes are.
+    page = _FakeRenderPage(_FakeRenderResp(200, html="<html>Just a moment...</html>"))
+
+    result = await pracuj._fetch_rendered_page(page, "https://example.test")  # type: ignore[arg-type]
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_html_with_proxy_rotation_reraises_blocked_only_after_all_attempts_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _always_blocked(page: Any, url: str) -> str | None:
+        raise BlockedFetchError(403)
+
+    monkeypatch.setattr(pracuj, "_fetch_rendered_page", _always_blocked)
+
+    browser = _FakeBrowser()
+
+    with pytest.raises(BlockedFetchError) as exc_info:
+        await pracuj._fetch_html_with_proxy_rotation(
+            browser,  # type: ignore[arg-type]
+            "https://example.test",
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_fetch_html_with_proxy_rotation_returns_html_when_a_later_attempt_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"n": 0}
+
+    async def _blocked_then_ok(page: Any, url: str) -> str | None:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise BlockedFetchError(403)
+        return "<html>ok</html>"
+
+    monkeypatch.setattr(pracuj, "_fetch_rendered_page", _blocked_then_ok)
+
+    browser = _FakeBrowser()
+
+    result = await pracuj._fetch_html_with_proxy_rotation(
+        browser,  # type: ignore[arg-type]
+        "https://example.test",
+    )
+
+    assert result == "<html>ok</html>"
+
+
+@pytest.mark.asyncio
+async def test_fetch_offer_details_appends_blocked_url_and_continues_to_next(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep())
+    blocked_url = "https://www.pracuj.pl/praca/blocked,oferta,1"
+    ok_url = _HOURLY_ONLY_DETAIL_RECORD["attributes"]["offerAbsoluteUrl"]
+    none_url = "https://www.pracuj.pl/praca/none,oferta,2"
+
+    async def fake_fetch_html(url: str) -> str | None:
+        if url == blocked_url:
+            raise BlockedFetchError(429)
+        if url == ok_url:
+            return _detail_html(_HOURLY_ONLY_DETAIL_RECORD)
+        if url == none_url:
+            return None
+        raise AssertionError(f"unexpected url: {url}")
+
+    collected: list[dict[str, Any]] = []
+    blocked: list[tuple[str, int]] = []
+
+    await pracuj._fetch_offer_details(
+        fake_fetch_html,
+        [blocked_url, ok_url, none_url],
+        collected=collected,
+        blocked=blocked,
+        total_cap=10,
+        rate_limit_delay_seconds=0,
+    )
+
+    # The blocked URL neither ends up in `collected` nor aborts the rest of the loop -- the
+    # ordinary `None` result (a non-block failure) still isn't appended to `blocked` either.
+    assert collected == [_HOURLY_ONLY_DETAIL_RECORD]
+    assert blocked == [(blocked_url, 429)]
+
+
+@pytest.mark.asyncio
+async def test_collect_offers_returns_blocked_status_when_first_listing_fetch_is_blocked() -> None:
+    async def fake_fetch_html(url: str) -> str | None:
+        raise BlockedFetchError(403)
+
+    (
+        offers,
+        enumeration_ok,
+        mid_run_failure,
+        next_start_page,
+        listing_blocked_status,
+    ) = await _collect_offers(
+        fake_fetch_html,
+        category_filter="it",
+        start_page=1,
+        page_size=10,
+        max_pages=1,
+        rate_limit_delay_seconds=0,
+        blocked=[],
+    )
+
+    assert offers == []
+    assert enumeration_ok is False
+    assert mid_run_failure is False
+    assert next_start_page == 1
+    assert listing_blocked_status == 403
+
+
+@pytest.mark.asyncio
+async def test_collect_offers_returns_blocked_status_when_mid_run_listing_fetch_is_blocked() -> (
+    None
+):
+    listing_page_1 = "https://www.pracuj.pl/praca/it;kw?pn=1&rop=1"
+    detail_url = _HOURLY_ONLY_DETAIL_RECORD["attributes"]["offerAbsoluteUrl"]
+
+    async def fake_fetch_html(url: str) -> str | None:
+        if url == listing_page_1:
+            return _listing_html([_group(offer_url=detail_url)])
+        if url == detail_url:
+            return _detail_html(_HOURLY_ONLY_DETAIL_RECORD)
+        raise BlockedFetchError(429)  # the page-2 listing fetch
+
+    (
+        offers,
+        enumeration_ok,
+        mid_run_failure,
+        next_start_page,
+        listing_blocked_status,
+    ) = await _collect_offers(
+        fake_fetch_html,
+        category_filter="it",
+        start_page=1,
+        page_size=1,
+        max_pages=2,
+        rate_limit_delay_seconds=0,
+        blocked=[],
+    )
+
+    assert offers == [_HOURLY_ONLY_DETAIL_RECORD]
+    assert enumeration_ok is True
+    assert mid_run_failure is True
+    assert next_start_page == 2
+    assert listing_blocked_status == 429
+
+
+def test_pracuj_supports_detail_retry_is_true() -> None:
+    assert PracujConnector().supports_detail_retry() is True

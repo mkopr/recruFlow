@@ -2,8 +2,10 @@ from typing import Any
 
 import pytest
 from app.connectors import sitemap_detail
+from app.connectors.http import BlockedFetchError
 from app.connectors.sitemap_detail import SitemapDetailPageConnector
 from app.db.models import Source
+from app.dlq.types import FailureType
 from app.ingestion.types import IngestionResult
 
 
@@ -150,3 +152,90 @@ async def test_run_persists_zero_cursor_when_sitemap_fully_walked(
     await connector.run(None, source)  # type: ignore[arg-type]
 
     assert source.config_json["sitemap_cursor"] == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_records_blocked_url_and_continues_when_detail_fetch_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fake_fetch_detail_html(self: Any, url: str) -> str | None:
+        if url == "https://example.test/jobs/1":
+            raise BlockedFetchError(403)
+        return f"<html>{url}</html>"
+
+    monkeypatch.setattr(_FakeSitemapConnector, "_fetch_detail_html", _fake_fetch_detail_html)
+
+    captured: dict[str, Any] = {}
+
+    async def _fake_run_paginated_ingestion(
+        session: Any, source_id: int, **kwargs: Any
+    ) -> IngestionResult:
+        fetch_page = kwargs["fetch_page"]
+        offers, _next_cursor = fetch_page(kwargs["initial_cursor"], kwargs["page_size"])
+        captured["offers"] = offers
+        return IngestionResult(ok=True, fetched=len(offers), created=0)
+
+    monkeypatch.setattr(sitemap_detail, "run_paginated_ingestion", _fake_run_paginated_ingestion)
+
+    recorded: list[dict[str, Any]] = []
+
+    async def _fake_record_failure(session: Any, model_cls: Any, **fields: Any) -> None:
+        recorded.append(fields)
+
+    monkeypatch.setattr(sitemap_detail, "record_failure", _fake_record_failure)
+
+    connector = _FakeSitemapConnector()
+    source = Source(id=1, connector="fake_sitemap", config_json={})
+
+    await connector.run(None, source)  # type: ignore[arg-type]
+
+    # The blocked URL is excluded from the offers that get persisted -- only the other one
+    # made it through.
+    assert captured["offers"] == [
+        {"title": "Backend Engineer", "url": "https://example.test/jobs/2"},
+    ]
+    assert len(recorded) == 1
+    assert recorded[0]["url"] == "https://example.test/jobs/1"
+    assert recorded[0]["blocked_status"] == 403
+    assert recorded[0]["failure_type"] == FailureType.DETAIL_FETCH_BLOCKED
+    assert recorded[0]["source_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_returns_blocked_status_when_sitemap_fetch_itself_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fail(self: Any, config: dict[str, Any]) -> list[str] | None:
+        raise BlockedFetchError(429)
+
+    monkeypatch.setattr(_FakeSitemapConnector, "fetch_sitemap_urls", _fail)
+
+    connector = _FakeSitemapConnector()
+    source = Source(id=1, connector="fake_sitemap", config_json={})
+
+    result = await connector.run(None, source)  # type: ignore[arg-type]
+
+    assert result.ok is False
+    assert result.blocked_status == 429
+
+
+def test_supports_detail_retry_is_true() -> None:
+    assert _FakeSitemapConnector().supports_detail_retry() is True
+
+
+@pytest.mark.asyncio
+async def test_retry_detail_fetch_returns_false_when_html_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_FakeSitemapConnector, "_fetch_detail_html", lambda self, url: None)
+
+    connector = _FakeSitemapConnector()
+    source = Source(id=1, connector="fake_sitemap", config_json={})
+
+    result = await connector.retry_detail_fetch(
+        None,  # type: ignore[arg-type]
+        source,
+        "https://example.test/jobs/1",
+    )
+
+    assert result is False

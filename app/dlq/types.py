@@ -13,3 +13,4 @@ class FailureType(StrEnum):
     PAGE_FETCH_FAILED = "page_fetch_failed"
     RUN_FETCH_FAILED = "run_fetch_failed"
     SCORING_FAILED = "scoring_failed"
+    DETAIL_FETCH_BLOCKED = "detail_fetch_blocked"

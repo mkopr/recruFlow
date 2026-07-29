@@ -11,6 +11,9 @@ class IngestionFailureResponse(BaseModel):
     source_id: int
     scheduler_run_id: int | None
     page: int | None
+    url: str | None
+    blocked_status: int | None
+    retry_count: int
     failure_type: str
     error_message: str
     raw_payload: dict[str, Any] | None

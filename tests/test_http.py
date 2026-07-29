@@ -5,7 +5,7 @@ from typing import Any
 
 import httpx
 import pytest
-from app.connectors.http import fetch_json, fetch_xml
+from app.connectors.http import BlockedFetchError, fetch_json, fetch_xml
 
 from tests.conftest import TEST_USER_AGENT
 
@@ -74,6 +74,70 @@ def test_fetch_json_returns_none_and_logs_on_http_error_status(
 
     assert result is None
     assert any(r.levelno == logging.ERROR for r in caplog.records)
+
+
+def _status_error_response(status_code: int) -> _FakeResponse:
+    request = httpx.Request("GET", "https://example.com/offers")
+    status_error = httpx.HTTPStatusError(
+        "blocked", request=request, response=httpx.Response(status_code, request=request)
+    )
+    return _FakeResponse(status_error=status_error)
+
+
+def test_fetch_json_raises_blocked_fetch_error_on_exhausted_403(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _enable_logger()
+    monkeypatch.setattr(httpx, "get", lambda *a, **kw: _status_error_response(403))
+
+    with caplog.at_level(logging.ERROR, logger="app.connectors.http"):
+        with pytest.raises(BlockedFetchError) as exc_info:
+            fetch_json("https://example.com/offers", source_name="Example", logger=_LOGGER)
+
+    assert exc_info.value.status_code == 403
+
+
+def test_fetch_json_raises_blocked_fetch_error_on_exhausted_429(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _enable_logger()
+    monkeypatch.setattr(httpx, "get", lambda *a, **kw: _status_error_response(429))
+
+    with caplog.at_level(logging.ERROR, logger="app.connectors.http"):
+        with pytest.raises(BlockedFetchError) as exc_info:
+            fetch_json("https://example.com/offers", source_name="Example", logger=_LOGGER)
+
+    assert exc_info.value.status_code == 429
+
+
+def test_fetch_json_returns_none_on_non_block_http_error_status(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _enable_logger()
+    monkeypatch.setattr(httpx, "get", lambda *a, **kw: _status_error_response(500))
+
+    with caplog.at_level(logging.ERROR, logger="app.connectors.http"):
+        result = fetch_json("https://example.com/offers", source_name="Example", logger=_LOGGER)
+
+    assert result is None
+
+
+def test_fetch_json_recovers_if_a_later_attempt_succeeds_after_earlier_403s(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_logger()
+    payload = {"jobs": [{"title": "a"}]}
+    responses = [
+        _status_error_response(403),
+        _status_error_response(403),
+        _FakeResponse(json_data=payload),
+    ]
+    calls = iter(responses)
+    monkeypatch.setattr(httpx, "get", lambda *a, **kw: next(calls))
+
+    result = fetch_json("https://example.com/offers", source_name="Example", logger=_LOGGER)
+
+    assert result == payload
 
 
 def test_fetch_json_returns_none_and_logs_on_malformed_json(

@@ -1,3 +1,4 @@
+import hashlib
 import logging
 from collections.abc import Sequence
 from typing import Any
@@ -9,6 +10,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dlq.types import FailureType
 
 logger = logging.getLogger(__name__)
+
+
+def build_detail_url_dedup_key(source_id: int, url: str) -> str:
+    """Dedup key for a per-URL `DETAIL_FETCH_BLOCKED` row -- one row per failing posting, not
+    per source (see `record_failure`'s docstring). A raw posting URL isn't guaranteed to fit
+    `dedup_key`'s `String(255)` column, so it's hashed rather than embedded directly; sha256's
+    64 hex characters plus the `source:{id}:detail_url:` prefix stay well under that limit.
+    """
+    return f"source:{source_id}:detail_url:{hashlib.sha256(url.encode()).hexdigest()}"
 
 
 async def record_failure(

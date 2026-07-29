@@ -7,3 +7,4 @@ class IngestionResult:
     fetched: int
     created: int
     error_message: str | None = None
+    blocked_status: int | None = None

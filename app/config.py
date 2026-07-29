@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     batch_scoring_limit: int = 50
     scoring_max_concurrency: int = 5
     scoring_job_interval_seconds: int = 60
+    detail_retry_job_interval_seconds: int = 300
+    detail_retry_min_age_seconds: int = 1800
+    detail_retry_max_attempts: int = 5
     app_env: str = "development"
     log_level: str = "INFO"
     api_host: str = "0.0.0.0"

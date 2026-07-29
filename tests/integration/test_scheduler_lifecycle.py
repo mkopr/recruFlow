@@ -7,8 +7,10 @@ from app.db.models import SchedulerRun, Source
 from app.db.session import get_engine, get_sessionmaker
 from app.ingestion.normalize import JUSTJOINIT, NOFLUFFJOBS, SOLID_JOBS
 from app.scheduler.lifecycle import (
+    DETAIL_RETRY_JOB_ID,
     SCORING_JOB_ID,
     build_job_id,
+    register_detail_retry_job,
     register_jobs,
     register_scoring_job,
 )
@@ -43,6 +45,10 @@ async def test_lifespan_registers_one_job_per_builtin_source_with_configured_int
     assert SCORING_JOB_ID in jobs
     assert isinstance(jobs[SCORING_JOB_ID].trigger, IntervalTrigger)
 
+    # The 403/429 detail-fetch retry job is likewise decoupled from any source's own schedule.
+    assert DETAIL_RETRY_JOB_ID in jobs
+    assert isinstance(jobs[DETAIL_RETRY_JOB_ID].trigger, IntervalTrigger)
+
 
 @pytest.mark.integration
 @pytest.mark.asyncio
@@ -52,6 +58,31 @@ async def test_register_scoring_job_uses_the_configured_interval() -> None:
     register_scoring_job(scheduler, interval_seconds=45)
 
     job = scheduler.get_job(SCORING_JOB_ID)
+    assert job is not None
+    assert job.trigger.interval.total_seconds() == 45
+    assert job.max_instances == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_register_detail_retry_job_registers_under_its_own_id() -> None:
+    scheduler = AsyncIOScheduler(timezone="UTC")
+
+    register_detail_retry_job(scheduler, interval_seconds=60)
+
+    job = scheduler.get_job(DETAIL_RETRY_JOB_ID)
+    assert job is not None
+    assert isinstance(job.trigger, IntervalTrigger)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_register_detail_retry_job_uses_the_configured_interval() -> None:
+    scheduler = AsyncIOScheduler(timezone="UTC")
+
+    register_detail_retry_job(scheduler, interval_seconds=45)
+
+    job = scheduler.get_job(DETAIL_RETRY_JOB_ID)
     assert job is not None
     assert job.trigger.interval.total_seconds() == 45
     assert job.max_instances == 1

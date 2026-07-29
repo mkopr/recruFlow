@@ -34,7 +34,7 @@ async def list_failures_route(
     source: str | None = Query(default=None, description="Connector identity (ingestion only)"),
     offer_id: int | None = Query(default=None, description="Offer id (scoring only)"),
     profile_id: int | None = Query(default=None, description="Profile id (scoring only)"),
-    status: Literal["open", "resolved", "all"] = Query(default="open"),
+    status: Literal["open", "resolved", "abandoned", "all"] = Query(default="open"),
     limit: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     offset: int = Query(default=0, ge=0),
 ) -> IngestionFailureListResponse | ScoringFailureListResponse:
