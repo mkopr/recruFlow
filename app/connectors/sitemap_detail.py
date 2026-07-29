@@ -8,20 +8,21 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.connectors.base import JobBoardConnector
+from app.connectors.fingerprint import FingerprintPool
+from app.connectors.proxy_pool import ProxyPool
 from app.connectors.sitemap import next_sitemap_cursor, resolve_sitemap_cursor
 from app.db.models import Source
 from app.ingestion.fetch_scope import FETCH_SCOPE_FILTERED, resolve_fetch_scope_terms
 from app.ingestion.runner import resolve_fetch_range, run_paginated_ingestion
 from app.ingestion.types import IngestionResult
 
-# The cursor-persistence fix let a run actually walk hundreds of detail pages in a row for
-# the first time (previously every run restarted at cursor 0 and never got far past page 1)
-# -- doing that with zero delay between requests got bulldogjob.com's own per-IP rate limiter
-# to return real 429s mid-run, confirmed live 2026-07-14. This default is a starting throttle,
-# not tuned against a documented limit.
 DEFAULT_RATE_LIMIT_DELAY_SECONDS = 0.5
 
+_MAX_PROXY_ATTEMPTS = 3
+
 logger = logging.getLogger(__name__)
+_proxy_pool = ProxyPool()
+_fingerprints = FingerprintPool()
 
 
 class SitemapDetailPageConnector(JobBoardConnector, ABC):
@@ -64,18 +65,40 @@ class SitemapDetailPageConnector(JobBoardConnector, ABC):
         return None
 
     def _fetch_detail_html(self, url: str) -> str | None:
-        try:
-            response = httpx.get(
-                url,
-                timeout=10.0,
-                headers={"User-Agent": "recruFlow/0.1"},
-                follow_redirects=self.follow_redirects_on_detail_fetch(),
-            )
-            response.raise_for_status()
-        except httpx.HTTPError:
-            logger.error("failed to fetch %s detail page: url=%r", self.name, url, exc_info=True)
-            return None
-        return response.text
+        for attempt in range(1, _MAX_PROXY_ATTEMPTS + 1):
+            proxy = _proxy_pool.get_proxy(logger)
+            if proxy is None:
+                continue
+
+            try:
+                response = httpx.get(
+                    url,
+                    timeout=10.0,
+                    headers=_fingerprints.get_headers(),
+                    follow_redirects=self.follow_redirects_on_detail_fetch(),
+                    proxy=proxy,
+                )
+                response.raise_for_status()
+            except httpx.HTTPError:
+                logger.error(
+                    "request failed via proxy %r (attempt %d/%d): url=%r",
+                    proxy,
+                    attempt,
+                    _MAX_PROXY_ATTEMPTS,
+                    url,
+                    exc_info=True,
+                )
+                continue
+
+            return response.text
+
+        logger.error(
+            "failed to fetch %s detail page after %d attempts: url=%r",
+            self.name,
+            _MAX_PROXY_ATTEMPTS,
+            url,
+        )
+        return None
 
     async def _run_over_urls(
         self,
