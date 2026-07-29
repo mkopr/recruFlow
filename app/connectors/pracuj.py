@@ -6,12 +6,14 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import quote
 
+from playwright.async_api import Browser, Page, async_playwright
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Page, async_playwright
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.connectors.base import JobBoardConnector
+from app.connectors.fingerprint import FingerprintPool
+from app.connectors.proxy_pool import ProxyPool
 from app.db.models import IngestionFailure, Source
 from app.dlq.service import record_failure
 from app.dlq.types import FailureType
@@ -37,10 +39,8 @@ DEFAULT_RATE_LIMIT_DELAY_SECONDS = 4.0
 DEFAULT_PAGE_SIZE = 10
 DEFAULT_MAX_PAGES = 5
 
-_DESKTOP_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
+_MAX_PROXY_ATTEMPTS = 3
+
 _NEXT_DATA_PATTERN = re.compile(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL)
 _CHALLENGE_MARKERS = ("Just a moment", "cf-mitigated", "Enable JavaScript and cookies")
 
@@ -54,6 +54,8 @@ _MONTHLY_TIME_UNIT_ID = 0
 FetchHtml = Callable[[str], Awaitable[str | None]]
 
 logger = logging.getLogger(__name__)
+_proxy_pool = ProxyPool()
+_fingerprints = FingerprintPool()
 
 
 def _is_challenge_page(html: str) -> bool:
@@ -289,6 +291,100 @@ def _pick_monthly_salary(
     return preferred_salary, (str(name) if name else None), raw_gross
 
 
+async def _fetch_html_with_proxy_rotation(browser: Browser, url: str) -> str | None:
+    """Cloudflare's Managed Challenge on this zone lets exactly one clean navigation through
+    per browser context, then blocks (403, challenge page) every later request in that same
+    context regardless of delay -- confirmed live 2026-07-15 by reproducing listing-then-
+    detail (and even listing-then-listing) fetches back to back. A fresh context per fetch
+    resets that budget without the much higher cost of relaunching the whole browser process
+    for every page/offer.
+    """
+    for attempt in range(1, _MAX_PROXY_ATTEMPTS + 1):
+        proxy = _proxy_pool.get_proxy(logger)
+        if proxy is None:
+            continue
+
+        fingerprint = _fingerprints.get_headers()
+        context = await browser.new_context(
+            proxy={"server": proxy},
+            user_agent=fingerprint.pop("User-Agent"),
+            locale="pl-PL",
+            extra_http_headers=fingerprint,
+        )
+        try:
+            page = await context.new_page()
+            html = await _fetch_rendered_page(page, url)
+        finally:
+            await context.close()
+
+        if html is not None:
+            return html
+        logger.error(
+            "Pracuj.pl fetch failed via proxy %r (attempt %d/%d): url=%r",
+            proxy,
+            attempt,
+            _MAX_PROXY_ATTEMPTS,
+            url,
+        )
+    return None
+
+
+async def _enumerate_pracuj_offers(
+    browser: Browser,
+    *,
+    filtered_terms: list[str],
+    category_filter: str,
+    start_page: int,
+    page_size: int,
+    max_pages: int,
+    rate_limit_delay_seconds: float,
+) -> tuple[list[dict[str, Any]], bool, bool, int | None]:
+    """Dispatches to `_collect_offers` either once (unfiltered, resuming from `start_page`) or
+    once per filtered term (each restarting at page 1, merging results) -- see `run`'s
+    `next_start_page` handling for why only the unfiltered path returns a resumable cursor.
+    """
+
+    async def fetch_html(url: str) -> str | None:
+        return await _fetch_html_with_proxy_rotation(browser, url)
+
+    if not filtered_terms:
+        return await _collect_offers(
+            fetch_html,
+            category_filter=category_filter,
+            start_page=start_page,
+            page_size=page_size,
+            max_pages=max_pages,
+            rate_limit_delay_seconds=rate_limit_delay_seconds,
+        )
+
+    # Filtered runs don't participate in the listing_page_cursor resumption -- always
+    # start_page=1 per term, a deliberate scope reduction documented alongside Bulldogjob's
+    # own filtered-mode gap (docs/adr/0027).
+    offers: list[dict[str, Any]] = []
+    enumeration_ok = False
+    mid_run_failure = False
+    for term in filtered_terms:
+        (
+            term_offers,
+            term_enumeration_ok,
+            term_mid_run_failure,
+            _term_next_start_page,
+        ) = await _collect_offers(
+            fetch_html,
+            category_filter=term,
+            start_page=1,
+            page_size=page_size,
+            max_pages=max_pages,
+            rate_limit_delay_seconds=rate_limit_delay_seconds,
+        )
+        # Cross-term duplicate detail records are harmless -- ingest_offer's canonical-URL
+        # dedup collapses them at persist time.
+        offers.extend(term_offers)
+        enumeration_ok = enumeration_ok or term_enumeration_ok
+        mid_run_failure = mid_run_failure or term_mid_run_failure
+    return offers, enumeration_ok, mid_run_failure, None
+
+
 class PracujConnector(JobBoardConnector):
     """Pracuj.pl (operated by Grupa Pracuj, the same operator as `RocketJobsConnector`'s
     Rocket Jobs and the abandoned The Protocol spike) fronts Cloudflare's Managed Challenge on
@@ -423,68 +519,28 @@ class PracujConnector(JobBoardConnector):
         filtered_terms = scope_resolution.terms  # empty means mode == "all", unchanged behavior
 
         async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch(headless=True)
+            # A per-context `proxy` override (see `_fetch_html_with_proxy_rotation`) is
+            # silently ignored on Chromium/Windows unless the browser itself is launched with
+            # a proxy set -- "http://per-context" is Playwright's own documented placeholder
+            # for this case.
+            browser = await playwright.chromium.launch(
+                headless=True, proxy={"server": "http://per-context"}
+            )
             try:
-
-                async def fetch_html(url: str) -> str | None:
-                    # Cloudflare's Managed Challenge on this zone lets exactly one
-                    # clean navigation through per browser context, then blocks (403,
-                    # challenge page) every later request in that same context regardless
-                    # of delay -- confirmed live 2026-07-15 by reproducing listing-then-
-                    # detail (and even listing-then-listing) fetches back to back. A fresh
-                    # context per fetch resets that budget without the much higher cost of
-                    # relaunching the whole browser process for every page/offer.
-                    context = await browser.new_context(
-                        user_agent=_DESKTOP_USER_AGENT, locale="pl-PL"
-                    )
-                    try:
-                        page = await context.new_page()
-                        return await _fetch_rendered_page(page, url)
-                    finally:
-                        await context.close()
-
-                if filtered_terms:
-                    # Filtered runs don't participate in the listing_page_cursor
-                    # resumption -- always start_page=1 per term, a deliberate scope
-                    # reduction documented alongside Bulldogjob's own filtered-mode gap
-                    # (docs/adr/0027).
-                    offers: list[dict[str, Any]] = []
-                    enumeration_ok = False
-                    mid_run_failure = False
-                    for term in filtered_terms:
-                        (
-                            term_offers,
-                            term_enumeration_ok,
-                            term_mid_run_failure,
-                            _term_next_start_page,
-                        ) = await _collect_offers(
-                            fetch_html,
-                            category_filter=term,
-                            start_page=1,
-                            page_size=page_size,
-                            max_pages=max_pages,
-                            rate_limit_delay_seconds=rate_limit_delay_seconds,
-                        )
-                        # Cross-term duplicate detail records are harmless -- ingest_offer's
-                        # canonical-URL dedup collapses them at persist time.
-                        offers.extend(term_offers)
-                        enumeration_ok = enumeration_ok or term_enumeration_ok
-                        mid_run_failure = mid_run_failure or term_mid_run_failure
-                    next_start_page = None
-                else:
-                    (
-                        offers,
-                        enumeration_ok,
-                        mid_run_failure,
-                        next_start_page,
-                    ) = await _collect_offers(
-                        fetch_html,
-                        category_filter=category_filter,
-                        start_page=start_page,
-                        page_size=page_size,
-                        max_pages=max_pages,
-                        rate_limit_delay_seconds=rate_limit_delay_seconds,
-                    )
+                (
+                    offers,
+                    enumeration_ok,
+                    mid_run_failure,
+                    next_start_page,
+                ) = await _enumerate_pracuj_offers(
+                    browser,
+                    filtered_terms=filtered_terms,
+                    category_filter=category_filter,
+                    start_page=start_page,
+                    page_size=page_size,
+                    max_pages=max_pages,
+                    rate_limit_delay_seconds=rate_limit_delay_seconds,
+                )
             finally:
                 await browser.close()
 
