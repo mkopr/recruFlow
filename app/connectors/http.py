@@ -6,6 +6,14 @@ from typing import Any
 
 import httpx
 
+from app.connectors.fingerprint import FingerprintPool
+from app.connectors.proxy_pool import ProxyPool
+
+_MAX_PROXY_ATTEMPTS = 3
+
+_proxy_pool = ProxyPool()
+_fingerprints = FingerprintPool()
+
 
 def _get(
     url: str,
@@ -19,32 +27,52 @@ def _get(
     error_noun: str = "offers",
     log_params: bool = True,
 ) -> httpx.Response | None:
-    try:
-        response = httpx.get(
-            url,
-            params=params,
-            timeout=timeout,
-            headers={"User-Agent": "recruFlow/0.1", **(headers or {})},
-            follow_redirects=follow_redirects,
-        )
-        response.raise_for_status()
-    except httpx.HTTPError:
-        if log_params:
-            logger.error(
-                "failed to fetch %s %s: url=%r params=%r",
-                source_name,
-                error_noun,
+    for attempt in range(1, _MAX_PROXY_ATTEMPTS + 1):
+        proxy = _proxy_pool.get_proxy(logger)
+        if proxy is None:
+            continue
+
+        try:
+            response = httpx.get(
                 url,
-                params,
+                params=params,
+                timeout=timeout,
+                headers={**_fingerprints.get_headers(), **(headers or {})},
+                follow_redirects=follow_redirects,
+                proxy=proxy,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError:
+            logger.error(
+                "request failed via proxy %r (attempt %d/%d): url=%r",
+                proxy,
+                attempt,
+                _MAX_PROXY_ATTEMPTS,
+                url,
                 exc_info=True,
             )
-        else:
-            logger.error(
-                "failed to fetch %s %s: url=%r", source_name, error_noun, url, exc_info=True
-            )
-        return None
+            continue
 
-    return response
+        return response
+
+    if log_params:
+        logger.error(
+            "failed to fetch %s %s after %d attempts: url=%r params=%r",
+            source_name,
+            error_noun,
+            _MAX_PROXY_ATTEMPTS,
+            url,
+            params,
+        )
+    else:
+        logger.error(
+            "failed to fetch %s %s after %d attempts: url=%r",
+            source_name,
+            error_noun,
+            _MAX_PROXY_ATTEMPTS,
+            url,
+        )
+    return None
 
 
 def fetch_json(

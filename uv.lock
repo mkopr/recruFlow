@@ -476,6 +476,19 @@ wheels = [
 ]
 
 [[package]]
+name = "free-proxy"
+version = "1.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "lxml" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/90/52/004a5ef63b453f7352b55047d54aa0ed408d68c159cce00f2f3479d35e34/free_proxy-1.2.2.tar.gz", hash = "sha256:5d6e228f7a513755d1f30064ddff74014b56817ed9bcbbea60d4229651ccc816", size = 6460, upload-time = "2026-07-05T13:19:41.432Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b0/87/a325c999876f5c982bd5e6cca4f8775bf9cf1bc3f3f9acad77f209a1f619/free_proxy-1.2.2-py3-none-any.whl", hash = "sha256:c281712f8802afe6b460015a5986ba2fdf8671b00732980f32bff2b62d008a48", size = 6621, upload-time = "2026-07-05T13:19:40.392Z" },
+]
+
+[[package]]
 name = "greenlet"
 version = "3.5.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1561,6 +1574,7 @@ main = [
     { name = "apscheduler" },
     { name = "asyncpg" },
     { name = "fastapi" },
+    { name = "free-proxy" },
     { name = "httpx" },
     { name = "langchain-core" },
     { name = "langchain-ollama" },
@@ -1595,6 +1609,7 @@ main = [
     { name = "apscheduler", specifier = ">=3.10" },
     { name = "asyncpg", specifier = ">=0.30" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "free-proxy", specifier = ">=1.2.2" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "langchain-core", specifier = ">=0.3" },
     { name = "langchain-ollama", specifier = ">=0.3" },

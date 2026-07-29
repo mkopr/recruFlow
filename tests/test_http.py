@@ -7,6 +7,8 @@ import httpx
 import pytest
 from app.connectors.http import fetch_json, fetch_xml
 
+from tests.conftest import TEST_USER_AGENT
+
 _LOGGER = logging.getLogger("app.connectors.http")
 
 
@@ -121,7 +123,7 @@ def test_fetch_json_forwards_params_and_merges_default_user_agent_with_extra_hea
     )
 
     assert captured["params"] == {"page": 1}
-    assert captured["headers"]["User-Agent"] == "recruFlow/0.1"
+    assert captured["headers"]["User-Agent"] == TEST_USER_AGENT
     assert captured["headers"]["X-Api-Version"] == "1.0"
 
 
@@ -204,5 +206,5 @@ def test_fetch_xml_forwards_params(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     assert captured["params"] == {"page": 1}
-    assert captured["headers"]["User-Agent"] == "recruFlow/0.1"
+    assert captured["headers"]["User-Agent"] == TEST_USER_AGENT
     assert captured["headers"]["X-Api-Version"] == "1.0"
