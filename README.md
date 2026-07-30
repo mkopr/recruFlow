@@ -46,9 +46,11 @@ cp .env.example .env          # fill in SMTP creds etc. later; defaults work for
 
 make install                  # uv sync --all-groups + pnpm install + pre-commit install
 make up                       # docker compose up --build — api, frontend, db, ollama
+                               # the api container applies pending Alembic migrations on every
+                               # start (including creating all tables on a fresh database), so
+                               # no separate migrate step is needed
 
 # in another terminal, once the containers are healthy:
-make migrate                  # alembic upgrade head — creates all tables
 make seed                     # optional: load a handful of sample offers
 ```
 
@@ -71,8 +73,8 @@ Setup & running:
 | Command | Action |
 | --- | --- |
 | `make install` | Install Python + Node deps, register pre-commit hooks |
-| `make up` | `docker compose up --build` — all four services, hot-reload for `api` and `frontend` |
-| `make migrate` | Apply all Alembic migrations |
+| `make up` | `docker compose up --build` — all four services, hot-reload for `api` and `frontend`; `api` applies pending Alembic migrations on every start |
+| `make migrate` | Apply all Alembic migrations against an already-running `api` container (rarely needed now — mainly for applying a new migration without restarting) |
 | `make seed` | Load sample offers + a stub profile (idempotent, safe to re-run) |
 | `make generate-types` | Regenerate `frontend/src/api/schema.d.ts` from the running API's OpenAPI schema |
 

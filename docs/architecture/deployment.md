@@ -20,8 +20,12 @@
 - `clean` — removes `__pycache__`, `.mypy_cache`, `.ruff_cache`, `.pytest_cache`, `dist`,
   `build`.
 - `up` — `docker compose up --build`; brings up all four Compose services with hot reload for
-  `api` and `frontend`.
-- `migrate` — `docker compose exec api alembic upgrade head`.
+  `api` and `frontend`. The `api` container's entrypoint (`docker-entrypoint.sh`) runs `alembic
+  upgrade head` before starting `uvicorn`, so pending migrations (including the full v1 schema on
+  a genuinely fresh database) are applied automatically on every `api` start — no separate step
+  required.
+- `migrate` — `docker compose exec api alembic upgrade head`. Only needed now to apply a new
+  migration to an `api` container that's already running, without restarting it.
 - `seed` — `docker compose exec api python -m app.db.seed`.
 - `generate-types` — `cd frontend && pnpm run generate-types`, which runs `openapi-typescript`
   against `http://localhost:8000/openapi.json` and writes `frontend/src/api/schema.d.ts`.
@@ -68,7 +72,12 @@ Notes:
   `frontend` also declares an anonymous volume on `/app/node_modules` so the host bind mount
   doesn't shadow the dependencies installed inside the image.
 - `api` depends on `db` with `condition: service_healthy`, so it won't start accepting
-  connections until Postgres is actually ready.
+  connections until Postgres is actually ready. Since Postgres being reachable doesn't imply the
+  schema is migrated, the `api` image's `ENTRYPOINT` (`docker-entrypoint.sh`) runs `alembic
+  upgrade head` first and only then `exec`s the `CMD` (`uvicorn`) — `alembic upgrade head` is a
+  no-op once already at head, so this is safe on every restart, not just a fresh database. The
+  `api` healthcheck (`curl -f .../health`) can't pass until `uvicorn` is actually up, so it
+  implicitly also waits out the migration step.
 - `db` and `ollama` persist state in named volumes (`pgdata`, `ollama_data`) so data survives
   `docker compose down` (but not `docker compose down -v`).
 - The `Dockerfile` runtime stage installs `curl`/`ca-certificates` via `apt-get` — kept solely for

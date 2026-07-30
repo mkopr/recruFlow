@@ -215,9 +215,12 @@
   calls `ensure_sources_exist`/`register_jobs`, so the app now fails to start if the DB is
   unreachable or unmigrated. `docker-compose.yml`'s `api` service `depends_on: db: condition:
   service_healthy` only guarantees Postgres itself is up, not that `alembic upgrade head` has
-  already run — `make up` alone does not run migrations; `make migrate` must be run once against a
-  fresh database before the `api` container will start cleanly. This is a real, new coupling,
-  not a defect to silently work around.
+  already run. This used to mean `make up` alone did not run migrations and `make migrate` had to
+  be run once by hand against a fresh database before the `api` container would start cleanly —
+  since fixed by giving the `api` image an entrypoint (`docker-entrypoint.sh`) that runs `alembic
+  upgrade head` before `exec`ing `uvicorn`, so every `api` start (fresh database or not) is always
+  fully migrated before `ensure_sources_exist`/`register_jobs` run. See "Docker Compose services"
+  in deployment.md.
 
 - **`sources.connector` vs. `sources.name`**: a new nullable `String(50)` column,
   `sources.connector`, holds one of the three connector identity constants

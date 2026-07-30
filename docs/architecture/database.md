@@ -41,7 +41,10 @@ repeated foundational migration:
 
 `make migrate` runs `docker compose exec api alembic upgrade head` (mirrors the pattern used by
 other `docker compose exec api ...` Make targets — `DATABASE_URL`'s `db` hostname only resolves
-inside the Compose network, not from the host). `make seed` runs
+inside the Compose network, not from the host). This is now mostly a manual escape hatch — the
+`api` container's entrypoint (see "Docker Compose services" in deployment.md) already runs
+`alembic upgrade head` on every start, including against a fresh database, so `make up` alone is
+enough for a clean checkout. `make seed` runs
 `docker compose exec api python -m app.db.seed`, loading three sample
 offers; both targets are idempotent. (A later story removed this seed's previous stub-profile row — see
 "Profile data model" in profile.md.)

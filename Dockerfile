@@ -36,7 +36,10 @@ COPY pyproject.toml uv.lock ./
 COPY app ./app
 COPY alembic.ini ./
 COPY alembic ./alembic
+COPY docker-entrypoint.sh ./
+RUN chmod +x docker-entrypoint.sh
 
 EXPOSE 8000
 
+ENTRYPOINT ["./docker-entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
