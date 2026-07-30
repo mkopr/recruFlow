@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.connectors.base import JobBoardConnector
 from app.connectors.fingerprint import FingerprintPool
 from app.connectors.http import BlockedFetchError
-from app.connectors.proxy_pool import ProxyPool
+from app.connectors.proxy_pool import get_shared_proxy_pool
 from app.db.models import IngestionFailure, Source
 from app.dlq.service import build_detail_url_dedup_key, record_failure
 from app.dlq.types import FailureType
@@ -56,7 +56,7 @@ _MONTHLY_TIME_UNIT_ID = 0
 FetchHtml = Callable[[str], Awaitable[str | None]]
 
 logger = logging.getLogger(__name__)
-_proxy_pool = ProxyPool()
+_proxy_pool = get_shared_proxy_pool()
 _fingerprints = FingerprintPool()
 
 
@@ -363,6 +363,7 @@ async def _fetch_html_with_proxy_rotation(browser: Browser, url: str) -> str | N
 
         if html is not None:
             return html
+        _proxy_pool.report_failure(proxy, logger)
         logger.error(
             "Pracuj.pl fetch failed via proxy %r (attempt %d/%d): url=%r",
             proxy,

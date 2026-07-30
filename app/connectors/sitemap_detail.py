@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.connectors.base import JobBoardConnector
 from app.connectors.fingerprint import FingerprintPool
 from app.connectors.http import BlockedFetchError
-from app.connectors.proxy_pool import ProxyPool
+from app.connectors.proxy_pool import get_shared_proxy_pool
 from app.connectors.sitemap import next_sitemap_cursor, resolve_sitemap_cursor
 from app.db.models import IngestionFailure, Source
 from app.dlq.service import build_detail_url_dedup_key, record_failure
@@ -26,7 +26,7 @@ DEFAULT_RATE_LIMIT_DELAY_SECONDS = 0.5
 _MAX_PROXY_ATTEMPTS = 3
 
 logger = logging.getLogger(__name__)
-_proxy_pool = ProxyPool()
+_proxy_pool = get_shared_proxy_pool()
 _fingerprints = FingerprintPool()
 
 
@@ -95,6 +95,7 @@ class SitemapDetailPageConnector(JobBoardConnector, ABC):
                     url,
                     exc_info=True,
                 )
+                _proxy_pool.report_failure(proxy, logger)
                 continue
             except httpx.HTTPError:
                 last_status_code = None
@@ -106,6 +107,7 @@ class SitemapDetailPageConnector(JobBoardConnector, ABC):
                     url,
                     exc_info=True,
                 )
+                _proxy_pool.report_failure(proxy, logger)
                 continue
 
             return response.text

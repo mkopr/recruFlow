@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.connectors.proxy_pool import get_shared_proxy_pool
 from app.db.models import SchedulerRun, Source
 from app.db.session import get_engine, get_sessionmaker
 from app.dlq import retry as dlq_retry
@@ -210,6 +211,25 @@ async def run_detail_retry_job() -> dlq_retry.DetailRetrySummary:
                 raise
     finally:
         await engine.dispose()
+
+
+def run_proxy_pool_topup_job() -> int:
+    """One tick of the proxy pool top-up job. Unlike `run_scoring_job`/`run_detail_retry_job`
+    (registered as coroutine functions so they run on the scheduler's own event loop, since
+    neither has any blocking call of its own), this is a plain sync function -- mirroring
+    `run_source_sync`'s shape -- because `ProxyPool.top_up` makes genuinely blocking HTTP
+    calls (`FreeProxy(...).get()`) that would otherwise freeze the whole API's event loop
+    for the duration of a scrape-and-verify pass, the same class of bug BUG42 found and fixed
+    for connectors' own synchronous fetches. `AsyncIOScheduler` runs a plain (non-coroutine)
+    job function in its default thread-pool executor, off the main loop, which is exactly
+    what a blocking call like this needs. No DB session/engine is needed here, unlike
+    `run_scoring_job`/`run_detail_retry_job` -- the pool is pure in-memory state.
+    """
+    settings = get_settings()
+    pool = get_shared_proxy_pool()
+    admitted = pool.top_up(logger, max_attempts=settings.proxy_pool_target_size * 4)
+    logger.info("scheduled proxy pool top-up: admitted=%d pool_size=%d", admitted, pool.size())
+    return admitted
 
 
 async def set_source_interval(session: AsyncSession, connector: str, seconds: int) -> Source:

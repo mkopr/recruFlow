@@ -7,12 +7,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.models import Source
 from app.scheduler.runs import build_source_status, get_latest_run_by_source
-from app.scheduler.service import run_detail_retry_job, run_scoring_job, run_source_sync
+from app.scheduler.service import (
+    run_detail_retry_job,
+    run_proxy_pool_topup_job,
+    run_scoring_job,
+    run_source_sync,
+)
 from app.scheduler.triggers import parse_schedule
 from app.schemas.scheduler import SourceStatus
 
 SCORING_JOB_ID = "scoring:backlog"
 DETAIL_RETRY_JOB_ID = "dlq:retry_403"
+PROXY_POOL_TOPUP_JOB_ID = "proxy_pool:topup"
 
 
 def build_job_id(connector: str) -> str:
@@ -81,6 +87,24 @@ def register_detail_retry_job(scheduler: AsyncIOScheduler, *, interval_seconds: 
         run_detail_retry_job,
         trigger=IntervalTrigger(seconds=interval_seconds),
         id=DETAIL_RETRY_JOB_ID,
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+
+def register_proxy_pool_topup_job(scheduler: AsyncIOScheduler, *, interval_seconds: int) -> None:
+    """Register the periodic proxy pool top-up job, decoupled from every source's own
+    ingestion interval and from `scoring:backlog`/`dlq:retry_403` -- mirrors
+    `register_detail_retry_job` (own `IntervalTrigger`, `max_instances=1` + `coalesce=True` so
+    a slow tick chains into the next instead of overlapping), except it registers the plain
+    sync function `run_proxy_pool_topup_job` directly (see that function's docstring for why),
+    which `AsyncIOScheduler` runs in its thread-pool executor rather than on its own event loop.
+    """
+    scheduler.add_job(
+        run_proxy_pool_topup_job,
+        trigger=IntervalTrigger(seconds=interval_seconds),
+        id=PROXY_POOL_TOPUP_JOB_ID,
         replace_existing=True,
         max_instances=1,
         coalesce=True,

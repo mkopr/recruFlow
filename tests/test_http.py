@@ -5,9 +5,11 @@ from typing import Any
 
 import httpx
 import pytest
+from app.connectors import http
 from app.connectors.http import BlockedFetchError, fetch_json, fetch_xml
+from app.connectors.proxy_pool import ProxyPool
 
-from tests.conftest import TEST_USER_AGENT
+from tests.conftest import TEST_PROXY, TEST_USER_AGENT
 
 _LOGGER = logging.getLogger("app.connectors.http")
 
@@ -250,6 +252,31 @@ def test_fetch_xml_returns_parsed_element_on_success(monkeypatch: pytest.MonkeyP
 
     assert isinstance(result, ET.Element)
     assert result.find("channel") is not None
+
+
+def test_get_reports_failure_to_shared_pool_on_http_status_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = ProxyPool()
+    pool._good = [TEST_PROXY]
+    monkeypatch.setattr(http, "_proxy_pool", pool)
+    monkeypatch.setattr(httpx, "get", lambda *a, **kw: _status_error_response(500))
+
+    result = fetch_json("https://example.com/offers", source_name="Example", logger=_LOGGER)
+
+    assert result is None
+    assert http._proxy_pool.size() == 0
+
+
+def test_get_does_not_report_failure_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    pool = ProxyPool()
+    pool._good = [TEST_PROXY]
+    monkeypatch.setattr(http, "_proxy_pool", pool)
+    monkeypatch.setattr(httpx, "get", lambda *a, **kw: _FakeResponse(json_data={}))
+
+    fetch_json("https://example.com/offers", source_name="Example", logger=_LOGGER)
+
+    assert http._proxy_pool.size() == 1
 
 
 def test_fetch_xml_forwards_params(monkeypatch: pytest.MonkeyPatch) -> None:

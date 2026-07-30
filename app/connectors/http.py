@@ -7,11 +7,11 @@ from typing import Any
 import httpx
 
 from app.connectors.fingerprint import FingerprintPool
-from app.connectors.proxy_pool import ProxyPool
+from app.connectors.proxy_pool import get_shared_proxy_pool
 
 _MAX_PROXY_ATTEMPTS = 3
 
-_proxy_pool = ProxyPool()
+_proxy_pool = get_shared_proxy_pool()
 _fingerprints = FingerprintPool()
 
 
@@ -67,6 +67,7 @@ def _get(
                 url,
                 exc_info=True,
             )
+            _proxy_pool.report_failure(proxy, logger)
             continue
         except httpx.HTTPError:
             last_status_code = None
@@ -78,6 +79,7 @@ def _get(
                 url,
                 exc_info=True,
             )
+            _proxy_pool.report_failure(proxy, logger)
             continue
 
         return response

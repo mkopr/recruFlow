@@ -1,12 +1,26 @@
 from typing import Any
 
+import httpx
 import pytest
 from app.connectors import sitemap_detail
 from app.connectors.http import BlockedFetchError
+from app.connectors.proxy_pool import ProxyPool
 from app.connectors.sitemap_detail import SitemapDetailPageConnector
 from app.db.models import Source
 from app.dlq.types import FailureType
 from app.ingestion.types import IngestionResult
+
+from tests.conftest import TEST_PROXY
+
+
+class _FakeResponse:
+    def __init__(self, *, text: str = "", status_error: Exception | None = None) -> None:
+        self.text = text
+        self._status_error = status_error
+
+    def raise_for_status(self) -> None:
+        if self._status_error is not None:
+            raise self._status_error
 
 
 class _FakeSitemapConnector(SitemapDetailPageConnector):
@@ -217,6 +231,43 @@ async def test_run_returns_blocked_status_when_sitemap_fetch_itself_blocked(
 
     assert result.ok is False
     assert result.blocked_status == 429
+
+
+def test_fetch_detail_html_reports_failure_to_shared_pool_on_http_status_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = ProxyPool()
+    pool._good = [TEST_PROXY]
+    monkeypatch.setattr(sitemap_detail, "_proxy_pool", pool)
+
+    request = httpx.Request("GET", "https://example.test/jobs/1")
+    status_error = httpx.HTTPStatusError(
+        "server error", request=request, response=httpx.Response(500, request=request)
+    )
+    monkeypatch.setattr(httpx, "get", lambda *a, **kw: _FakeResponse(status_error=status_error))
+
+    connector = _FakeSitemapConnector()
+
+    result = connector._fetch_detail_html("https://example.test/jobs/1")
+
+    assert result is None
+    assert sitemap_detail._proxy_pool.size() == 0
+
+
+def test_fetch_detail_html_does_not_report_failure_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = ProxyPool()
+    pool._good = [TEST_PROXY]
+    monkeypatch.setattr(sitemap_detail, "_proxy_pool", pool)
+    monkeypatch.setattr(httpx, "get", lambda *a, **kw: _FakeResponse(text="<html>ok</html>"))
+
+    connector = _FakeSitemapConnector()
+
+    result = connector._fetch_detail_html("https://example.test/jobs/1")
+
+    assert result == "<html>ok</html>"
+    assert sitemap_detail._proxy_pool.size() == 1
 
 
 def test_supports_detail_retry_is_true() -> None:

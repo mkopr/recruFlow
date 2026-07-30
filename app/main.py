@@ -17,7 +17,12 @@ from app.api.routes.scheduler import router as scheduler_router
 from app.api.routes.scoring import router as scoring_router
 from app.config import get_settings
 from app.db.session import get_engine, get_sessionmaker
-from app.scheduler.lifecycle import register_detail_retry_job, register_jobs, register_scoring_job
+from app.scheduler.lifecycle import (
+    register_detail_retry_job,
+    register_jobs,
+    register_proxy_pool_topup_job,
+    register_scoring_job,
+)
 from app.scheduler.runs import reconcile_stale_running_runs
 from app.scheduler.service import ensure_sources_exist
 
@@ -45,9 +50,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     register_detail_retry_job(
         scheduler, interval_seconds=settings.detail_retry_job_interval_seconds
     )
+    register_proxy_pool_topup_job(
+        scheduler, interval_seconds=settings.proxy_pool_topup_interval_seconds
+    )
     scheduler.start()
     logger.info(
-        "scheduler started with %d source job(s) + 1 backlog scoring job + 1 detail retry job",
+        "scheduler started with %d source job(s) + 1 backlog scoring job + 1 detail retry job "
+        "+ 1 proxy pool top-up job",
         job_count,
     )
     app.state.scheduler = scheduler

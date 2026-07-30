@@ -803,6 +803,65 @@ simplicity tradeoff (single exact-match origin) rather than an allow-list.
   page-reset-on-filter-change, ties the pieces together). New `/failures` route + nav link in
   `App.tsx`.
 
+#### Shared warm proxy pool (`ProxyPool`)
+
+- **Purpose**: confirmed live 2026-07-30 (BUG49), `ProxyPool.get_proxy` re-scraped and
+  re-verified a fresh third-party proxy list from scratch on **every single call** despite the
+  class's name — no caching, no pooling. Sitting in the hot path of up to
+  `_MAX_PROXY_ATTEMPTS = 3` attempts per URL times up to `page_size * max_pages = 1000` URLs per
+  Rocket Jobs/Pracuj.pl run, each individual scrape-and-verify pass costing anywhere from ~5s to
+  40s+ (the free-proxy source's real-world hit rate is only ~15%), this meant a single run could
+  take hours — and since every connector's own scheduled job is `max_instances=1`, one slow run
+  silently blocked every future scheduled tick for that connector indefinitely, with
+  `last_run_status` just reading `"running"` forever and no error surfaced anywhere. `ProxyPool`
+  now holds a small in-memory pool of already-verified-good proxies (`target_size`, default `5`)
+  that `get_proxy` picks from randomly, turning the common case into a near-zero-cost pool draw
+  instead of a fresh scrape.
+- **`ProxyPool`** (`app/connectors/proxy_pool.py`): `get_proxy(logger) -> str | None` returns a
+  random pick from the good pool (`random.Random.choice`, injectable via the constructor's
+  `rand` parameter for deterministic tests, mirroring `FingerprintPool`'s own `rand` pattern) —
+  never the same proxy every time, spreading request load across several IPs. If the pool is
+  empty (cold start, right after process boot, or every member has since been evicted), this
+  pays a one-time synchronous `top_up` before returning; this is the one case that still pays
+  scrape latency, unavoidable once but never a per-request cost once the pool is warm.
+  `report_failure(proxy, logger)` evicts a proxy the moment a caller's actual request against the
+  target site fails through it — a no-op if the proxy is already gone (handles the race where two
+  callers were handed the same proxy and one already evicted it). `top_up(logger, *,
+  max_attempts=None)` scrapes and verifies fresh candidates (`FreeProxy(https=True, ...).get()` —
+  `https=True` matters, since `FreeProxy`'s own default silently verifies unproxied) until the
+  pool is back at `target_size`, admitting each one that passes; bounded by `max_attempts`
+  (defaults to `target_size * 4`) so a fully-down proxy source can't hang it forever, and a cheap
+  no-op (zero network calls) when the pool is already full. All pool state (`_good: list[str]`) is
+  guarded by a `threading.Lock`, not an `asyncio.Lock` — per BUG47's finding, every call into this
+  pool happens via `asyncio.to_thread` from an arbitrary worker thread (BUG42), and once the
+  scheduled top-up job below is added, potentially from a second worker thread concurrently with a
+  live connector run, so any asyncio-native primitive would bind to whichever loop/thread first
+  touched it and raise on the other.
+- **One shared instance, not three**: `http.py`, `sitemap_detail.py`, and `pracuj.py` each used to
+  construct their own independent `ProxyPool()` — a proxy verified by one connector's traffic was
+  never available to another. `get_shared_proxy_pool()` (`lru_cache`-memoized exactly like
+  `get_settings()`) replaces all three with one process-lifetime instance, sized from
+  `Settings.proxy_pool_target_size`; every module now does `_proxy_pool =
+  get_shared_proxy_pool()` instead of `ProxyPool()`. `_get` (`http.py`), `_fetch_detail_html`
+  (`sitemap_detail.py`), and `_fetch_html_with_proxy_rotation` (`pracuj.py`) each call
+  `_proxy_pool.report_failure(proxy, logger)` right after the existing per-attempt failure log,
+  immediately before the loop's `continue`/next iteration — this is the only change to those three
+  functions' control flow; the retry loop and its failure contract (`None` on exhaustion,
+  `BlockedFetchError` on an exhausted 403/429) are unchanged.
+- **`proxy_pool:topup` scheduled job**: mirrors `dlq:retry_403`'s registration shape
+  (`PROXY_POOL_TOPUP_JOB_ID = "proxy_pool:topup"`, `register_proxy_pool_topup_job(scheduler, *,
+  interval_seconds)` in `app/scheduler/lifecycle.py`, `IntervalTrigger`, `max_instances=1`,
+  `coalesce=True`, `replace_existing=True`, registered in `app/main.py`'s `lifespan` alongside the
+  other two backlog jobs) with one difference: `run_proxy_pool_topup_job`
+  (`app/scheduler/service.py`) is registered as a **plain sync function**, not a coroutine —
+  `ProxyPool.top_up` makes genuinely blocking HTTP calls, so `AsyncIOScheduler` must run it on its
+  thread-pool executor (the same `run_source_sync` shape ingestion jobs use), not the scheduler's
+  own event loop, or it would freeze the whole API for the scrape's duration exactly as BUG42
+  found for connectors' own synchronous fetches. Two new `Settings` fields (`app/config.py`):
+  `proxy_pool_target_size` (default `5`) and `proxy_pool_topup_interval_seconds` (default `120`).
+  This job is what lets the pool self-heal from failure eviction over time without any request
+  ever paying the full scrape cost, beyond the one-time cold start.
+
 ### Connector fetch date range + auto-fetch toggle
 
 - **Purpose**: the earlier per-source `config_json` mechanics (live `AsyncIOScheduler` job, JSONB

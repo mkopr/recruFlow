@@ -15,7 +15,10 @@ from app.connectors.pracuj import (
     _dehydrated_query_data,
     extract_next_data,
 )
+from app.connectors.proxy_pool import ProxyPool
 from app.ingestion.normalize import PRACUJ
+
+from tests.conftest import TEST_PROXY
 
 # A real Pracuj.pl offer detail record's shape (`attributes.employment.typesOfContracts[]`
 # etc.), sampled live 2026-07-14 from a Java Developer posting -- its only contract type is an
@@ -899,6 +902,54 @@ async def test_fetch_html_with_proxy_rotation_returns_html_when_a_later_attempt_
     )
 
     assert result == "<html>ok</html>"
+
+
+@pytest.mark.asyncio
+async def test_fetch_html_with_proxy_rotation_reports_failure_on_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = ProxyPool()
+    pool._good = [TEST_PROXY]
+    monkeypatch.setattr(pracuj, "_proxy_pool", pool)
+
+    async def _always_blocked(page: Any, url: str) -> str | None:
+        raise BlockedFetchError(403)
+
+    monkeypatch.setattr(pracuj, "_fetch_rendered_page", _always_blocked)
+
+    browser = _FakeBrowser()
+
+    with pytest.raises(BlockedFetchError):
+        await pracuj._fetch_html_with_proxy_rotation(
+            browser,  # type: ignore[arg-type]
+            "https://example.test",
+        )
+
+    assert pracuj._proxy_pool.size() == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_html_with_proxy_rotation_does_not_report_failure_on_immediate_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = ProxyPool()
+    pool._good = [TEST_PROXY]
+    monkeypatch.setattr(pracuj, "_proxy_pool", pool)
+
+    async def _ok(page: Any, url: str) -> str | None:
+        return "ok"
+
+    monkeypatch.setattr(pracuj, "_fetch_rendered_page", _ok)
+
+    browser = _FakeBrowser()
+
+    result = await pracuj._fetch_html_with_proxy_rotation(
+        browser,  # type: ignore[arg-type]
+        "https://example.test",
+    )
+
+    assert result == "ok"
+    assert pracuj._proxy_pool.size() == 1
 
 
 @pytest.mark.asyncio
